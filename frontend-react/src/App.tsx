@@ -1,19 +1,43 @@
 // App.tsx
-import React, { useEffect, useState } from 'react';
-import CanvasContainer from './components/CanvasContainer/CanvasContainer';
+import React, { useState, useEffect } from 'react';
+import Header from './components/Header/Header';
+import Content from './components/Content/Content';
 import TimestampSlider from './components/TimestampSlider/TimestampSlider';
+import './App.css'; // Import the CSS file
+
+interface Container {
+  id: number;
+  width: number;
+  height: number;
+}
 
 function App() {
   const [timestamps, setTimestamps] = useState<number[]>([]);
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
+  const [topics, setTopics] = useState<string[]>([]); // State to hold topics
+  const [containers, setContainers] = useState<Container[]>([
+    { id: 1, width: 100, height: 100 } // Initial full-size container
+  ]);
 
+  // Fetch available timestamps and topics when the component mounts
   useEffect(() => {
+    // Fetch topics from the Flask API
+    fetch('/api/topics')
+      .then((response) => response.json())
+      .then((data) => {
+        setTopics(data.topics); // Set topics state
+      })
+      .catch((error) => {
+        console.error('Error fetching topics:', error);
+      });
+
+    // Fetch timestamps from another API
     fetch('/api/timestamps')
       .then((response) => response.json())
       .then((data) => {
         setTimestamps(data.timestamps);
         if (data.timestamps.length > 0) {
-          setSelectedTimestamp(data.timestamps[0]);
+          setSelectedTimestamp(data.timestamps[0]); // Set the first timestamp as default
         }
       })
       .catch((error) => {
@@ -26,12 +50,40 @@ function App() {
     setSelectedTimestamp(timestamps[newIndex]);
   };
 
-  return (
-    <div className="App" style={{ height: '100vh', position: 'relative' }}>
-      {/* Render a full-page CanvasContainer */}
-      <CanvasContainer selectedTimestamp={selectedTimestamp} />
+  // Handle container splitting logic
+  const handleCreateCanvas = (id: number, direction: 'below' | 'right') => {
+    setContainers((prevContainers) => {
+      const newContainers = prevContainers.map((container) => {
+        if (container.id === id) {
+          if (direction === 'below') {
+            return { ...container, height: container.height / 2 }; // Halve the height of the original container
+          } else if (direction === 'right') {
+            return { ...container, width: container.width / 2 }; // Halve the width of the original container
+          }
+        }
+        return container;
+      });
 
-      {/* Use the extracted TimestampSlider component */}
+      // Create a new container with either width or height adjusted based on direction
+      const newContainer: Container = {
+        id: prevContainers.length + 1,
+        width: direction === 'right' ? 50 : 100, // Adjust width based on direction
+        height: direction === 'below' ? 50 : 100, // Adjust height based on direction
+      };
+
+      return [...newContainers, newContainer];
+    });
+  };
+
+  return (
+    <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <Header />
+      <Content
+        containers={containers}
+        selectedTimestamp={selectedTimestamp}
+        handleCreateCanvas={handleCreateCanvas}
+        topics={topics} // Pass topics as prop to Content
+      />
       <TimestampSlider
         timestamps={timestamps}
         selectedTimestamp={selectedTimestamp}
@@ -42,4 +94,3 @@ function App() {
 }
 
 export default App;
-

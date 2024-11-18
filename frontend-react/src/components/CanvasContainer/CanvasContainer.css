@@ -1,0 +1,41 @@
+/* components/CanvasContainer/CanvasContainer.css */
+.canvas-container {
+    width: 100%;
+    height: 100%;
+    background-color: #003f5c;
+    position: relative;
+  }
+  
+  .canvas-settings-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    cursor: pointer;
+  }
+  
+  .canvas-settings-bar {
+    position: absolute;
+    top: 40px;
+    right: 10px;
+    background-color: #000000;
+    border: 1px solid #101010;
+    border-radius: 15px;
+    padding: 7px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+  
+  .canvas-settings-bar button {
+    display: block;
+    width: 100%;
+    background-color: #007bff;
+    color: rgb(255, 255, 255);
+    border: 1px solid #000000;
+    padding: 5px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  
+  .canvas-settings-bar button:hover {
+    background-color: #0056b3;
+  }
+  

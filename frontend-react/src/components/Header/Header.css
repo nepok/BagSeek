@@ -1,0 +1,43 @@
+/* Header container */
+.header-container {
+    display: flex; /* Flexbox layout */
+    justify-content: space-between; /* Align left and right items */
+    align-items: center; /* Vertically center the items */
+    background-color:  #00283a; /* Set background color */
+    color: white; /* Text color */
+    padding: 10px 20px; /* Padding around the header */
+  }
+  
+  /* Left section (name) */
+  .header-left {
+    display: flex;
+    align-items: center;
+  }
+  
+  .header-title {
+    font-size: 2rem; /* Large font size for the title */
+    margin: 0; /* Remove margin */
+  }
+  
+  /* Right section (icons) */
+  .header-right {
+    display: flex;
+    align-items: center;
+  }
+  
+  .header-icon {
+    font-size: 1.5rem; /* Icon size */
+    margin-left: 20px; /* Space between icons */
+    cursor: pointer; /* Change cursor to pointer on hover */
+  }
+  
+  .header-icon:hover {
+    color: #fff; /* Highlight the icon on hover */
+  }
+  
+
+/*
+#58508d
+#bc5090
+#ff6361
+#ffa600*/

@@ -1,5 +1,5 @@
-// components/TimestampSlider.tsx
 import React from 'react';
+import './TimestampSlider.css'; // Import the CSS file
 
 interface TimestampSliderProps {
   timestamps: number[];
@@ -12,18 +12,29 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   selectedTimestamp,
   onSliderChange,
 }) => {
+  // Convert the Unix timestamp to a readable date (Berlin time zone)
+  const formatDate = (timestamp: number): string => {
+    if (!timestamp || isNaN(timestamp)) {
+      return 'Invalid Timestamp'; // Return a fallback message if the timestamp is invalid
+    }
+    console.log(timestamp)
+    const date = new Date(timestamp/1000000); // Divide by 1.000.000 to convert to seconds
+    const berlinTime = new Intl.DateTimeFormat('de-DE', {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false, // 24-hour format
+    }).format(date);
+
+    return berlinTime;
+  };
+
   return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: 0,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '80%',
-        padding: '20px',
-      }}
-    >
-      <h2>Select a Timestamp</h2>
+    <div className="timestamp-slider-container">
       <input
         type="range"
         min={0}
@@ -31,9 +42,9 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         step={1}
         value={timestamps.indexOf(selectedTimestamp ?? 0)} // Map the timestamp to its index
         onChange={onSliderChange}
-        style={{ width: '100%' }}
+        className="timestamp-slider"
       />
-      <p>Timestamp: {selectedTimestamp}</p>
+      <p><b>Timestamp</b>: {selectedTimestamp} ({selectedTimestamp && formatDate(selectedTimestamp)})</p>
     </div>
   );
 };
