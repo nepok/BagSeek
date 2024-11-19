@@ -1,41 +1,67 @@
-/* components/CanvasContainer/CanvasContainer.css */
 .canvas-container {
-    width: 100%;
-    height: 100%;
-    background-color: #003f5c;
-    position: relative;
-  }
-  
-  .canvas-settings-button {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    cursor: pointer;
-  }
-  
-  .canvas-settings-bar {
-    position: absolute;
-    top: 40px;
-    right: 10px;
-    background-color: #000000;
-    border: 1px solid #101010;
-    border-radius: 15px;
-    padding: 7px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-  
-  .canvas-settings-bar button {
-    display: block;
-    width: 100%;
-    background-color: #007bff;
-    color: rgb(255, 255, 255);
-    border: 1px solid #000000;
-    padding: 5px;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  
-  .canvas-settings-bar button:hover {
-    background-color: #0056b3;
-  }
-  
+  width: 100%;
+  height: 100%;
+  background-color: #003f5c;
+  position: relative;
+}
+
+.canvas-settings-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  cursor: pointer;
+}
+
+.canvas-settings-bar {
+  position: absolute;
+  top: 40px;
+  right: 10px;
+  width: 238px;
+  background-color: #000000;
+  border: 1px solid #101010;
+  border-radius: 15px;
+  padding: 7px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.canvas-settings-bar button {
+  display: block;
+  width: 100%;
+  background-color: #007bff;
+  color: rgb(255, 255, 255);
+  border: 1px solid #000000;
+  padding: 5px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.canvas-settings-bar button:hover {
+  background-color: #0056b3;
+}
+
+/* Position the topic menu on the left */
+.canvas-settings-bar.left {
+  right: 253px; /* Disable the right positioning */
+  width: 170px; /* Set the width of the topics menu */
+  z-index: 10;
+}
+
+/* Styling for the list of topics */
+ul {
+  list-style-type: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+li {
+  cursor: pointer;
+}
+
+h3 {
+  color: #fff; /* Make the title text white */
+}
+
+.image-container {
+  width: 200px;  
+  height: auto;
+}
