@@ -44,16 +44,6 @@ const Content: React.FC<ContentProps> = ({
           />
         </div>
       ))}
-
-      {/* Example of rendering topics (optional) */}
-      <div className="topics-list">
-        <h3>Available Topics:</h3>
-        <ul>
-          {topics.map((topic, index) => (
-            <li key={index}>{topic}</li>
-          ))}
-        </ul>
-      </div>
     </div>
   );
 };

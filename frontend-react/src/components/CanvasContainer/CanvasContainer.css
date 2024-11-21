@@ -6,17 +6,24 @@
 }
 
 .canvas-settings-button {
-  position: absolute;
+  position: absolute; /* Ensure it remains positioned relative to the canvas */
   top: 10px;
   right: 10px;
   cursor: pointer;
+  z-index: 20; /* Set a higher z-index to appear above the image and other elements */
+  background-color: rgba(0, 0, 0, 0.7); /* Optional: Add a background for visibility */
+  color: #fff; /* Make the button text white for better contrast */
+  padding: 5px 10px; /* Add some padding for better clickability */
+  border-radius: 8px; /* Optional: Rounded corners */
 }
+
 
 .canvas-settings-bar {
   position: absolute;
-  top: 40px;
+  top: 45px;
   right: 10px;
   width: 238px;
+  z-index: 21;
   background-color: #000000;
   border: 1px solid #101010;
   border-radius: 15px;
@@ -49,7 +56,6 @@
 /* Styling for the list of topics */
 ul {
   list-style-type: none;
-  padding: 0;
   font-size: 13px;
 }
 
@@ -61,7 +67,42 @@ h3 {
   color: #fff; /* Make the title text white */
 }
 
-.image-container {
-  width: 200px;  
-  height: auto;
+.selected-information {
+  position: absolute; /* Overlay the image */
+  top: 10px; /* Adjust vertical positioning */
+  left: 10px; /* Adjust horizontal positioning */
+  right: 50px; /* Allow content to stretch */
+  display: flex; /* Align content horizontally */
+  justify-content: space-between; /* Space out topic and timestamp */
+  padding: 5px; /* Add padding for better visibility */
+  z-index: 10; /* Ensure it appears above the image */
+  color: #ffffff; /* White text for readability */
+  background: rgba(0, 0, 0, 0.5); /* Optional: Semi-transparent background */
+  border-radius: 8px; /* Rounded corners for aesthetic */
 }
+
+.image-container {
+  position: relative; /* Needed for proper layering */
+  width: 100%;
+  height: 100%; /* Ensure it fills the container */
+}
+
+.image-container img {
+  width: 100%; /* Span the entire container */
+  height: 100%; /* Cover the container */
+  object-fit: contain; /* Ensure the image scales properly */
+}
+
+
+.selected-information, 
+.selected-timestamp {
+  text-align: right;
+  padding-right: 20px;
+  color: #ff0000
+}
+
+.selected-information, 
+.selected-topic {
+  color: #fff;
+}
+
