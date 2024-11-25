@@ -53,7 +53,7 @@ def get_ros_image():
         return jsonify({'error': 'No topic provided'})
 
     row = aligned_data[aligned_data['Reference Timestamp'] == timestamp]
-    value = row[topic].iloc[0]
+    realTimestamp = row[topic].iloc[0]
 
     ### kann sein dass das nicht funktioniert
     # Check if timestamp exists in aligned_data
@@ -70,7 +70,7 @@ def get_ros_image():
         connections = [x for x in reader.connections if x.topic == topic]
 
         for connection, msg_timestamp, rawdata in reader.messages(connections=connections):
-            if str(msg_timestamp) == value:
+            if str(msg_timestamp) == realTimestamp:
                 # Deserialize the message based on the connection's message type
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
 
@@ -88,8 +88,7 @@ def get_ros_image():
                     # Convert the image to a byte stream
                     _, img_bytes = cv2.imencode('.png', image_data)
                     img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
-                    return jsonify({'image': img_base64})
-
+                    return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})  # Return the image and value
     return jsonify({'error': 'No image found for the provided timestamp'})
 
 

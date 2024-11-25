@@ -17,7 +17,6 @@
   border-radius: 8px; /* Optional: Rounded corners */
 }
 
-
 .canvas-settings-bar {
   position: absolute;
   top: 45px;
@@ -92,7 +91,6 @@ h3 {
   height: 100%; /* Cover the container */
   object-fit: contain; /* Ensure the image scales properly */
 }
-
 
 .selected-information, 
 .selected-timestamp {

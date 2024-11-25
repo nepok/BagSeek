@@ -16,6 +16,8 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
   const [showTopicMenu, setShowTopicMenu] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null); // State to store the fetched image
+  const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
+
   
   const toggleSettings = () => {
     setShowSettings(!showSettings);
@@ -40,6 +42,10 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
         if (data.image) {
           console.log("Image fetched successfully"); // Debugging log
           setImage(data.image); // Set the fetched image
+          if (data.realTimestamp) {
+            console.log("Fetched real timestamp:", data.realTimestamp); // Debugging log
+            setRealTimestamp(data.realTimestamp); // Set the fetched value, use it as needed
+          }
         } else {
           console.error("No image found for timestamp", timestamp, "and topic", selectedTopic);
         }
@@ -51,6 +57,7 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
       console.log("No image fetched, invalid topic or timestamp");
     }
   };
+
   
   // Whenever the selectedTimestamp or selectedTopic changes, fetch the new image
   useEffect(() => {
@@ -97,11 +104,11 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
       {selectedTopic && (
         <div className="selected-information">
           <div className="selected-topic">{selectedTopic}</div>
-          <div className="selected-timestamp">{selectedTimestamp}</div>
+          <div className="selected-timestamp">{realTimestamp}</div>
         </div>
       )}
 
-      {/* Display the image only if "/camera_image/Cam_BR" is selected */}
+      {/* Display the image only if "/camera_image/..." is selected */}
       {selectedTopic?.startsWith("/camera_image") && image && (
         <div className="image-container">
           <img src={`data:image/png;base64,${image}`} alt="Fetched from ROS" />

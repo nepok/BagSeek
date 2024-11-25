@@ -9,3 +9,11 @@ html, body {
   height: 100%;
   width: 100%;
 }
+
+header {
+  flex-shrink: 0;
+}
+
+.timestamp-slider {
+  flex-shrink: 0; /* Prevents the slider from shrinking */
+}
