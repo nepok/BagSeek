@@ -3,13 +3,11 @@ import "./CanvasContainer.css";
 
 interface CanvasContainerProps {
   selectedTimestamp: number | null;
-  onCreateCanvas: (direction: "below" | "right") => void;
   topics: string[];
 }
 
 const CanvasContainer: React.FC<CanvasContainerProps> = ({
   selectedTimestamp,
-  onCreateCanvas,
   topics,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
@@ -18,7 +16,6 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
   const [image, setImage] = useState<string | null>(null); // State to store the fetched image
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
 
-  
   const toggleSettings = () => {
     setShowSettings(!showSettings);
     setShowTopicMenu(false); // Reset topic menu visibility
@@ -79,8 +76,8 @@ const CanvasContainer: React.FC<CanvasContainerProps> = ({
       {showSettings && (
         <div className="canvas-settings-bar">
           <button onClick={() => {toggleTopicMenu();}}>Choose Topic</button>
-          <button onClick={() => {onCreateCanvas("below"); setShowSettings(false);}}>Create new canvas below</button>
-          <button onClick={() => {onCreateCanvas("right"); setShowSettings(false);}}>Create new canvas on the right</button>
+          <button onClick={() => {setShowSettings(false);}}>Create new canvas below</button>
+          <button onClick={() => {setShowSettings(false);}}>Create new canvas on the right</button>
         </div>
       )}
 

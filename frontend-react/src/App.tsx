@@ -1,9 +1,9 @@
 // App.tsx
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header/Header';
-import Content from './components/Content/Content';
 import TimestampSlider from './components/TimestampSlider/TimestampSlider';
 import './App.css'; // Import the CSS file
+import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 
 interface Container {
   id: number;
@@ -78,12 +78,13 @@ function App() {
   return (
     <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <Header />
-      <Content
+      {/*<Content
         containers={containers}
         selectedTimestamp={selectedTimestamp}
         handleCreateCanvas={handleCreateCanvas}
         topics={topics} // Pass topics as prop to Content
-      />
+      />*/}
+      <SplittableCanvas />
       <TimestampSlider
         timestamps={timestamps}
         selectedTimestamp={selectedTimestamp}

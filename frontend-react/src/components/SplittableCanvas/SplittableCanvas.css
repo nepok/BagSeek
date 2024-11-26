@@ -1,0 +1,24 @@
+.splittable-canvas {
+  display: flex;
+  flex-direction: column;
+  width: 100vw; /* Full viewport width */
+  height: 100vh; /* Full viewport height */
+  justify-content: center; /* Optional: To center the content vertically */
+}
+
+.canvas-container {
+  display: flex;
+  flex-grow: 1; /* Ensures the canvas container grows to fill the available space */
+}
+
+.canvas-pane {
+  flex-grow: 1; /* Ensures each pane inside the container takes equal space */
+  position: relative;
+  height: 100%;
+}
+
+.canvas-resizer {
+  background-color: rgba(0, 0, 0, 0.1);
+  width: 10px; /* You can adjust this size */
+  cursor: ew-resize; /* Use this cursor for horizontal resizers */
+}
