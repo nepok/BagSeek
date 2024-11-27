@@ -7,6 +7,7 @@ import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import { ThemeProvider } from '@mui/material/styles';
 import theme from './theme'
 import darkTheme from './theme';
+import CanvasContainer from './components/CanvasContainer/CanvasContainer';
 
 interface Container {
   id: number;
@@ -82,11 +83,18 @@ function App() {
     <ThemeProvider theme={darkTheme}>
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header />
-        <SplittableCanvas />
+        {/*<SplittableCanvas
+          selectedTimestamp={selectedTimestamp}
+          topics={topics}
+        />*/}
+        <CanvasContainer
+          selectedTimestamp={selectedTimestamp}
+          topics={topics}
+        />
         <TimestampSlider
           timestamps={timestamps}
           selectedTimestamp={selectedTimestamp}
-          onSliderChange={handleSliderChange} // Pass the updated handler
+          onSliderChange={handleSliderChange}
         />
       </div>
     </ThemeProvider>
