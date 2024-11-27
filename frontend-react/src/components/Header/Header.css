@@ -1,43 +1,44 @@
+/* Import Bebas Neue font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+
 /* Header container */
 .header-container {
-    display: flex; /* Flexbox layout */
-    justify-content: space-between; /* Align left and right items */
-    align-items: center; /* Vertically center the items */
-    background-color:  #00283a; /* Set background color */
-    color: white; /* Text color */
-    padding: 10px 20px; /* Padding around the header */
-  }
-  
-  /* Left section (name) */
-  .header-left {
-    display: flex;
-    align-items: center;
-  }
-  
-  .header-title {
-    font-size: 2rem; /* Large font size for the title */
-    margin: 0; /* Remove margin */
-  }
-  
-  /* Right section (icons) */
-  .header-right {
-    display: flex;
-    align-items: center;
-  }
-  
-  .header-icon {
-    font-size: 1.5rem; /* Icon size */
-    margin-left: 20px; /* Space between icons */
-    cursor: pointer; /* Change cursor to pointer on hover */
-  }
-  
-  .header-icon:hover {
-    color: #fff; /* Highlight the icon on hover */
-  }
-  
+  display: flex; /* Flexbox layout */
+  justify-content: space-between; /* Align left and right items */
+  align-items: center; /* Vertically center the items */
+  background-color: #181818; /* Set background color */
+  color: white; /* Text color */
+  padding: 10px 20px; /* Padding around the header */
+}
 
-/*
-#58508d
-#bc5090
-#ff6361
-#ffa600*/
+/* Left section (name) */
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+/* Header title with Bebas Neue font */
+.header-title {
+  font-family: 'Bebas Neue', sans-serif; /* Applying Bebas Neue font */
+  font-size: 2.5rem; /* Adjust the font size */
+  margin: 0; /* Remove margin */
+  text-transform: uppercase; /* Optional: Make text uppercase */
+}
+
+/* Right section (icons) */
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+/* Icon styling */
+.header-icon {
+  font-size: 1.5rem; /* Icon size */
+  margin-left: 20px; /* Space between icons */
+  cursor: pointer; /* Change cursor to pointer on hover */
+}
+
+/* Icon hover effect */
+.header-icon:hover {
+  color: #fff; /* Highlight the icon on hover */
+}

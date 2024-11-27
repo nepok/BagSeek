@@ -3,22 +3,42 @@
   flex-direction: column;
   width: 100vw; /* Full viewport width */
   height: 100vh; /* Full viewport height */
-  justify-content: center; /* Optional: To center the content vertically */
+  justify-content: flex-start; /* Align items at the top */
+  align-items: center;
 }
 
 .canvas-container {
   display: flex;
   flex-grow: 1; /* Ensures the canvas container grows to fill the available space */
+  position: relative; /* Add position relative here to allow absolute positioning inside it */
 }
 
 .canvas-pane {
   flex-grow: 1; /* Ensures each pane inside the container takes equal space */
-  position: relative;
+  position: relative; /* Allows positioning of the button inside each pane */
+  height: 100%;
+}
+
+.canvas-node {
+  position: relative; /* Ensure the button can be positioned in the top-right corner of the node */
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   height: 100%;
 }
 
 .canvas-resizer {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: #202020;
+  z-index: 10;
+  position: relative;
   width: 10px; /* You can adjust this size */
   cursor: ew-resize; /* Use this cursor for horizontal resizers */
+}
+
+/* Button styling for the three dots icon */
+.settings-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20; /* Ensure the button is above other content */
 }

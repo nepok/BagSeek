@@ -1,4 +1,6 @@
 import React, { useState, useRef } from 'react';
+import { Box, IconButton, Popper, Paper, MenuItem } from '@mui/material';
+import MoreVertIcon from '@mui/icons-material/MoreVert'; // Import the three dots icon
 import './SplittableCanvas.css';
 
 interface Node {
@@ -11,6 +13,9 @@ interface Node {
 
 function SplittableCanvas() {
   const [root, setRoot] = useState<Node>({ id: 1 });
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null); // For the settings menu
+  const [currentNode, setCurrentNode] = useState<Node | null>(null); // Current node for the menu
+  const [topicMenuAnchorEl, setTopicMenuAnchorEl] = useState<null | HTMLElement>(null); // For the topic menu
   const resizingNode = useRef<Node | null>(null);
 
   // Split node into left and right (or top and bottom) panes
@@ -56,13 +61,91 @@ function SplittableCanvas() {
     document.removeEventListener('mouseup', stopResizing);
   };
 
+  // Handle the opening of the settings menu
+  const handleClickMenu = (event: React.MouseEvent<HTMLElement>, node: Node) => {
+    setAnchorEl(event.currentTarget);
+    setCurrentNode(node);
+  };
+
+  // Handle the closing of the settings menu
+  const handleCloseMenu = () => {
+    setAnchorEl(null);
+    setCurrentNode(null);
+  };
+
+  // Handle the split actions from the menu
+  const handleSplitAction = (direction: 'horizontal' | 'vertical') => {
+    if (currentNode) {
+      splitNode(currentNode, direction);
+    }
+    handleCloseMenu();
+  };
+
+  // Open topic selection menu
+  const handleChooseTopic = (event: React.MouseEvent<HTMLElement>) => {
+    setTopicMenuAnchorEl(event.currentTarget); // Set the anchor of the topic menu
+    // Don't close the first menu when opening the topic menu
+  };
+
+  // Handle the selection of a topic
+  const handleTopicSelection = () => {
+    setTopicMenuAnchorEl(null); // Close the topic menu
+    handleCloseMenu(); // Close the first menu
+  };
+
   // Render each node, either splitting it further or rendering the split panes
   const renderNode = (node: Node) => {
     if (!node.left && !node.right) {
       return (
-        <div className="canvas-node">
-          <button onClick={() => splitNode(node, 'horizontal')}>Split Horizontally</button>
-          <button onClick={() => splitNode(node, 'vertical')}>Split Vertically</button>
+        <div className="canvas-node" style={{ position: 'relative' }}>
+          {/* Settings button in the top-right corner */}
+          <IconButton
+            size='small'
+            onClick={(e) => handleClickMenu(e, node)}
+            sx={{ position: 'absolute', top: 5, right: 5, padding: 0.5 }} // Reduce the size of the button
+          >
+            <MoreVertIcon fontSize="small" /> {/* Smaller icon */}
+          </IconButton>
+
+          {/* Main menu Popper */}
+          <Popper
+            open={Boolean(anchorEl) && currentNode?.id === node.id}
+            anchorEl={anchorEl}
+            placement="bottom-start"
+            style={{
+              zIndex: 1300, // Ensure it is above other elements
+            }}
+          >
+            <Paper>
+              <MenuItem onClick={handleChooseTopic}>Choose Topic</MenuItem>
+              <MenuItem onClick={() => handleSplitAction('horizontal')}>Split Horizontally</MenuItem>
+              <MenuItem onClick={() => handleSplitAction('vertical')}>Split Vertically</MenuItem>
+            </Paper>
+          </Popper>
+
+          {/* Topic selection Popper */}
+          <Popper
+            open={Boolean(topicMenuAnchorEl)}
+            anchorEl={topicMenuAnchorEl}
+            placement="left-start"
+            modifiers={[
+              {
+                name: 'offset',
+                options: {
+                  offset: [0, 5], // Add 5px of vertical space between the menus (adjust the 5px value as needed)
+                },
+              },
+            ]}
+            style={{
+              zIndex: 1300, // Ensure it is above other elements
+            }}
+          >
+            <Paper>
+              <MenuItem onClick={handleTopicSelection}>Topic 1</MenuItem>
+              <MenuItem onClick={handleTopicSelection}>Topic 2</MenuItem>
+              <MenuItem onClick={handleTopicSelection}>Topic 3</MenuItem>
+            </Paper>
+          </Popper>
         </div>
       );
     }
@@ -74,7 +157,7 @@ function SplittableCanvas() {
         style={{
           display: 'flex',
           flexDirection: node.direction === 'horizontal' ? 'row' : 'column', // Adjust layout direction
-          position: 'relative',
+          position: 'relative', // Ensure the node has relative positioning
           height: '100%', // Ensure full height for each pane
           width: '100%', // Ensure full width for each pane
         }}
@@ -96,12 +179,12 @@ function SplittableCanvas() {
         <div
           className="canvas-resizer"
           style={{
-            backgroundColor: '#ccc',
+            backgroundColor: '#202020',
             zIndex: 10,
             position: 'relative',
             // Dynamically set the resizer's size based on direction
-            width: node.direction === 'horizontal' ? '10px' : '100%', // Vertical resizer for horizontal split
-            height: node.direction === 'vertical' ? '10px' : '100%', // Horizontal resizer for vertical split
+            width: node.direction === 'horizontal' ? '2px' : '100%', // Vertical resizer for horizontal split
+            height: node.direction === 'vertical' ? '2px' : '100%', // Horizontal resizer for vertical split
             cursor: node.direction === 'horizontal' ? 'col-resize' : 'row-resize', // Adjust cursor
           }}
           onMouseDown={(e) => startResizing(e, node)} // Start resizing on mouse down
@@ -123,7 +206,11 @@ function SplittableCanvas() {
     );
   };
 
-  return <div className="splittable-canvas">{renderNode(root)}</div>;
+  return (
+    <Box className="splittable-canvas" sx={{ backgroundColor: 'background.default', height: '100vh' }}>
+      {renderNode(root)}
+    </Box>
+  );
 }
 
 export default SplittableCanvas;

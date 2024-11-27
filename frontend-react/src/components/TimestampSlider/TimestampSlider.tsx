@@ -70,7 +70,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       clearInterval(intervalRef.current!);
 
       // Set new interval time based on the new speed
-      const intervalTime = 200 / newSpeed;
+      // TODO: automatic playback speed
+      const intervalTime = 83.33 / newSpeed;
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
           const nextIndex = (prevSliderValue + 1) % timestamps.length; // Increment and loop back
@@ -93,7 +94,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       setIsPlaying(false);
     } else {
       // Set the interval time dynamically based on the selected playback speed
-      const intervalTime = 200 / playbackSpeed; // Adjust interval based on playback speed
+      // TODO: automatic playback speed
+      const intervalTime = 83.33 / playbackSpeed; // Adjust interval based on playback speed
 
       // Clear the previous interval before setting a new one
       if (intervalRef.current) {
