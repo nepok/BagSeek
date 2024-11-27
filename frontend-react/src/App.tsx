@@ -4,6 +4,9 @@ import Header from './components/Header/Header';
 import TimestampSlider from './components/TimestampSlider/TimestampSlider';
 import './App.css'; // Import the CSS file
 import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
+import { ThemeProvider } from '@mui/material/styles';
+import theme from './theme'
+import darkTheme from './theme';
 
 interface Container {
   id: number;
@@ -45,9 +48,9 @@ function App() {
       });
   }, []);
 
-  const handleSliderChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newIndex = Number(event.target.value);
-    setSelectedTimestamp(timestamps[newIndex]);
+  const handleSliderChange = (value: number) => {
+    // Handle slider change
+    setSelectedTimestamp(value); // Directly use the value instead of accessing timestamps array
   };
 
   // Handle container splitting logic
@@ -76,21 +79,17 @@ function App() {
   };
 
   return (
-    <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <Header />
-      {/*<Content
-        containers={containers}
-        selectedTimestamp={selectedTimestamp}
-        handleCreateCanvas={handleCreateCanvas}
-        topics={topics} // Pass topics as prop to Content
-      />*/}
-      <SplittableCanvas />
-      <TimestampSlider
-        timestamps={timestamps}
-        selectedTimestamp={selectedTimestamp}
-        onSliderChange={handleSliderChange}
-      />
-    </div>
+    <ThemeProvider theme={darkTheme}>
+      <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        <Header />
+        <SplittableCanvas />
+        <TimestampSlider
+          timestamps={timestamps}
+          selectedTimestamp={selectedTimestamp}
+          onSliderChange={handleSliderChange} // Pass the updated handler
+        />
+      </div>
+    </ThemeProvider>
   );
 }
 
