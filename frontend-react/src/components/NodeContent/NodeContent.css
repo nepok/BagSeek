@@ -1,0 +1,48 @@
+/* NodeContent.css */
+
+/* Container for the image */
+.image-container {
+    display: flex;
+    overflow: hidden; /* Prevent overflow if the image is too large */
+  }
+  
+  /* Apply 'contain' property to ensure the image scales within the container */
+  .image-container img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain; /* Ensures the image fits within the container without distortion */
+  }
+  
+  /* Optional: Styling for the timestamp text */
+  .timestamp {
+    color: white;
+    font-size: 0.8rem;
+    text-align: center;
+    margin-top: 10px;
+  }
+
+  .selected-information {
+    position: absolute; /* Overlay the image */
+    top: 10px; /* Adjust vertical positioning */
+    left: 10px; /* Adjust horizontal positioning */
+    right: 50px; /* Allow content to stretch */
+    display: flex; /* Align content horizontally */
+    justify-content: space-between; /* Space out topic and timestamp */
+    padding: 5px; /* Add padding for better visibility */
+    z-index: 10; /* Ensure it appears above the image */
+    color: #ffffff; /* White text for readability */
+    background: rgba(0, 0, 0, 0.5); /* Optional: Semi-transparent background */
+    border-radius: 8px; /* Rounded corners for aesthetic */
+  }
+  
+  .selected-information, 
+  .selected-timestamp {
+    text-align: right;
+    padding-right: 20px;
+    color: #ffff00
+  }
+  
+  .selected-information, 
+  .selected-topic {
+    color: #fff;
+  }

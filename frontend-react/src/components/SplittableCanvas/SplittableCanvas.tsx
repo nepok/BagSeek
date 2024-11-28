@@ -1,7 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Box, IconButton, Popper, Paper, MenuItem, Typography } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import './SplittableCanvas.css';
+import { ConstructionOutlined } from '@mui/icons-material';
+import NodeContent from '../NodeContent/NodeContent';
 
 interface Node {
   id: number;
@@ -29,6 +31,17 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
   const [topicMenuAnchorEl, setTopicMenuAnchorEl] = useState<null | HTMLElement>(null);
   const resizingNode = useRef<Node | null>(null);
 
+  useEffect(() => {
+    setNodeMetadata((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([id, metadata]) => [
+          id,
+          { ...metadata, timestamp: selectedTimestamp },
+        ])
+      )
+    );
+  }, [selectedTimestamp]);
+
   const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
     if (!node.left && !node.right) {
       node.direction = direction;
@@ -40,9 +53,21 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
   };
 
   const startResizing = (e: React.MouseEvent, node: Node) => {
+    // Disable text selection
+    document.body.style.userSelect = 'none';
+  
     resizingNode.current = node;
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', stopResizing);
+  };
+  
+  const stopResizing = () => {
+    // Re-enable text selection
+    document.body.style.userSelect = '';
+  
+    resizingNode.current = null;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResizing);
   };
 
   const handleMouseMove = (e: MouseEvent) => {
@@ -62,15 +87,14 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
     setRoot({ ...root });
   };
 
-  const stopResizing = () => {
-    resizingNode.current = null;
-    document.removeEventListener('mousemove', handleMouseMove);
-    document.removeEventListener('mouseup', stopResizing);
-  };
-
   const handleClickMenu = (event: React.MouseEvent<HTMLElement>, node: Node) => {
-    setAnchorEl(event.currentTarget);
-    setCurrentNode(node);
+    // Close all menus if a different node is clicked
+    if (currentNode?.id !== node.id) {
+      setAnchorEl(null);          // Close the main menu
+      setTopicMenuAnchorEl(null); // Close the topic menu
+    }
+    setAnchorEl(event.currentTarget); // Open the main menu for the new node
+    setCurrentNode(node);             // Set the current node
   };
 
   const handleCloseMenu = () => {
@@ -80,7 +104,14 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
 
   const handleSplitAction = (direction: 'horizontal' | 'vertical') => {
     if (currentNode) {
+      // Copy the metadata of the current node to the left child on split
       splitNode(currentNode, direction);
+      const currentNodeMetadata = nodeMetadata[currentNode.id] || { topic: null, timestamp: null };
+      setNodeMetadata((prev) => ({
+        ...prev,
+        [currentNode.id * 2]: { ...currentNodeMetadata }, // Left child inherits metadata
+        [currentNode.id * 2 + 1]: { topic: null, timestamp: null }, // Right child starts fresh
+      }));
     }
     handleCloseMenu();
   };
@@ -102,36 +133,19 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
 
   const renderNode = (node: Node) => {
     const metadata = nodeMetadata[node.id] || { topic: null, timestamp: null };
-
+  
     if (!node.left && !node.right) {
       return (
-        <div className="canvas-node" style={{ position: 'relative' }}>
-          <Typography
-            variant="body2"
-            style={{
-              position: 'absolute',
-              top: 5,
-              left: 5,
-              color: 'white',
-              fontSize: '0.8rem',
-              wordWrap: 'break-word',
-            }}
-          >
-            Topic: {metadata.topic || 'None'}
-          </Typography>
-          <Typography
-            variant="body2"
-            style={{
-              position: 'absolute',
-              top: 25,
-              left: 5,
-              color: 'white',
-              fontSize: '0.8rem',
-              wordWrap: 'break-word',
-            }}
-          >
-            Timestamp: {metadata.timestamp !== null ? metadata.timestamp : 'None'}
-          </Typography>
+        <div className="canvas-node" style={{ position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+          {/* Render NodeContent dynamically */}
+          <div>
+            {metadata.topic ? (
+              <NodeContent topic={metadata.topic} timestamp={metadata.timestamp} />
+            ) : (
+              <p style={{ color: "white", fontSize: "0.8rem" }}>No topic selected</p>
+            )}
+          </div>
+  
           <IconButton
             size="small"
             onClick={(e) => handleClickMenu(e, node)}
@@ -139,7 +153,8 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
           >
             <MoreVertIcon fontSize="small" />
           </IconButton>
-
+  
+          {/* Popper menus remain unchanged */}
           <Popper
             open={Boolean(anchorEl) && currentNode?.id === node.id}
             anchorEl={anchorEl}
@@ -167,7 +182,7 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
               </MenuItem>
             </Paper>
           </Popper>
-
+  
           <Popper
             open={Boolean(topicMenuAnchorEl)}
             anchorEl={topicMenuAnchorEl}
@@ -177,7 +192,7 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
               {
                 name: 'offset',
                 options: {
-                  offset: [0, 5], // Add 5px of vertical space between the menus (adjust the 5px value as needed)
+                  offset: [0, 5], // Add 5px of vertical space between the menus
                 },
               },
             ]}
@@ -197,7 +212,8 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
         </div>
       );
     }
-
+  
+    // Render for split nodes remains unchanged
     return (
       <div
         key={node.id}

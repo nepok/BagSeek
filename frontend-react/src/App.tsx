@@ -83,14 +83,14 @@ function App() {
     <ThemeProvider theme={darkTheme}>
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header />
-        {/*<SplittableCanvas
-          selectedTimestamp={selectedTimestamp}
-          topics={topics}
-        />*/}
-        <CanvasContainer
+        <SplittableCanvas
           selectedTimestamp={selectedTimestamp}
           topics={topics}
         />
+        {/*<CanvasContainer
+          selectedTimestamp={selectedTimestamp}
+          topics={topics}
+        />*/}
         <TimestampSlider
           timestamps={timestamps}
           selectedTimestamp={selectedTimestamp}
