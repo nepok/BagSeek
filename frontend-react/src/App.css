@@ -13,8 +13,3 @@ html, body {
 header {
   flex-shrink: 0;
 }
-
-.timestamp-slider {
-  flex-shrink: 0; /* Prevents the slider from shrinking */
-}
-

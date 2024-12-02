@@ -1,48 +1,47 @@
-/* NodeContent.css */
+.node-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%; /* Ensure it fills the available height */
+  max-width: 100%; /* Ensure it doesn’t overflow horizontally */
+  overflow: hidden; /* Prevent any overflow */
+}
 
-/* Container for the image */
 .image-container {
-    display: flex;
-    overflow: hidden; /* Prevent overflow if the image is too large */
-  }
-  
-  /* Apply 'contain' property to ensure the image scales within the container */
-  .image-container img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain; /* Ensures the image fits within the container without distortion */
-  }
-  
-  /* Optional: Styling for the timestamp text */
-  .timestamp {
-    color: white;
-    font-size: 0.8rem;
-    text-align: center;
-    margin-top: 10px;
-  }
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%; /* Container will span the full width of the node */
+  height: 100%; /* Container will span the full height of the node */
+  overflow: hidden; /* Prevent image overflow */
+}
 
-  .selected-information {
-    position: absolute; /* Overlay the image */
-    top: 10px; /* Adjust vertical positioning */
-    left: 10px; /* Adjust horizontal positioning */
-    right: 50px; /* Allow content to stretch */
-    display: flex; /* Align content horizontally */
-    justify-content: space-between; /* Space out topic and timestamp */
-    padding: 5px; /* Add padding for better visibility */
-    z-index: 10; /* Ensure it appears above the image */
-    color: #ffffff; /* White text for readability */
-    background: rgba(0, 0, 0, 0.5); /* Optional: Semi-transparent background */
-    border-radius: 8px; /* Rounded corners for aesthetic */
-  }
-  
-  .selected-information, 
-  .selected-timestamp {
-    text-align: right;
-    padding-right: 20px;
-    color: #ffff00
-  }
-  
-  .selected-information, 
-  .selected-topic {
-    color: #fff;
-  }
+.image-container img {
+  height: 100%; /* The image height will always match the height of the node */
+  width: 100%;  /* Maintain the aspect ratio, width adjusts accordingly */
+  object-fit: contain; /* Image will fit within the container without distortion */
+}
+
+/* Add this class to center text */
+.centered-text {
+  display: flex;
+  justify-content: center; /* Horizontally center the text */
+  align-items: center;     /* Vertically center the text */
+  width: 100%;
+  height: 100%;            /* Ensure it fills the available space */
+}
+
+.typography-box {
+  background-color: rgba(33, 33, 33, 0.8);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 10px;
+  width: 100%;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-height: 30px; /* Ensure it stays small */
+}
