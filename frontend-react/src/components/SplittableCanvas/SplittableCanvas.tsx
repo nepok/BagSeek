@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Box, IconButton, Popper, Paper, MenuItem, Typography } from '@mui/material';
+import { Box, IconButton, Popper, Paper, MenuItem } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import './SplittableCanvas.css';
-import { ConstructionOutlined } from '@mui/icons-material';
 import NodeContent from '../NodeContent/NodeContent';
 
 interface Node {

@@ -63,7 +63,7 @@ def get_ros():
     row = aligned_data[aligned_data['Reference Timestamp'] == timestamp]
     realTimestamp = row[topic].iloc[0]
 
-    # Open the rosbag to find the image at the requested timestamp and topic
+    # Open the rosbag to find the message at the requested timestamp and topic
     with Reader(rosbag_path) as reader:
         connections = [x for x in reader.connections if x.topic == topic]
 
@@ -71,30 +71,35 @@ def get_ros():
             if str(msg_timestamp) == realTimestamp:
                 # Deserialize the message based on the connection's message type
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
+                # Check the message type string explicitly
+                if connection.msgtype == 'sensor_msgs/msg/Image':
+                    if hasattr(msg, 'encoding'):
+                        if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':
+                            image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
+                            if msg.encoding == 'rgb8':
+                                image_data = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
 
-                # Check if the message is an image (sensor_msgs/msg/Image)
-                if hasattr(msg, 'encoding'):
-                    if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':
-                        image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
-                        if msg.encoding == 'rgb8':
-                            image_data = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
+                            # Convert the image to a byte stream with WebP compression (set quality to 75)
+                            _, img_bytes = cv2.imencode('.webp', image_data, [int(cv2.IMWRITE_WEBP_QUALITY), 75])
 
-                        # Convert the image to a byte stream with WebP compression (set quality to 75)
-                        _, img_bytes = cv2.imencode('.webp', image_data, [int(cv2.IMWRITE_WEBP_QUALITY), 75])
+                            # Convert to base64
+                            img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
 
-                        # Convert to base64
-                        img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
+                            return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})
 
-                        return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})
-                    else:
-                        print(f"Unsupported encoding {msg.encoding}")
+                elif connection.msgtype == 'sensor_msgs/msg/PointCloud2':
+                    # Extract point cloud data
+                    points = []
+                    point_step = msg.point_step
+                    for i in range(0, len(msg.data), point_step):
+                        x, y, z = struct.unpack_from('fff', msg.data, i)
+                        points.extend([x, y, z])  # Add the x, y, z coordinates as a flat list
+
+                    return jsonify({'points': points, 'realTimestamp': realTimestamp})
+
                 else:
-                    #TODO: überbrückung, sollte dann 3d daten übergeben , damit es angezeigt werden kann
-                    float_values = [struct.unpack('f', bytes(msg.data[i:i+4]))[0] for i in range(0, len(msg.data) - 3, 4)]
-                    grouped_values = [float_values[i:i + 3] for i in range(0, len(float_values), 3)]
-                    formatted_values = "\n".join([", ".join(map(str, group)) for group in grouped_values])
-
-                    return jsonify({'text': formatted_values, 'realTimestamp': realTimestamp})
+                    # If the message type is something else, return msg.data as a list
+                    return jsonify({'text': str(msg), 'realTimestamp': realTimestamp})
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
 

@@ -14,6 +14,7 @@
   position: relative;
   width: 100%;
   height: 100%; /* Ensure it fills the parent container */
+  flex-direction: column; /* Ensure it handles column splits properly */
 }
 
 .canvas-pane {
@@ -21,6 +22,8 @@
   flex-grow: 1;
   position: relative;
   height: 100%; /* Ensure it takes the full height of its parent */
+  width: 100%; /* Ensure it takes the full width of its parent */
+  overflow: hidden;
 }
 
 .canvas-node {
@@ -29,6 +32,7 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
+  overflow: hidden; /* Prevent overflow */
 }
 
 .canvas-resizer {
@@ -39,7 +43,6 @@
   cursor: ew-resize; /* Use this cursor for horizontal resizers */
 }
 
-/* Button styling for the three dots icon */
 .settings-button {
   position: absolute;
   top: 10px;
