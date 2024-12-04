@@ -172,7 +172,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
       return (
         <div className="centered-text">
           <p style={{ color: "white", fontSize: "0.8rem" }}>
-            Unknown topic: {topic}
+            Select a topic 
           </p>
         </div>
       );

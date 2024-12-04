@@ -9,8 +9,11 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import logging
 import pandas as pd
-from sensor_msgs.msg import PointCloud2  # Import PointCloud2 message type
+from sensor_msgs.msg import PointCloud2
 import struct
+import torch
+from transformers import CLIPProcessor, CLIPModel
+import faiss
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -26,6 +29,37 @@ timestamps = []
 
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
 aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/aligned_data_with_max_distance.csv', dtype=str)
+
+# FAISS and CLIP model loading
+index_path = "/home/ubuntu/Documents/Bachelor/faiss_index/faiss_index.index"
+embedding_paths_file = "/home/ubuntu/Documents/Bachelor/faiss_index/embedding_paths.npy"
+
+# Load FAISS index
+index = faiss.read_index(index_path)
+embedding_paths = np.load(embedding_paths_file)
+
+# Load CLIP model and processor
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+# Function to compute text embedding using CLIP
+def get_text_embedding(text):
+    # Preprocess the text using CLIPProcessor (tokenizes and converts to tensors)
+    inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True).to(device)
+    
+    # Generate embedding
+    with torch.no_grad():
+        text_features = model.get_text_features(**inputs)
+        text_features /= text_features.norm(dim=-1, keepdim=True)  # Normalize
+
+    return text_features.cpu().numpy().flatten()
+
+# Function to perform similarity search in FAISS
+def search_faiss_index(query_embedding, k=5):
+    # Perform the search (returning k nearest neighbors)
+    distances, indices = index.search(query_embedding.reshape(1, -1), k)
+    return distances, indices
 
 # Endpoint to get available topics from the CSV file
 @app.route('/api/topics', methods=['GET'])
@@ -102,6 +136,30 @@ def get_ros():
                     return jsonify({'text': str(msg), 'realTimestamp': realTimestamp})
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
+
+# New API endpoint to perform text-based search using FAISS and CLIP
+@app.route('/api/search', methods=['GET'])
+def search():
+    query_text = request.args.get('query', default=None, type=str)
+    if query_text is None:
+        return jsonify({'error': 'No query text provided'}), 400
+
+    # Compute the query embedding
+    query_embedding = get_text_embedding(query_text)
+
+    # Perform the FAISS search
+    distances, indices = search_faiss_index(query_embedding)
+
+    # Prepare the results
+    results = []
+    for i, idx in enumerate(indices[0]):
+        results.append({
+            'rank': i + 1,
+            'path': embedding_paths[idx],
+            'distance': float(distances[0][i]),
+        })
+
+    return jsonify({'query': query_text, 'results': results})
 
 if __name__ == '__main__':
     app.run(debug=True)

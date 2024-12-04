@@ -130,7 +130,7 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
     if (!node.left && !node.right) {
       return (
         <div className="canvas-node" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-          <NodeContent topic={metadata.topic || 'No topic selected'} timestamp={metadata.timestamp} />
+          <NodeContent topic={metadata.topic} timestamp={metadata.timestamp} />
 
           <IconButton
             size="small"

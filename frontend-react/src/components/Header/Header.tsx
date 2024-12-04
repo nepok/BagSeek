@@ -1,7 +1,6 @@
 import React from 'react';
 import './Header.css'; // Make sure this file contains the @import rule
 import { IconButton, Typography, Box } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
 import SettingsIcon from '@mui/icons-material/Settings';
 
 const Header: React.FC = () => {
@@ -14,9 +13,6 @@ const Header: React.FC = () => {
 
       {/* Right section with icons */}
       <Box className="header-right" display="flex" alignItems="center">
-        <IconButton className="header-icon">
-          <SearchIcon />
-        </IconButton>
         <IconButton className="header-icon">
           <SettingsIcon />
         </IconButton>
