@@ -80,22 +80,28 @@ def get_timestamps():
 def get_ros():
     timestamp = request.args.get('timestamp', default=None, type=str)  # Get timestamp from query params
     topic = request.args.get('topic', default=None, type=str)  # Get topic from query params
+    mode = request.args.get('mode', default='show', type=str)  # Default mode is "show"
 
-    if timestamp is None:
+    if not timestamp:
         return jsonify({'error': 'No timestamp provided'})
-    if topic is None:
+    if not topic:
         return jsonify({'error': 'No topic provided'})
+    if mode not in ['show', 'search']:
+        return jsonify({'error': f'Invalid mode: {mode}. Supported modes are "show" and "search".'})
+        
+    if mode == 'show':
+        # Validate timestamp and topic in the DataFrame
+        if timestamp not in aligned_data['Reference Timestamp'].values:
+            return jsonify({'error': 'Timestamp not found in aligned_data'})
+        if topic not in aligned_data.columns:
+            return jsonify({'error': f'Topic {topic} not found in aligned_data'})
 
-    # Check if timestamp exists in aligned_data
-    if timestamp not in aligned_data['Reference Timestamp'].values:
-        return jsonify({'error': 'Timestamp not found in aligned_data'})
+        # Lookup the real timestamp in the DataFrame
+        row = aligned_data[aligned_data['Reference Timestamp'] == timestamp]
+        realTimestamp = row[topic].iloc[0]
+    else:
+        realTimestamp = timestamp
 
-    # Check if the topic exists as a column in aligned_data
-    if topic not in aligned_data.columns:
-        return jsonify({'error': f'Topic {topic} not found in aligned_data'})
-
-    row = aligned_data[aligned_data['Reference Timestamp'] == timestamp]
-    realTimestamp = row[topic].iloc[0]
 
     # Open the rosbag to find the message at the requested timestamp and topic
     with Reader(rosbag_path) as reader:
@@ -105,7 +111,7 @@ def get_ros():
             if str(msg_timestamp) == realTimestamp:
                 # Deserialize the message based on the connection's message type
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
-                # Check the message type string explicitly
+
                 if connection.msgtype == 'sensor_msgs/msg/Image':
                     if hasattr(msg, 'encoding'):
                         if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':

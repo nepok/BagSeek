@@ -42,7 +42,9 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]); // Initialize as an empty array
+  const [searchResults, setSearchResults] = useState<string[]>([]); // Initialize as an empty array
+  const [showBigBox, setShowBigBox] = useState(false); // State to control the big box visibility
+  const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
@@ -61,13 +63,36 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     try {
       const response = await fetch(`/api/search?query=${query}`, { method: 'GET' });
       const data = await response.json();
-      setSearchResults(Array.isArray(data) ? data : []); // Ensure data is always an array
+      var results = new Array()
+      for (var val of data.results){
+        results.push(val.path.substring(56,82)); // prints values: 10, 20, 30, 40
+      }
+      setSearchResults(Array.isArray(results) ? results : []); // Ensure data is always an array
+      setShowBigBox(true); // Show the big box with results
     } catch (error) {
       console.error('Error fetching search results:', error);
       setSearchResults([]); // In case of an error, default to an empty array
     }
   };
 
+  // Fetch all images for the search results
+  const fetchAllImages = async () => {
+    try {
+      const imagePromises = searchResults.map(async (result) => {
+        const response = await fetch(
+          `/api/ros?timestamp=${result.substring(7)}&topic=/camera_image/${result.substring(0, 6)}&mode=search`
+        );
+        const data = await response.json();
+        return data.image || null;
+      });
+
+      const fetchedImages = await Promise.all(imagePromises);
+      setImageGallery(fetchedImages.filter((img) => img !== null)); // Filter out any null values
+    } catch (error) {
+      console.error('Error fetching images:', error);
+    }
+  };
+    
   const handleSliderChange = (event: Event, value: number | number[]) => {
     const newValue = Array.isArray(value) ? value[0] : value;
     setSliderValue(newValue);
@@ -129,23 +154,29 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     setShowSearchInput(!showSearchInput);
   };
 
-  // Function to handle search input change and trigger the API call only when Enter is pressed
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    if (searchResults.length > 0) {
+      fetchAllImages();
+    }
+  }, [searchResults]);
+  
+  const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      fetchSearchResults(searchQuery);
+      await fetchSearchResults(searchQuery);
     }
   };
+
 
   return (
     <div className="timestamp-slider-container">
       {/* Popper for Search Results */}
       <Popper
-        open={searchResults.length > 0} // Show the Popper only when there are results
+        open={searchResults.length > 0 && showSearchInput} // Show the Popper only when there are results
         anchorEl={searchIconRef.current} // Position relative to the search icon
         placement="top" // Display results above the icon
         sx={{
           zIndex: 1400,
-          width: '300px',
+          width: '210px',
           left: '50%', // Center the Popper horizontally
           transform: 'translateX(-50%)', // Center the Popper horizontally
           padding: '8px',
@@ -153,14 +184,49 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           borderRadius: '8px',
           boxShadow: '0 2px 10px rgba(0, 0, 0, 0.3)', // Optional: shadow for better visibility
         }}
+        modifiers={[
+          {
+            name: 'offset',
+            options: {
+              offset: [0, 70], // Move the popper 10px higher above the search icon (increase value for higher)
+            },
+          },
+        ]}
       >
-        <div>
-          {searchResults.map((result: any) => (
-            <Typography key={result.timestamp} variant="body2" sx={{ color: 'white' }}>
-              {result.timestamp}
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'flex-start', // Align items to the left
+        width: '100%', // Allow images to fill the width of the container
+        gap: '8px', // Space between image and text
+        overflowY: 'auto', // In case there are many images, allow scrolling
+        padding: '8px',
+      }}>
+        {imageGallery.map((imgBase64, index) => (
+          <div key={index} style={{ textAlign: 'left', width: '100%' }}>
+            <img
+              src={`data:image/webp;base64,${imgBase64}`}
+              alt={`Search result ${index + 1}`}
+              style={{
+                width: '100%', // Make the image fill the container's width
+                height: 'auto', // Maintain the aspect ratio
+                objectFit: 'contain', // Keep the image proportion intact
+              }}
+            />
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                color: 'white', 
+                wordBreak: 'break-word', 
+                marginTop: '4px', // Tiny margin between image and text
+                fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
+              }}
+            >
+              {searchResults[index]} {/* Match the description with the image */}
             </Typography>
-          ))}
-        </div>
+          </div>
+        ))}
+      </div>
       </Popper>
       {/* Popper for Search Input */}
       <Popper
@@ -245,12 +311,11 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
 
       {/* Select for Timestamp Unit */}
       <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
-        <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}>Unit</InputLabel>
+        <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
         <Select
           labelId="timestamp-unit-select-label"
           id="timestamp-unit-select"
           value={timestampUnit}
-          label="Unit"
           onChange={handleTimestampUnitChange}
           sx={{ fontSize: '0.8rem' }}
         >
