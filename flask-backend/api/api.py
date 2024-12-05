@@ -158,14 +158,29 @@ def search():
 
     # Prepare the results
     results = []
+    marks = []
+
     for i, idx in enumerate(indices[0]):
+        # Prepare the result object
+        embedding_path = embedding_paths[idx]
+        result_topic = f"/camera_image/{embedding_path[56:62]}"
+        result_timestamp = embedding_path[63:82]
+        
         results.append({
             'rank': i + 1,
-            'path': embedding_paths[idx],
+            'path': embedding_path,
             'distance': float(distances[0][i]),
         })
 
-    return jsonify({'query': query_text, 'results': results})
+        # Find matching reference timestamp and store in the dictionary
+        match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
+        for index, timestamp in match.items():
+            marks.append({
+                'value': index,    # Use the index as the "value"
+                #'label': str(timestamp)  # Use the timestamp as the "label"
+            })
+
+    return jsonify({'query': query_text, 'results': results, 'marks': marks})
 
 if __name__ == '__main__':
     app.run(debug=True)

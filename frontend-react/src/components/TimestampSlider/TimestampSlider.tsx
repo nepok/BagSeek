@@ -43,7 +43,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<string[]>([]); // Initialize as an empty array
-  const [showBigBox, setShowBigBox] = useState(false); // State to control the big box visibility
+  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  const [showBigBox, setShowBigBox] = useState(false); // State to control the big box visibility
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -68,6 +68,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         results.push(val.path.substring(56,82)); // prints values: 10, 20, 30, 40
       }
       setSearchResults(Array.isArray(results) ? results : []); // Ensure data is always an array
+      setSearchMarks(data.marks)
       setShowBigBox(true); // Show the big box with results
     } catch (error) {
       console.error('Error fetching search results:', error);
@@ -202,30 +203,36 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         overflowY: 'auto', // In case there are many images, allow scrolling
         padding: '8px',
       }}>
-        {imageGallery.map((imgBase64, index) => (
-          <div key={index} style={{ textAlign: 'left', width: '100%' }}>
-            <img
-              src={`data:image/webp;base64,${imgBase64}`}
-              alt={`Search result ${index + 1}`}
-              style={{
-                width: '100%', // Make the image fill the container's width
-                height: 'auto', // Maintain the aspect ratio
-                objectFit: 'contain', // Keep the image proportion intact
-              }}
-            />
-            <Typography 
-              variant="body2" 
-              sx={{ 
-                color: 'white', 
-                wordBreak: 'break-word', 
-                marginTop: '4px', // Tiny margin between image and text
-                fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
-              }}
-            >
-              {searchResults[index]} {/* Match the description with the image */}
-            </Typography>
-          </div>
-        ))}
+        {imageGallery && imageGallery.length > 0 ? (
+          imageGallery.map((imgBase64, index) => (
+            <div key={index} style={{ textAlign: 'left', width: '100%' }}>
+              <img
+                src={`data:image/webp;base64,${imgBase64}`}
+                alt={`Search result ${index + 1}`}
+                style={{
+                  width: '100%', // Make the image fill the container's width
+                  height: 'auto', // Maintain the aspect ratio
+                  objectFit: 'contain', // Keep the image proportion intact
+                }}
+              />
+              <Typography 
+                variant="body2" 
+                sx={{ 
+                  color: 'white', 
+                  wordBreak: 'break-word', 
+                  marginTop: '4px', // Tiny margin between image and text
+                  fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
+                }}
+              >
+                {searchResults[index]} {/* Match the description with the image */}
+              </Typography>
+            </div>
+          ))
+        ) : (
+          <p style={{ color: "white", fontSize: "0.8rem" }}>
+            Loading...
+          </p>
+        )}
       </div>
       </Popper>
       {/* Popper for Search Input */}
@@ -296,7 +303,15 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         value={sliderValue}
         onChange={handleSliderChange}
         aria-label="Timestamp"
-        sx={{ marginRight: '12px' }}
+        sx={{ 
+          marginRight: '12px',
+          '& .MuiSlider-mark': {
+            backgroundColor: '#FFA500',
+            width: '3px',
+            height: '7px'
+          },
+         }}
+        marks={searchMarks}
       />
 
       {/* Display the selected timestamp */}
