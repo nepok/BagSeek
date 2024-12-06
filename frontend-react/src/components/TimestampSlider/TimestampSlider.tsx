@@ -15,10 +15,12 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   selectedTimestamp,
   onSliderChange,
 }) => {
+
   const formatDate = (timestamp: number): string => {
     if (!timestamp || isNaN(timestamp)) {
       return 'Invalid Timestamp';
     }
+    // TODO: automatic conversion for time unit seconds, milli, micro and nano seconds
     const date = new Date(timestamp / 1000000); // Divide by 1,000,000 to convert to seconds
     const berlinTime = new Intl.DateTimeFormat('de-DE', {
       year: 'numeric',
@@ -38,17 +40,18 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   );
 
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
-  const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
   const [isPlaying, setIsPlaying] = useState(false);
+  const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<string[]>([]); // Initialize as an empty array
-  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  const [showBigBox, setShowBigBox] = useState(false); // State to control the big box visibility
+  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
 
+  // update selected timestamp if slider or possible timestamps change
   useEffect(() => {
     if (selectedTimestamp !== null) {
       const index = timestamps.indexOf(selectedTimestamp);
@@ -56,20 +59,22 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     }
   }, [selectedTimestamp, timestamps]);
 
-  // Function to fetch the API search results
+  // Method for fetching the API search results
   const fetchSearchResults = async (query: string) => {
     if (!query.trim()) return;
 
     try {
       const response = await fetch(`/api/search?query=${query}`, { method: 'GET' });
       const data = await response.json();
-      var results = new Array()
-      for (var val of data.results){
-        results.push(val.path.substring(56,82)); // prints values: 10, 20, 30, 40
+
+      // TODO: maybe move to backend?
+      var results = [];
+      for (var result of data.results){
+        results.push(result.path.substring(56,82));
       }
-      setSearchResults(Array.isArray(results) ? results : []); // Ensure data is always an array
+
+      setSearchResults(results);
       setSearchMarks(data.marks)
-      setShowBigBox(true); // Show the big box with results
     } catch (error) {
       console.error('Error fetching search results:', error);
       setSearchResults([]); // In case of an error, default to an empty array
@@ -170,6 +175,126 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
 
   return (
     <div className="timestamp-slider-container">
+      
+      {/* Select for playback speed */}
+      <FormControl sx={{ m: 1, minWidth: 86 }} size="small">
+        <InputLabel id="playback-speed-select-label" sx={{ fontSize: '0.8rem' }}>Speed</InputLabel>
+        <Select
+          labelId="playback-speed-select-label"
+          id="playback-speed-select"
+          value={playbackSpeed}
+          label="Speed"
+          onChange={handlePlaybackSpeedChange}
+          sx={{ fontSize: '0.8rem' }}
+        >
+          <MenuItem value={0.125} sx={{ fontSize: '0.8rem' }}>0.125x</MenuItem>
+          <MenuItem value={0.25} sx={{ fontSize: '0.8rem' }}>0.25x</MenuItem>
+          <MenuItem value={0.5} sx={{ fontSize: '0.8rem' }}>0.5x</MenuItem>
+          <MenuItem value={1} sx={{ fontSize: '0.8rem' }}>1x</MenuItem>
+          <MenuItem value={1.5} sx={{ fontSize: '0.8rem' }}>1.5x</MenuItem>
+          <MenuItem value={2} sx={{ fontSize: '0.8rem' }}>2x</MenuItem>
+        </Select>
+      </FormControl>
+
+      {/* Play icon button */}
+      <IconButton 
+        aria-label="play" 
+        color="primary" 
+        onClick={togglePlayback}>
+        <PlayArrowIcon />
+      </IconButton>
+
+      {/* Timestamp slider */}
+      <Slider
+        size="small"
+        min={0}
+        max={timestamps.length - 1}
+        step={1}
+        value={sliderValue}
+        onChange={handleSliderChange}
+        aria-label="Timestamp"
+        sx={{ 
+          marginRight: '12px',
+          '& .MuiSlider-mark': {
+            backgroundColor: '#FFA500',
+            width: '3px',
+            height: '7px'
+          },
+         }}
+        marks={searchMarks}
+      />
+
+      {/* Display the selected timestamp */}
+      <Typography 
+        variant="body2" 
+        sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', minWidth: 140 }}
+      >
+        {timestampUnit === 'ROS'
+          ? selectedTimestamp
+          : selectedTimestamp && formatDate(selectedTimestamp)}
+      </Typography>
+
+      {/* Select for Timestamp Unit */}
+      <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
+        <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
+        <Select
+          labelId="timestamp-unit-select-label"
+          id="timestamp-unit-select"
+          value={timestampUnit}
+          onChange={handleTimestampUnitChange}
+          sx={{ fontSize: '0.8rem' }}
+        >
+          <MenuItem value="ROS" sx={{ fontSize: '0.8rem' }}>ROS</MenuItem>
+          <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
+        </Select>
+      </FormControl>
+
+      {/* Search icon button to toggle the search input */}
+      <IconButton 
+        ref={searchIconRef} 
+        aria-label="search" 
+        onClick={toggleSearchInput} 
+        sx={{ fontSize: '1.2rem' }}
+      >
+        <SearchIcon />
+      </IconButton>
+
+
+      {/* Popper for Search Input */}
+      <Popper
+        open={showSearchInput}
+        anchorEl={searchIconRef.current} // Position relative to the search icon
+        placement="top-end" // Places the popper above the icon
+        sx={{
+          zIndex: 1300, // Ensure it appears above other content
+          width: "200px", // Adjust width to make the input box thinner
+        }}
+        modifiers={[
+          {
+            name: 'offset',
+            options: {
+              offset: [0, 12], // Move the popper 10px higher above the search icon (increase value for higher)
+            },
+          },
+        ]}
+      >
+        <TextField
+          variant="outlined"
+          label="Search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}  // Update the query as the user types
+          onKeyDown={handleSearchKeyDown} // Trigger API call only when Enter is pressed
+          size="small"
+          sx={{
+            fontSize: '0.7rem', // Smaller font size
+            background: "#202020", // Dark background color for input box
+            width: '100%', // Ensure the width fits the parent container (Popper)
+            borderRadius: '4px', // Optional: Add rounded corners for a smoother look
+          }}
+        />
+      </Popper>
+
+
       {/* Popper for Search Results */}
       <Popper
         open={searchResults.length > 0 && showSearchInput} // Show the Popper only when there are results
@@ -235,130 +360,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         )}
       </div>
       </Popper>
-      {/* Popper for Search Input */}
-      <Popper
-        open={showSearchInput}
-        anchorEl={searchIconRef.current} // Position relative to the search icon
-        placement="top-end" // Places the popper above the icon
-        sx={{
-          zIndex: 1300, // Ensure it appears above other content
-          width: "200px", // Adjust width to make the input box thinner
-        }}
-        modifiers={[
-          {
-            name: 'offset',
-            options: {
-              offset: [0, 12], // Move the popper 10px higher above the search icon (increase value for higher)
-            },
-          },
-        ]}
-      >
-        <TextField
-          variant="outlined"
-          label="Search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}  // Update the query as the user types
-          onKeyDown={handleSearchKeyDown} // Trigger API call only when Enter is pressed
-          size="small"
-          sx={{
-            fontSize: '0.7rem', // Smaller font size
-            background: "#202020", // Dark background color for input box
-            width: '100%', // Ensure the width fits the parent container (Popper)
-            borderRadius: '4px', // Optional: Add rounded corners for a smoother look
-          }}
-        />
-      </Popper>
 
-      {/* Select for playback speed */}
-      <FormControl sx={{ m: 1, minWidth: 86 }} size="small">
-        <InputLabel id="playback-speed-select-label" sx={{ fontSize: '0.8rem' }}>Speed</InputLabel>
-        <Select
-          labelId="playback-speed-select-label"
-          id="playback-speed-select"
-          value={playbackSpeed}
-          label="Speed"
-          onChange={handlePlaybackSpeedChange}
-          sx={{ fontSize: '0.8rem' }}
-        >
-          <MenuItem value={0.125} sx={{ fontSize: '0.8rem' }}>0.125x</MenuItem>
-          <MenuItem value={0.25} sx={{ fontSize: '0.8rem' }}>0.25x</MenuItem>
-          <MenuItem value={0.5} sx={{ fontSize: '0.8rem' }}>0.5x</MenuItem>
-          <MenuItem value={1} sx={{ fontSize: '0.8rem' }}>1x</MenuItem>
-          <MenuItem value={1.5} sx={{ fontSize: '0.8rem' }}>1.5x</MenuItem>
-          <MenuItem value={2} sx={{ fontSize: '0.8rem' }}>2x</MenuItem>
-        </Select>
-      </FormControl>
-
-      {/* Play icon button */}
-      <IconButton aria-label="play" color="primary" onClick={togglePlayback}>
-        <PlayArrowIcon />
-      </IconButton>
-
-      {/* Timestamp slider */}
-      <Slider
-        size="small"
-        min={0}
-        max={timestamps.length - 1}
-        step={1}
-        value={sliderValue}
-        onChange={handleSliderChange}
-        aria-label="Timestamp"
-        sx={{ 
-          marginRight: '12px',
-          '& .MuiSlider-mark': {
-            backgroundColor: '#FFA500',
-            width: '3px',
-            height: '7px'
-          },
-         }}
-        marks={searchMarks}
-      />
-
-      {/* Display the selected timestamp */}
-      <Typography 
-        variant="body2" 
-        sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', minWidth: 140 }}
-      >
-        {timestampUnit === 'ROS'
-          ? selectedTimestamp
-          : selectedTimestamp && formatDate(selectedTimestamp)}
-      </Typography>
-
-      {/* Select for Timestamp Unit */}
-      <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
-        <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
-        <Select
-          labelId="timestamp-unit-select-label"
-          id="timestamp-unit-select"
-          value={timestampUnit}
-          onChange={handleTimestampUnitChange}
-          sx={{ fontSize: '0.8rem' }}
-        >
-          <MenuItem value="ROS" sx={{ fontSize: '0.8rem' }}>ROS</MenuItem>
-          <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
-        </Select>
-      </FormControl>
-
-      {/* Search icon button to toggle the search input */}
-      <IconButton 
-        ref={searchIconRef} 
-        aria-label="search" 
-        onClick={toggleSearchInput} 
-        sx={{ fontSize: '1.2rem' }}
-      >
-        <SearchIcon />
-      </IconButton>
-      
-      {/* Display search results */}
-      {searchResults.length > 0 && (
-        <div className="search-results">
-          {searchResults.map((result: any) => (
-            <div key={result.timestamp}>
-              <Typography variant="body2">{result.timestamp}</Typography>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 };

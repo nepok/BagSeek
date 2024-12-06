@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./NodeContent.css"; // Import the CSS file
-import { Box, Typography } from "@mui/material";
+import { Box, Checkbox, FormControlLabel, FormGroup, Typography } from "@mui/material";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -66,7 +66,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
     }
   }, [topic, timestamp]);
 
-  // Point cloud rendering component
+  // Point cloud rendering component TODO: conditional rendering? rote punkte über grund?
   const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(points);
@@ -84,8 +84,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
   const RotateScene = () => {
     const { scene } = useThree();
     useEffect(() => {
-      scene.rotation.x = -1;
-      scene.rotation.y = 0.9;
+      scene.rotation.x = -1.8; //-3 für bodensicht
+      scene.rotation.y = -0;
       scene.rotation.z = 1.6;
     }, [scene]);
     return null; // No need to render anything here
@@ -129,6 +129,14 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
       return (
         <div className="node-content">
           <div className="canvas-container">
+            {/* Todo: checkboxes für bottom und top view?
+            <div className="checkboxes" style={{color:"#fff", fontSize:"0.5rem"}}>
+              <FormGroup>
+                <FormControlLabel control={<Checkbox />} label="Top View" />
+                <FormControlLabel control={<Checkbox />} label="Bottom View" />
+              </FormGroup>
+            </div>
+            */}
             {points ? (
               <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
                 <RotateScene /> {/* Rotate the whole scene */}

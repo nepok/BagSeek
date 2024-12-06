@@ -21,7 +21,7 @@ CORS(app)  # Enable CORS for all routes
 # Define the rosbag file path
 rosbag_path = '/home/ubuntu/Documents/Bachelor/testcode/rosbag2_2024_08_01-16_00_23'
 
-# Create a typestore and get the Image message class
+# Create a typestore
 typestore = get_typestore(Stores.LATEST)
 
 # Store the available timestamps globally
@@ -55,7 +55,8 @@ def get_text_embedding(text):
 
     return text_features.cpu().numpy().flatten()
 
-# Function to perform similarity search in FAISS
+# Function to perform similarity search in FAISS TODO: warum error, wenn nicht genutzt?
+# TODO: eher binary search implementieren? oder mehr 
 def search_faiss_index(query_embedding, k=5):
     # Perform the search (returning k nearest neighbors)
     distances, indices = index.search(query_embedding.reshape(1, -1), k)
@@ -112,34 +113,35 @@ def get_ros():
                 # Deserialize the message based on the connection's message type
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
 
-                if connection.msgtype == 'sensor_msgs/msg/Image':
-                    if hasattr(msg, 'encoding'):
-                        if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':
-                            image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
-                            if msg.encoding == 'rgb8':
-                                image_data = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
+                match connection.msgtype:
+                    case 'sensor_msgs/msg/Image':
+                        if hasattr(msg, 'encoding'):
+                            if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':
+                                image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
+                                if msg.encoding == 'rgb8':
+                                    image_data = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
 
-                            # Convert the image to a byte stream with WebP compression (set quality to 75)
-                            _, img_bytes = cv2.imencode('.webp', image_data, [int(cv2.IMWRITE_WEBP_QUALITY), 75])
+                                # Convert the image to a byte stream with WebP compression (set quality to 75)
+                                _, img_bytes = cv2.imencode('.webp', image_data, [int(cv2.IMWRITE_WEBP_QUALITY), 75])
 
-                            # Convert to base64
-                            img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
+                                # Convert to base64
+                                img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
 
-                            return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})
+                                return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})
 
-                elif connection.msgtype == 'sensor_msgs/msg/PointCloud2':
-                    # Extract point cloud data
-                    points = []
-                    point_step = msg.point_step
-                    for i in range(0, len(msg.data), point_step):
-                        x, y, z = struct.unpack_from('fff', msg.data, i)
-                        points.extend([x, y, z])  # Add the x, y, z coordinates as a flat list
+                    case 'sensor_msgs/msg/PointCloud2':
+                        # Extract point cloud data
+                        points = []
+                        point_step = msg.point_step
+                        for i in range(0, len(msg.data), point_step):
+                            x, y, z = struct.unpack_from('fff', msg.data, i)
+                            points.extend([x, y, z])  # Add the x, y, z coordinates as a flat list
 
-                    return jsonify({'points': points, 'realTimestamp': realTimestamp})
+                        return jsonify({'points': points, 'realTimestamp': realTimestamp})
 
-                else:
-                    # If the message type is something else, return msg.data as a list
-                    return jsonify({'text': str(msg), 'realTimestamp': realTimestamp})
+                    case _:
+                        # If the message type is something else, return msg.data as a list
+                        return jsonify({'text': str(msg), 'realTimestamp': realTimestamp})
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
 
@@ -154,7 +156,7 @@ def search():
     query_embedding = get_text_embedding(query_text)
 
     # Perform the FAISS search
-    distances, indices = search_faiss_index(query_embedding)
+    distances, indices = search_faiss_index(query_embedding, 5)
 
     # Prepare the results
     results = []
@@ -178,6 +180,7 @@ def search():
             marks.append({
                 'value': index,    # Use the index as the "value"
                 #'label': str(timestamp)  # Use the timestamp as the "label"
+                #'label': result_topic[14:]
             })
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})

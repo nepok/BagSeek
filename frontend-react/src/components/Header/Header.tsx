@@ -12,11 +12,9 @@ const Header: React.FC = () => {
       </Typography>
 
       {/* Right section with icons */}
-      <Box className="header-right" display="flex" alignItems="center">
-        <IconButton className="header-icon">
-          <SettingsIcon />
-        </IconButton>
-      </Box>
+      <IconButton className="header-icon">
+        <SettingsIcon />
+      </IconButton>
     </Box>
   );
 };
