@@ -83,17 +83,19 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
   };
 
   const handleClickMenu = (event: React.MouseEvent<HTMLElement>, node: Node) => {
-    if (currentNode?.id !== node.id) {
-      setAnchorEl(null);
-      setTopicMenuAnchorEl(null);
+    if (currentNode?.id === node.id) {
+      // If the same node is clicked again, close the menu
+      handleCloseMenu();
+    } else {
+      setAnchorEl(event.currentTarget);
+      setCurrentNode(node);
     }
-    setAnchorEl(event.currentTarget);
-    setCurrentNode(node);
   };
 
   const handleCloseMenu = () => {
     setAnchorEl(null);
     setCurrentNode(null);
+    setTopicMenuAnchorEl(null); // Close the topic menu as well
   };
 
   const handleSplitAction = (direction: 'horizontal' | 'vertical') => {

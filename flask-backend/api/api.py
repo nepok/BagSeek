@@ -18,7 +18,10 @@ import faiss
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Define the rosbag file path
+# Define the folder for all rosbags
+files_path = '/home/ubuntu/Documents/Bachelor/rosbags'
+
+# Define the default rosbag file path
 rosbag_path = '/home/ubuntu/Documents/Bachelor/testcode/rosbag2_2024_08_01-16_00_23'
 
 # Create a typestore
@@ -61,6 +64,32 @@ def search_faiss_index(query_embedding, k=5):
     # Perform the search (returning k nearest neighbors)
     distances, indices = index.search(query_embedding.reshape(1, -1), k)
     return distances, indices
+
+@app.route('/api/set-file-paths', methods=['POST'])
+def post_file_paths():
+    try:
+        data = request.get_json()  # Get the JSON payload
+        path_value = data.get('path')  # The path value from the JSON
+
+        global rosbag_path
+        rosbag_path = path_value
+
+        return jsonify({"message": "File path updated successfully."}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/get-file-paths', methods=['GET'])
+def get_file_paths():
+    try:
+        # List all files in the directory
+        files = os.listdir(files_path)
+        # Filter to only include .db3 files
+        ros_files = [os.path.join(files_path, file) for file in files]
+        return jsonify({"paths": ros_files}), 200
+    except Exception as e:
+        # Handle any errors that occur (e.g., directory not found, permission issues)
+        return jsonify({"error": str(e)}), 500
 
 # Endpoint to get available topics from the CSV file
 @app.route('/api/topics', methods=['GET'])
