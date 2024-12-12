@@ -22,7 +22,7 @@ CORS(app)  # Enable CORS for all routes
 files_path = '/home/ubuntu/Documents/Bachelor/rosbags'
 
 # Define the default rosbag file path
-rosbag_path = '/home/ubuntu/Documents/Bachelor/testcode/rosbag2_2024_08_01-16_00_23'
+rosbag_path = '/home/ubuntu/Documents/Bachelor/rosbags/rosbag2_2024_08_01-16_00_23'
 
 # Create a typestore
 typestore = get_typestore(Stores.LATEST)
@@ -94,9 +94,15 @@ def get_file_paths():
 # Endpoint to get available topics from the CSV file
 @app.route('/api/topics', methods=['GET'])
 def get_rosbag_topics():
-    with Reader(rosbag_path) as reader:
-        # Extract all topics using a set to avoid duplicates
-        topics = sorted({conn.topic for conn in reader.connections})
+    try:
+        with Reader(rosbag_path) as reader:
+            # Extract all topics using a set to avoid duplicates
+            topics = sorted({conn.topic for conn in reader.connections})
+    except Exception as error:
+        # Handle the error gracefully by returning an empty list
+        print(f"Error reading rosbag: {error}")
+        topics = []
+    
     return jsonify({'topics': topics}), 200
 
 @app.route('/api/timestamps', methods=['GET'])

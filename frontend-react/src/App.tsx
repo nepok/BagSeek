@@ -45,6 +45,16 @@ function App() {
       <FileInput
         isVisible={isFileInputVisible}
         onClose={() => setIsFileInputVisible(false)}
+        onTopicsUpdate={() => {
+          fetch('/api/topics')
+            .then((response) => response.json())
+            .then((data) => {
+              setTopics(data.topics);
+            })
+            .catch((error) => {
+              console.error('Error fetching topics:', error);
+            });
+        }}
       />
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header setIsFloatingBoxVisible={setIsFileInputVisible} />

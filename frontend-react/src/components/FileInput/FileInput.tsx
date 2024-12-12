@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Box, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import { Box, FormControl, IconButton, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 
 interface FileInputProps {
   isVisible: boolean;
   onClose: () => void;
+  onTopicsUpdate: () => void; // Callback for refreshing topics
 }
 
-const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose }) => {
+const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate }) => {
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [rosbag, setRosbag] = useState<string>('');
   const [selectedPath, setSelectedPath] = useState<string>('');
@@ -41,9 +43,12 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose }) => {
       .then((response) => response.json())
       .then((data) => {
         console.log('File path updated:', data);
+
+        // Trigger the topics update callback after setting the file path
+        onTopicsUpdate();
       })
       .catch((error) => {
-        console.error('Error updating file path:', error);
+        console.error('Error setting file path:', error);
       });
   };
 
@@ -56,15 +61,15 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose }) => {
         top: '50%',
         left: '50%',
         transform: 'translate(-50%, -50%)',
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+        backgroundColor: 'rgba(0, 0, 0, 0.9)',
         color: '#fff',
         padding: '20px',
         borderRadius: '8px',
         zIndex: 1000,
-        width: '300px', // Optional: Set a fixed width for consistency
+        width: '800px', // Optional: Set a fixed width for consistency
       }}
     >
-      <FormControl sx={{ m: 1, minWidth: 200 }}>
+      <FormControl sx={{ m: 1, width: 200 }}>
         <InputLabel id="demo-simple-select-helper-label">Select File</InputLabel>
         <Select
           labelId="demo-simple-select-helper-label"
@@ -73,7 +78,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose }) => {
           label="Select File"
           onChange={handleChange}
           sx={{
-            maxWidth: '100%', // Apply max width to prevent overflow
+            width: '600px', // Fixed width for the Select component
             whiteSpace: 'nowrap', // Prevent text wrapping
             overflow: 'hidden', // Hide overflow text
             textOverflow: 'ellipsis', // Show ellipsis when text overflows
@@ -83,12 +88,32 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose }) => {
             <em>None</em>
           </MenuItem>
           {filePaths.map((path, index) => (
-            <MenuItem key={index} value={path} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <MenuItem
+              key={index}
+              value={path}
+              sx={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '600px', // Match fixed width of the Select component
+              }}
+            >
               {path}
             </MenuItem>
           ))}
         </Select>
       </FormControl>
+      <IconButton
+        sx={{
+          position: 'absolute',
+          top: '8px',
+          right: '8px',
+          color: '#fff',
+        }}
+        onClick={onClose}
+      >
+        <CloseIcon />
+      </IconButton>
     </Box>
   );
 };
