@@ -6,9 +6,10 @@ interface FileInputProps {
   isVisible: boolean;
   onClose: () => void;
   onTopicsUpdate: () => void; // Callback for refreshing topics
+  onTimestampsUpdate: () => void; //Callback for refreshing timestamps
 }
 
-const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate }) => {
+const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate, onTimestampsUpdate }) => {
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [rosbag, setRosbag] = useState<string>('');
   const [selectedPath, setSelectedPath] = useState<string>('');
@@ -46,6 +47,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
 
         // Trigger the topics update callback after setting the file path
         onTopicsUpdate();
+        onTimestampsUpdate();
       })
       .catch((error) => {
         console.error('Error setting file path:', error);

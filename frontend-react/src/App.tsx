@@ -55,6 +55,16 @@ function App() {
               console.error('Error fetching topics:', error);
             });
         }}
+        onTimestampsUpdate={() => {
+          fetch('/api/timestamps')
+            .then((response) => response.json())
+            .then((data) => {
+              setTimestamps(data.timestamps);
+            })
+            .catch((error) => {
+              console.error('Error fetching timestamps:', error);
+            });
+        }}
       />
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header setIsFloatingBoxVisible={setIsFileInputVisible} />

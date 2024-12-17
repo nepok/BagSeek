@@ -31,7 +31,7 @@ typestore = get_typestore(Stores.LATEST)
 timestamps = []
 
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
-aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/aligned_data_with_max_distance.csv', dtype=str)
+aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
 
 # FAISS and CLIP model loading
 index_path = "/home/ubuntu/Documents/Bachelor/faiss_index/faiss_index.index"
@@ -74,6 +74,7 @@ def post_file_paths():
         global rosbag_path
         rosbag_path = path_value
 
+        aligned_data = pd.read_csv(str(path_value)[:32] + "bagseek/" + str(path_value)[40:] + ".csv", dtype=str)
         return jsonify({"message": "File path updated successfully."}), 200
 
     except Exception as e:
