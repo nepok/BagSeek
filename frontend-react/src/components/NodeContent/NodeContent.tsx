@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./NodeContent.css"; // Import the CSS file
-import { Box, Checkbox, FormControlLabel, FormGroup, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -18,40 +18,35 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
 
   // Function to fetch data based on the topic and timestamp
   const fetchData = async () => {
-    if (topic && timestamp) {
-      try {
-        const response = await fetch(`/api/ros?timestamp=${timestamp}&topic=${topic}`);
-        const data = await response.json();
+    try {
+      const response = await fetch(`/api/ros?timestamp=${timestamp}&topic=${topic}`);
+      const data = await response.json();
 
-        if (topic.startsWith("/camera_image")) {
-          setImage(data.image || null); // Store image for camera topics
-          setText(null);
-          setPoints(null);
-        } else if (topic === "/points") {
-          setPoints(data.points || null); // Store points for point cloud topics
-          setImage(null);
-          setText(null);
-        } else if (data.text) {
-          setText(data.text); // Store text for other topics
-          setImage(null);
-          setPoints(null);
-        } else {
-          setImage(null);
-          setText(null);
-          setPoints(null);
-        }
-
-        setRealTimestamp(data.realTimestamp || null); // Store real timestamp if provided
-      } catch (error) {
-        console.error("Error fetching data:", error);
-        setImage(null);
-        setText(null);
-        setPoints(null);
-      }
-    } else {
+      // Reset all states
       setImage(null);
       setText(null);
       setPoints(null);
+
+      // Dynamically update state based on the keys present in the response
+      if (data.image) {
+        setImage(data.image);
+      }
+      if (data.points) {
+        setPoints(data.points);
+      }
+      if (data.text) {
+        setText(data.text);
+      }
+      if (data.realTimestamp) {
+        setRealTimestamp(data.realTimestamp);
+      }
+    } catch (error) {
+      console.error("Error fetching data:", error);
+      // Reset all states in case of error
+      setImage(null);
+      setText(null);
+      setPoints(null);
+      setRealTimestamp(null);
     }
   };
 
@@ -66,7 +61,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
     }
   }, [topic, timestamp]);
 
-  // Point cloud rendering component TODO: conditional rendering? rote punkte über grund?
+  // Point cloud rendering component
   const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(points);
@@ -84,31 +79,23 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
   const RotateScene = () => {
     const { scene } = useThree();
     useEffect(() => {
-      scene.rotation.x = -1.8; //-3 für bodensicht
+      scene.rotation.x = -1.8; // -3 für boden
       scene.rotation.y = -0;
       scene.rotation.z = 1.6;
     }, [scene]);
     return null; // No need to render anything here
   };
 
-  // Render content based on the topic
-  switch (true) {
-    case topic?.startsWith("/camera_image"):
-      return (
-        <div className="node-content">
-          <div className="image-container">
-            {image ? (
-                <img
-                  src={`data:image/webp;base64,${image}`}
-                  alt="Fetched from ROS"
-                  loading="lazy"
-                />
-            ) : (
-              <p className="centered-text" style={{ color: "white", fontSize: "0.8rem" }}>
-                Loading image...
-              </p>
-            )}
-          </div>
+  // Render content based on the type of data fetched
+  return (
+    <div className="node-content">
+      {image && (
+        <div className="image-container">
+          <img
+            src={`data:image/webp;base64,${image}`}
+            alt="Fetched from ROS"
+            loading="lazy"
+          />
           <div className="typography-box">
             <Typography
               variant="body2"
@@ -123,68 +110,45 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
             <Typography variant="body2">{realTimestamp}</Typography>
           </div>
         </div>
-      );
+      )}
 
-    case topic === "/points":
-      return (
-        <div className="node-content">
-          <div className="canvas-container">
-            {/* Todo: checkboxes für bottom und top view?
-            <div className="checkboxes" style={{color:"#fff", fontSize:"0.5rem"}}>
-              <FormGroup>
-                <FormControlLabel control={<Checkbox />} label="Top View" />
-                <FormControlLabel control={<Checkbox />} label="Bottom View" />
-              </FormGroup>
-            </div>
-            */}
-            {points ? (
-              <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
-                <RotateScene /> {/* Rotate the whole scene */}
-                <OrbitControls /> {/* Set the target to rotate the camera */}
-                <pointLight position={[10, 10, 10]} />
-                <PointCloud points={points} />
-              </Canvas>
-            ) : (
-              <p className="centered-text" style={{ color: "white", fontSize: "0.8rem" }}>
-                Loading point cloud...
-              </p>
-            )}
-          </div>
+      {points && (
+        <div className="canvas-container">
+          <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
+            <RotateScene /> {/* Rotate the whole scene */}
+            <OrbitControls /> {/* Set the target to rotate the camera */}
+            <pointLight position={[10, 10, 10]} />
+            <PointCloud points={points} />
+          </Canvas>
           <div className="typography-box">
             <Typography variant="body2">{topic}</Typography>
             <Typography variant="body2">{realTimestamp}</Typography>
           </div>
         </div>
-      );
+      )}
 
-    case topic && !topic.startsWith("/camera_image"):
-      return (
-        <div className="node-content">
-          <Box>
-            {text ? (
-              <Typography variant="body2" sx={{ color: "white", whiteSpace: "pre-wrap" }}>
-                {text}
-              </Typography>
-            ) : (
-              <p style={{ color: "white", fontSize: "0.8rem" }}></p>
-            )}
-          </Box>
+      {text && (
+        <Box>
+          <Typography variant="body2" sx={{ color: "white", whiteSpace: "pre-wrap" }}>
+            {text}
+          </Typography>
           <div className="typography-box">
             <Typography variant="body2">{topic}</Typography>
             <Typography variant="body2">{realTimestamp}</Typography>
           </div>
-        </div>
-      );
+        </Box>
+      )}
 
-    default:
-      return (
+      {/* Default case: No data */}
+      {!image && !points && !text && (
         <div className="centered-text">
           <p style={{ color: "white", fontSize: "0.8rem" }}>
-            Select a topic 
+            {topic ? "Loading data..." : "Select a topic"}
           </p>
         </div>
-      );
-  }
+      )}
+    </div>
+  );
 };
 
 export default NodeContent;

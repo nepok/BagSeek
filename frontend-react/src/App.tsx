@@ -13,6 +13,17 @@ function App() {
   const [topics, setTopics] = useState<string[]>([]);
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);
 
+
+  // Update selectedTimestamp when timestamps change
+  useEffect(() => {
+    if (timestamps.length > 0) {
+      setSelectedTimestamp(timestamps[0]); // Default to the first timestamp
+    } else {
+      setSelectedTimestamp(null); // Clear the selection if no timestamps
+    }
+  }, [timestamps]); // This effect runs whenever `timestamps` changes
+
+
   useEffect(() => {
     fetch('/api/topics')
       .then((response) => response.json())
@@ -56,6 +67,7 @@ function App() {
             });
         }}
         onTimestampsUpdate={() => {
+          console.log("Timstamps update");
           fetch('/api/timestamps')
             .then((response) => response.json())
             .then((data) => {

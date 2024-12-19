@@ -74,6 +74,7 @@ def post_file_paths():
         global rosbag_path
         rosbag_path = path_value
 
+        global aligned_data
         aligned_data = pd.read_csv(str(path_value)[:32] + "bagseek/" + str(path_value)[40:] + ".csv", dtype=str)
         return jsonify({"message": "File path updated successfully."}), 200
 
@@ -110,7 +111,6 @@ def get_rosbag_topics():
 def get_timestamps():
     # Extract the first column (Reference Timestamp) from the PD Frame
     timestamps = aligned_data['Reference Timestamp'].astype(str).tolist()
-
     return jsonify({'timestamps': timestamps})
 
 @app.route('/api/ros', methods=['GET'])
@@ -201,6 +201,7 @@ def search():
     for i, idx in enumerate(indices[0]):
         # Prepare the result object
         embedding_path = embedding_paths[idx]
+        #/home/ubuntu/Documents/Bachelor/embeddings_kitti/2011_09_29_drive_0071_sync/image_01/data/0000000074_embedding.pt
         result_topic = f"/camera_image/{embedding_path[56:62]}"
         result_timestamp = embedding_path[63:82]
         
