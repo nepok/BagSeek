@@ -18,11 +18,11 @@ import faiss
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Define the folder for all rosbags
-files_path = '/home/ubuntu/Documents/Bachelor/rosbags'
-
-# Define the default rosbag file path
-rosbag_path = '/home/ubuntu/Documents/Bachelor/rosbags/rosbag2_2024_08_01-16_00_23'
+# Define the base path
+BASE_DIR = '/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src'
+ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
+IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
+SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 
 # Create a typestore
 typestore = get_typestore(Stores.LATEST)
@@ -31,15 +31,15 @@ typestore = get_typestore(Stores.LATEST)
 timestamps = []
 
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
-aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
+aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
 
 # FAISS and CLIP model loading
-index_path = "/home/ubuntu/Documents/Bachelor/faiss_index/faiss_index.index"
-embedding_paths_file = "/home/ubuntu/Documents/Bachelor/faiss_index/embedding_paths.npy"
+INDEX_FILE = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/faiss_index/faiss_index.index"
+EMBEDDING_PATHS_FILE = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/faiss_index/embedding_paths.npy"
 
 # Load FAISS index
-index = faiss.read_index(index_path)
-embedding_paths = np.load(embedding_paths_file)
+index = faiss.read_index(INDEX_FILE)
+embedding_paths = np.load(EMBEDDING_PATHS_FILE)
 
 # Load CLIP model and processor
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -71,11 +71,13 @@ def post_file_paths():
         data = request.get_json()  # Get the JSON payload
         path_value = data.get('path')  # The path value from the JSON
 
-        global rosbag_path
-        rosbag_path = path_value
+        global SELECTED_ROSBAG
+        SELECTED_ROSBAG = path_value
 
         global aligned_data
-        aligned_data = pd.read_csv(str(path_value)[:32] + "bagseek/" + str(path_value)[40:] + ".csv", dtype=str)
+        csv_path = str(path_value).replace("rosbags", "lookup_tables") + ".csv"
+        logging.warning(csv_path)
+        aligned_data = pd.read_csv(csv_path, dtype=str)
         return jsonify({"message": "File path updated successfully."}), 200
 
     except Exception as e:
@@ -85,9 +87,8 @@ def post_file_paths():
 def get_file_paths():
     try:
         # List all files in the directory
-        files = os.listdir(files_path)
-        # Filter to only include .db3 files
-        ros_files = [os.path.join(files_path, file) for file in files]
+        files = os.listdir(ROSBAGS_DIR)
+        ros_files = [os.path.join(ROSBAGS_DIR, file) for file in files]
         return jsonify({"paths": ros_files}), 200
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
@@ -97,7 +98,7 @@ def get_file_paths():
 @app.route('/api/topics', methods=['GET'])
 def get_rosbag_topics():
     try:
-        with Reader(rosbag_path) as reader:
+        with Reader(SELECTED_ROSBAG) as reader:
             # Extract all topics using a set to avoid duplicates
             topics = sorted({conn.topic for conn in reader.connections})
     except Exception as error:
@@ -141,7 +142,7 @@ def get_ros():
 
 
     # Open the rosbag to find the message at the requested timestamp and topic
-    with Reader(rosbag_path) as reader:
+    with Reader(SELECTED_ROSBAG) as reader:
         connections = [x for x in reader.connections if x.topic == topic]
 
         for connection, msg_timestamp, rawdata in reader.messages(connections=connections):
