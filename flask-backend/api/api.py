@@ -1,6 +1,7 @@
 import os
 import base64
 import csv
+from pathlib import Path
 from rosbags.rosbag2 import Reader
 from rosbags.typesys import Stores, get_typestore
 import cv2
@@ -20,8 +21,9 @@ CORS(app)  # Enable CORS for all routes
 
 # Define the base path
 BASE_DIR = '/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src'
+IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
+INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
-IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 
 # Create a typestore
@@ -32,14 +34,6 @@ timestamps = []
 
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
 aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
-
-# FAISS and CLIP model loading
-INDEX_FILE = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/faiss_index/faiss_index.index"
-EMBEDDING_PATHS_FILE = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/faiss_index/embedding_paths.npy"
-
-# Load FAISS index
-index = faiss.read_index(INDEX_FILE)
-embedding_paths = np.load(EMBEDDING_PATHS_FILE)
 
 # Load CLIP model and processor
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -55,12 +49,11 @@ def get_text_embedding(text):
     with torch.no_grad():
         text_features = model.get_text_features(**inputs)
         text_features /= text_features.norm(dim=-1, keepdim=True)  # Normalize
-
     return text_features.cpu().numpy().flatten()
 
 # Function to perform similarity search in FAISS TODO: warum error, wenn nicht genutzt?
 # TODO: eher binary search implementieren? oder mehr 
-def search_faiss_index(query_embedding, k=5):
+def search_faiss_index(query_embedding, index, k=5):
     # Perform the search (returning k nearest neighbors)
     distances, indices = index.search(query_embedding.reshape(1, -1), k)
     return distances, indices
@@ -76,7 +69,6 @@ def post_file_paths():
 
         global aligned_data
         csv_path = str(path_value).replace("rosbags", "lookup_tables") + ".csv"
-        logging.warning(csv_path)
         aligned_data = pd.read_csv(csv_path, dtype=str)
         return jsonify({"message": "File path updated successfully."}), 200
 
@@ -182,6 +174,7 @@ def get_ros():
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
 
+
 # New API endpoint to perform text-based search using FAISS and CLIP
 @app.route('/api/search', methods=['GET'])
 def search():
@@ -192,8 +185,24 @@ def search():
     # Compute the query embedding
     query_embedding = get_text_embedding(query_text)
 
+    # Define paths for the specified rosbag
+    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')
+    index_path = os.path.join(INDICES_DIR, rosbag_name, "faiss_index.index")
+    embedding_paths_file = os.path.join(INDICES_DIR, rosbag_name, "embedding_paths.npy")
+
+    logging.warning(index_path)
+
+    # Check if the index and embedding paths exist
+    if not Path(index_path).exists() or not Path(embedding_paths_file).exists():
+        print(f"FAISS index or embedding paths not found for rosbag: {rosbag_name}")
+        return
+    
+    # Load FAISS index and embedding paths
+    index = faiss.read_index(index_path)
+    embedding_paths = np.load(embedding_paths_file)
+
     # Perform the FAISS search
-    distances, indices = search_faiss_index(query_embedding, 5)
+    distances, indices = search_faiss_index(query_embedding, index, 5)
 
     # Prepare the results
     results = []
@@ -201,25 +210,26 @@ def search():
 
     for i, idx in enumerate(indices[0]):
         # Prepare the result object
-        embedding_path = embedding_paths[idx]
-        #/home/ubuntu/Documents/Bachelor/embeddings_kitti/2011_09_29_drive_0071_sync/image_01/data/0000000074_embedding.pt
-        result_topic = f"/camera_image/{embedding_path[56:62]}"
-        result_timestamp = embedding_path[63:82]
-        
+        embedding_path = str(embedding_paths[idx])
+        path_of_interest = str(os.path.basename(embedding_path))
+        result_timestamp = path_of_interest[-32:-13]
+        result_topic = path_of_interest[:-33].replace("__", "/")
+                
         results.append({
             'rank': i + 1,
-            'path': embedding_path,
+            'embedding_path': embedding_path,
             'distance': float(distances[0][i]),
+            'topic': result_topic,
+            'timestamp': result_timestamp
         })
 
         # Find matching reference timestamp and store in the dictionary
-        match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
-        for index, timestamp in match.items():
-            marks.append({
-                'value': index,    # Use the index as the "value"
+        #match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
+        #for index, timestamp in match.items():
+        #    marks.append({
+        #        'value': index,    # Use the index as the "value"
                 #'label': str(timestamp)  # Use the timestamp as the "label"
-                #'label': result_topic[14:]
-            })
+        #    })
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})
 

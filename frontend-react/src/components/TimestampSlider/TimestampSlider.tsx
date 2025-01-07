@@ -44,7 +44,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<string[]>([]); // Initialize as an empty array
+  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string }[]>([]); // Initialize as an empty array of SearchResult objects  
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
 
@@ -67,13 +67,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       const response = await fetch(`/api/search?query=${query}`, { method: 'GET' });
       const data = await response.json();
 
-      // TODO: maybe move to backend?
-      var results = [];
-      for (var result of data.results){
-        results.push(result.path.substring(56,82));
-      }
-
-      setSearchResults(results);
+      setSearchResults(data.results);
       setSearchMarks(data.marks)
     } catch (error) {
       console.error('Error fetching search results:', error);
@@ -86,19 +80,19 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     try {
       const imagePromises = searchResults.map(async (result) => {
         const response = await fetch(
-          `/api/ros?timestamp=${result.substring(7)}&topic=/camera_image/${result.substring(0, 6)}&mode=search`
+          `/api/ros?timestamp=${result.timestamp}&topic=${result.topic}&mode=search`
         );
         const data = await response.json();
         return data.image || null;
       });
 
       const fetchedImages = await Promise.all(imagePromises);
-      setImageGallery(fetchedImages.filter((img) => img !== null)); // Filter out any null values
+      setImageGallery(fetchedImages.filter((img) => img !== null)); // Filter out any null values 
     } catch (error) {
-      console.error('Error fetching images:', error);
+      console.error("Error fetching images:", error);
     }
   };
-    
+
   const handleSliderChange = (event: Event, value: number | number[]) => {
     const newValue = Array.isArray(value) ? value[0] : value;
     setSliderValue(newValue);
@@ -349,7 +343,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
                   fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
                 }}
               >
-                {searchResults[index]} {/* Match the description with the image */}
+                {`Distance: ${searchResults[index].distance}, Timestamp: ${searchResults[index].timestamp}, Topic: ${searchResults[index].topic}`} {/* Match the description with the image */}
               </Typography>
             </div>
           ))
