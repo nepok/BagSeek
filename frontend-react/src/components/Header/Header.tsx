@@ -6,10 +6,11 @@ import IosShareIcon from '@mui/icons-material/IosShare';
 import SettingsIcon from '@mui/icons-material/Settings';
 
 interface HeaderProps {
-  setIsFloatingBoxVisible: (visible: boolean | ((prev: boolean) => boolean)) => void;
+  setIsFileInputVisible: (visible: boolean | ((prev: boolean) => boolean)) => void;
+  setIsExportDialogVisible: (visible: boolean | ((prev: boolean) => boolean)) => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ setIsFloatingBoxVisible }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible }) => {
   return (
     <Box
       className="header-container"
@@ -28,13 +29,16 @@ const Header: React.FC<HeaderProps> = ({ setIsFloatingBoxVisible }) => {
         <Tooltip title="Open Rosbag" arrow>
           <IconButton
             className="header-icon"
-            onClick={() => setIsFloatingBoxVisible((prev: boolean) => !prev)}
+            onClick={() => setIsFileInputVisible((prev: boolean) => !prev)}
           >
             <FolderIcon />
           </IconButton>
         </Tooltip>
         <Tooltip title="Export Rosbag" arrow>
-          <IconButton className="header-icon">
+          <IconButton 
+            className="header-icon"
+            onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}
+          >
             <IosShareIcon />
           </IconButton>
         </Tooltip>

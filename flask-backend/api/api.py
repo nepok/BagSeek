@@ -224,12 +224,12 @@ def search():
         })
 
         # Find matching reference timestamp and store in the dictionary
-        #match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
-        #for index, timestamp in match.items():
-        #    marks.append({
-        #        'value': index,    # Use the index as the "value"
+        match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
+        for index, timestamp in match.items():
+            marks.append({
+                'value': index,    # Use the index as the "value"
                 #'label': str(timestamp)  # Use the timestamp as the "label"
-        #    })
+            })
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})
 

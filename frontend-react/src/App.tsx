@@ -6,12 +6,14 @@ import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import FileInput from './components/FileInput/FileInput'; // Import FileInput
 import { ThemeProvider } from '@mui/material/styles';
 import darkTheme from './theme';
+import Export from './components/Export/Export';
 
 function App() {
   const [timestamps, setTimestamps] = useState<number[]>([]);
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
   const [topics, setTopics] = useState<string[]>([]);
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);
+  const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);
 
 
   // Update selectedTimestamp when timestamps change
@@ -78,8 +80,15 @@ function App() {
             });
         }}
       />
+      <Export
+        isVisible={isExportDialogVisible}
+        onClose={() => setIsExportDialogVisible(false)}
+      />
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-        <Header setIsFloatingBoxVisible={setIsFileInputVisible} />
+        <Header 
+          setIsFileInputVisible={setIsFileInputVisible} 
+          setIsExportDialogVisible={setIsExportDialogVisible} 
+        />
         <SplittableCanvas selectedTimestamp={selectedTimestamp} topics={topics} />
         <TimestampSlider
           timestamps={timestamps}

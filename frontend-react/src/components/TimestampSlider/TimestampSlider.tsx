@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import './TimestampSlider.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper } from '@mui/material';
+import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, CircularProgress, Skeleton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SearchIcon from '@mui/icons-material/Search';
 
@@ -348,9 +348,19 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
             </div>
           ))
         ) : (
-          <p style={{ color: "white", fontSize: "0.8rem" }}>
-            Loading...
-          </p>
+          //<p style={{ color: "white", fontSize: "0.8rem" }}>
+          //  Loading...
+          //</p>
+          //<div className="circular-progress-container">
+          //  <CircularProgress />
+          //</div>
+          <>
+            <Skeleton variant="rounded" width={178} height={60} />
+            <Skeleton variant="rounded" width={178} height={60} />
+            <Skeleton variant="rounded" width={178} height={60} />
+            <Skeleton variant="rounded" width={178} height={60} />
+            <Skeleton variant="rounded" width={178} height={60} />
+          </>
         )}
       </div>
       </Popper>
