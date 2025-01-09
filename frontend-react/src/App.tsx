@@ -81,6 +81,8 @@ function App() {
         }}
       />
       <Export
+        timestamps={timestamps}
+        topics={topics}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
       />

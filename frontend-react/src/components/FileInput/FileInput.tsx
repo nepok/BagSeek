@@ -72,7 +72,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
       }}
     >
       <FormControl sx={{ m: 1, width: 200 }}>
-        <InputLabel id="demo-simple-select-helper-label">Select File</InputLabel>
+        <InputLabel id="demo-simple-select-helper-label">Select RosBag</InputLabel>
         <Select
           labelId="demo-simple-select-helper-label"
           id="demo-simple-select-helper"
@@ -86,9 +86,6 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
             textOverflow: 'ellipsis', // Show ellipsis when text overflows
           }}
         >
-          <MenuItem value="">
-            <em>None</em>
-          </MenuItem>
           {filePaths.map((path, index) => (
             <MenuItem
               key={index}
