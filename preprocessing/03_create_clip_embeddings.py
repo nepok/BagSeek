@@ -38,7 +38,7 @@ def generate_embeddings(input_dir, output_dir):
                 Path(output_file_dir).mkdir(parents=True, exist_ok=True)
 
                 try:
-                    image_tensor = torch.load(input_file_path).unsqueeze(0).to(device)  # Add batch dimension
+                    image_tensor = torch.load(input_file_path, weights_only=True).unsqueeze(0).to(device)  # Add batch dimension
                     image = to_pil_image(image_tensor.squeeze(0).cpu())
                     inputs = processor(images=image, return_tensors="pt").to(device)
 

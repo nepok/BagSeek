@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent } from '@mui/material';
 
 interface ExportProps {
@@ -9,15 +9,71 @@ interface ExportProps {
 }
 
 const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose }) => {
-  const [rosbagName, setRosbagName] = useState('');
+  const [selectedRosbag, setSelectedRosbag] = useState('');
+  const [newRosbagName, setNewRosbagName] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [exportRange, setExportRange] = useState<number[]>([0, timestamps.length - 1]);
+
+  useEffect(() => {
+    const fetchSelectedRosbag = async () => {
+      try {
+        const response = await fetch('/api/get-selected-rosbag');
+        const result = await response.json();
+        if (response.ok) {
+          setSelectedRosbag(result.selected_rosbag);
+        } else {
+          console.error('Failed to fetch selected rosbag:', result.error);
+        }
+      } catch (error) {
+        console.error('Error fetching selected rosbag:', error);
+      }
+    };
+
+    fetchSelectedRosbag();
+  }, []);
+
+  const handleExport = async () => {
+    const exportData = {
+      new_rosbag_name: newRosbagName,
+      topics: selectedTopics,
+      start_timestamp: timestamps[exportRange[0]],
+      end_timestamp: timestamps[exportRange[1]],
+    };
+
+    try {
+      const response = await fetch('/api/export-rosbag', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(exportData),
+      });
+
+      const result = await response.json();
+      if (response.ok) {
+        console.log('Export successful:', result);
+      } else {
+        console.error('Export failed:', result.error);
+      }
+    } catch (error) {
+      console.error('Error exporting rosbag:', error);
+    }
+
+    onClose();
+  };
+
+  const handleSliderChange = (event: Event, newValue: number | number[]) => {
+    setExportRange(newValue as number[]);
+  };
+
+  const handleTopicChange = (event: SelectChangeEvent<string[]>) => {
+    setSelectedTopics(event.target.value as string[]);
+  };
 
   const formatDate = (timestamp: number): string => {
     if (!timestamp || isNaN(timestamp)) {
       return 'Invalid Timestamp';
     }
-    // TODO: automatic conversion for time unit seconds, milli, micro and nano seconds
     const date = new Date(timestamp / 1000000); // Divide by 1,000,000 to convert to seconds
     const berlinTime = new Intl.DateTimeFormat('de-DE', {
       year: 'numeric',
@@ -33,41 +89,24 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
     return berlinTime;
   };
 
-  const valueLabelingFormat = (value: number) => {
+  const valueLabelFormat = (value: number) => {
     const timestamp = timestamps[value];
     const formattedDate = formatDate(timestamp);
-    return { formattedDate, timestamp };
-  };
-
-  const handleExport = () => {
-    // Add your export logic here
-    console.log('Exporting rosbag:', rosbagName, selectedTopics, exportRange.map(index => timestamps[index]));
-    onClose();
-  };
-
-  const handleSliderChange = (event: Event, newValue: number | number[]) => {
-    setExportRange(newValue as number[]);
-  };
-
-  const handleTopicChange = (event: SelectChangeEvent<string[]>) => {
-    setSelectedTopics(event.target.value as string[]);
-  };
-
-  const MenuProps = {
-    PaperProps: {
-      style: {
-        maxHeight: 48 * 4.5 + 8,
-        width: 250,
-      },
-    },
+    return `${formattedDate} (${timestamp})`;
   };
 
   if (!isVisible) return null;
 
   return (
-    <Dialog open={true} onClose={onClose} aria-labelledby="form-dialog-title">
-      <DialogTitle id="form-dialog-title">Export Content of {rosbagName} </DialogTitle>
-      <DialogContent>
+    <Dialog 
+      open={true} 
+      onClose={onClose} 
+      aria-labelledby="form-dialog-title"
+      fullWidth
+      maxWidth="md" // Adjust the maxWidth as needed
+    >
+      <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag} </DialogTitle>
+      <DialogContent style={{ overflow: 'hidden' }}>
         <TextField
           autoFocus
           margin="dense"
@@ -75,8 +114,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
           label="Name"
           type="text"
           fullWidth
-          value={rosbagName}
-          onChange={(e) => setRosbagName(e.target.value)}
+          value={newRosbagName}
+          onChange={(e) => setNewRosbagName(e.target.value)}
         />
         <FormControl fullWidth margin="dense">
           <InputLabel id="topics-label">Topics</InputLabel>
@@ -87,7 +126,6 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
             value={selectedTopics}
             onChange={handleTopicChange}
             renderValue={(selected) => (selected as string[]).join(', ')}
-            MenuProps={MenuProps}
           >
             {topics.map((topic) => (
               <MenuItem key={topic} value={topic}>
@@ -100,15 +138,13 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
         <Box sx={{ mt: 2 }}>
           <Slider
             value={exportRange}
-            defaultValue={[0, timestamps.length - 1]}
             onChange={handleSliderChange}
             valueLabelDisplay="auto"
             min={0}
             max={timestamps.length - 1}
             valueLabelFormat={(value) => {
-              const { formattedDate, timestamp } = valueLabelingFormat(value);
-              return `${formattedDate} (${timestamp})`;
-            }}          
+              return valueLabelFormat(value);
+            }}
           />
         </Box>
       </DialogContent>

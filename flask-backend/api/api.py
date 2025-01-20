@@ -2,7 +2,7 @@ import os
 import base64
 import csv
 from pathlib import Path
-from rosbags.rosbag2 import Reader
+from rosbags.rosbag2 import Reader, Writer
 from rosbags.typesys import Stores, get_typestore
 import cv2
 import numpy as np
@@ -15,6 +15,7 @@ import struct
 import torch
 from transformers import CLIPProcessor, CLIPModel
 import faiss
+import traceback
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -24,6 +25,7 @@ BASE_DIR = '/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
+EXPORT_DIR = os.path.join(BASE_DIR, 'exported_rosbags')
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 
 # Create a typestore
@@ -85,7 +87,7 @@ def get_file_paths():
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500
-
+    
 # Endpoint to get available topics from the CSV file
 @app.route('/api/topics', methods=['GET'])
 def get_rosbag_topics():
@@ -181,16 +183,16 @@ def search():
     query_text = request.args.get('query', default=None, type=str)
     if query_text is None:
         return jsonify({'error': 'No query text provided'}), 400
-
+    
     # Compute the query embedding
     query_embedding = get_text_embedding(query_text)
 
     # Define paths for the specified rosbag
-    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')
+    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '').replace('.bag', '')
     index_path = os.path.join(INDICES_DIR, rosbag_name, "faiss_index.index")
     embedding_paths_file = os.path.join(INDICES_DIR, rosbag_name, "embedding_paths.npy")
 
-    logging.warning(index_path)
+    logging.warning(rosbag_name)
 
     # Check if the index and embedding paths exist
     if not Path(index_path).exists() or not Path(embedding_paths_file).exists():
@@ -232,6 +234,37 @@ def search():
             })
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})
+
+@app.route('/api/export-rosbag', methods=['POST'])
+def export_rosbag():
+    try:
+        data = request.json
+        new_rosbag_name = data.get('new_rosbag_name')
+        topics = data.get('topics')
+        start_timestamp = int(data.get('start_timestamp'))
+        end_timestamp = int(data.get('end_timestamp'))
+
+        if not new_rosbag_name or not topics:
+            return jsonify({"error": "Rosbag name and topics are required"}), 400
+
+        if not os.path.exists(SELECTED_ROSBAG):
+            return jsonify({"error": "Rosbag not found"}), 404
+
+        export_path = os.path.join(EXPORT_DIR, f"{new_rosbag_name}_exported")
+        typestore = get_typestore(Stores.LATEST)
+
+        with Reader(SELECTED_ROSBAG) as reader, Writer(export_path) as writer:
+            for connection, timestamp, rawdata in reader.messages():
+                logging.warning(type(start_timestamp)), type(end_timestamp), type(timestamp)
+                #writer.add_connection(connection)
+                if connection.topic in topics and start_timestamp <= timestamp <= end_timestamp:
+                    msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
+                    writer.write(connection, timestamp, msg)
+
+        return jsonify({"message": "Rosbag exported successfully", "export_path": export_path}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

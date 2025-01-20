@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, FormControl, IconButton, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, IconButton, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
 interface FileInputProps {
@@ -57,21 +57,16 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
   if (!isVisible) return null;
 
   return (
-    <Box
-      sx={{
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        backgroundColor: 'rgba(0, 0, 0, 0.9)',
-        color: '#fff',
-        padding: '20px',
-        borderRadius: '8px',
-        zIndex: 1000,
-        width: '800px', // Optional: Set a fixed width for consistency
-      }}
+    <Dialog 
+      open={true} 
+      onClose={onClose} 
+      aria-labelledby="form-dialog-title"
+      fullWidth
+      maxWidth="lg" // Adjust the maxWidth as needed
     >
-      <FormControl sx={{ m: 1, width: 200 }}>
+      <DialogTitle id="form-dialog-title">Select RosBag File</DialogTitle>
+      <DialogContent>
+      <FormControl sx={{ m: 1, width: '100%' }}>
         <InputLabel id="demo-simple-select-helper-label">Select RosBag</InputLabel>
         <Select
           labelId="demo-simple-select-helper-label"
@@ -80,7 +75,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
           label="Select File"
           onChange={handleChange}
           sx={{
-            width: '600px', // Fixed width for the Select component
+            width: '100%',
             whiteSpace: 'nowrap', // Prevent text wrapping
             overflow: 'hidden', // Hide overflow text
             textOverflow: 'ellipsis', // Show ellipsis when text overflows
@@ -94,7 +89,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                maxWidth: '600px', // Match fixed width of the Select component
+                width: '100%',
               }}
             >
               {path}
@@ -102,18 +97,16 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
           ))}
         </Select>
       </FormControl>
-      <IconButton
-        sx={{
-          position: 'absolute',
-          top: '8px',
-          right: '8px',
-          color: '#fff',
-        }}
-        onClick={onClose}
-      >
-        <CloseIcon />
-      </IconButton>
-    </Box>
+      </DialogContent>
+      <DialogActions>
+      <Button onClick={onClose} color="primary">
+          Cancel
+        </Button>
+        <Button onClick={onClose} color="primary">
+          Apply
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 };
 

@@ -3,6 +3,7 @@ from rosbags.rosbag2 import Reader
 from rosbags.typesys import Stores, get_typestore
 import cv2
 import numpy as np
+from tqdm import tqdm
 
 # Define paths
 BASE_PATH = '/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src'
@@ -17,8 +18,9 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
     
     with Reader(rosbag_path) as reader:
-        connections = [x for x in reader.connections if 'image' in x.topic.lower() and x.topic != '/camera_image/Cam_MR']        
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
+        #connections = [x for x in reader.connections if 'image' in x.topic.lower() and x.topic != '/camera_image/Cam_MR']
+        connections = [x for x in reader.connections if 'image' in x.topic.lower()]                
+        for connection, timestamp, rawdata in tqdm(reader.messages(connections=connections), desc=f"Extracting images from {rosbag_path}"):
             msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
             
             if hasattr(msg, 'encoding'):
@@ -32,7 +34,7 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str):
                     img_filepath = os.path.join(output_dir, img_filename)
                     cv2.imwrite(img_filepath, img)
 
-                    print(f"Extracted image: {img_filepath}")
+                    #print(f"Extracted image: {img_filepath}")
                 except Exception as e:
                     print(f"Failed to extract image from {connection.topic} at {timestamp}: {e}")
 
