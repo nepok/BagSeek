@@ -88,6 +88,14 @@ def get_file_paths():
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500
     
+@app.route('/api/get-selected-rosbag', methods=['GET'])
+def get_selected_rosbag():
+    try:
+        return jsonify({"selected_rosbag": str(SELECTED_ROSBAG)}), 200
+    except Exception as e:
+        # Handle any errors that occur (e.g., directory not found, permission issues)
+        return jsonify({"error": str(e)}), 500
+    
 # Endpoint to get available topics from the CSV file
 @app.route('/api/topics', methods=['GET'])
 def get_rosbag_topics():

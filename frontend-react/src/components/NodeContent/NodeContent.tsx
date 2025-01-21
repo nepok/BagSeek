@@ -21,7 +21,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
     try {
       const response = await fetch(`/api/ros?timestamp=${timestamp}&topic=${topic}`);
       const data = await response.json();
-
       // Reset all states
       setImage(null);
       setText(null);
@@ -143,7 +142,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
       {!image && !points && !text && (
         <div className="centered-text">
           <p style={{ color: "white", fontSize: "0.8rem" }}>
-            {topic ? "Loading data..." : "Select a topic"}
+            {topic ? "No data availible" : "Select a topic"}
           </p>
         </div>
       )}

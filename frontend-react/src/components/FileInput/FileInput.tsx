@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, IconButton, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
 
 interface FileInputProps {
   isVisible: boolean;
@@ -12,7 +11,6 @@ interface FileInputProps {
 const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate, onTimestampsUpdate }) => {
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [rosbag, setRosbag] = useState<string>('');
-  const [selectedPath, setSelectedPath] = useState<string>('');
 
   useEffect(() => {
     if (isVisible) {
@@ -31,7 +29,6 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
   const handleChange = (event: SelectChangeEvent<string>) => {
     const path = event.target.value;
     setRosbag(path);
-    setSelectedPath(path); // Set the selected path
 
     // Post the selected path to the API immediately
     fetch('/api/set-file-paths', {
@@ -66,37 +63,55 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
     >
       <DialogTitle id="form-dialog-title">Select RosBag File</DialogTitle>
       <DialogContent>
-      <FormControl sx={{ m: 1, width: '100%' }}>
-        <InputLabel id="demo-simple-select-helper-label">Select RosBag</InputLabel>
-        <Select
-          labelId="demo-simple-select-helper-label"
-          id="demo-simple-select-helper"
-          value={rosbag}
-          label="Select File"
-          onChange={handleChange}
-          sx={{
-            width: '100%',
-            whiteSpace: 'nowrap', // Prevent text wrapping
-            overflow: 'hidden', // Hide overflow text
-            textOverflow: 'ellipsis', // Show ellipsis when text overflows
-          }}
-        >
-          {filePaths.map((path, index) => (
-            <MenuItem
-              key={index}
-              value={path}
+        <FormControl sx={{ width: '100%', overflow: 'hidden' }}>
+          <InputLabel id="rosbag-select-label"></InputLabel>
+          <div style={{ width: '100%', display: 'flex', overflow: 'hidden' }}>
+            <Select
+              labelId="rosbag-select-label"
+              id="rosbag-select"
+              value={rosbag}
+              onChange={handleChange}
               sx={{
+                width: '100%',
+                minWidth: 0,
+                maxWidth: '100%',
+                whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                width: '100%',
+              }}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    maxWidth: '100%',
+                    overflowX: 'hidden',
+                  },
+                },
+                sx: {
+                  maxWidth: '100%',
+                  overflowX: 'hidden',
+                },
               }}
             >
-              {path}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+              {filePaths.map((path, index) => (
+                <MenuItem
+                  key={index}
+                  value={path}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    width: '100%',
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {path}
+                </MenuItem>
+              ))}
+            </Select>
+          </div>
+        </FormControl>
       </DialogContent>
       <DialogActions>
       <Button onClick={onClose} color="primary">

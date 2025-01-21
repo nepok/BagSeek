@@ -1,5 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent } from '@mui/material';
+import * as ol from 'ol';
+import 'ol/ol.css';
+import { Map, View } from 'ol';
+import OSM from 'ol/source/OSM';
+import { Tile as TileLayer } from 'ol/layer';
+import { Draw } from 'ol/interaction';
+import { Polygon } from 'ol/geom';
+import { Style, Fill, Stroke } from 'ol/style';
+import VectorSource from 'ol/source/Vector';
 
 interface ExportProps {
   timestamps: number[];
@@ -12,7 +21,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   const [selectedRosbag, setSelectedRosbag] = useState('');
   const [newRosbagName, setNewRosbagName] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
-  const [exportRange, setExportRange] = useState<number[]>([0, timestamps.length - 1]);
+  const [exportRange, setExportRange] = useState<number[]>([0, 100]);
+  const mapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const fetchSelectedRosbag = async () => {
@@ -95,17 +105,51 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
     return `${formattedDate} (${timestamp})`;
   };
 
+  // OpenLayers Map setup
+  useEffect(() => {
+    if (mapRef.current) {
+      const map = new Map({
+        target: mapRef.current,
+        layers: [
+          new TileLayer({
+            source: new OSM(),
+          }),
+        ],
+        view: new View({
+          center: [0, 0],
+          zoom: 4,
+        }),
+      });
+
+      const draw = new Draw({
+        source: new VectorSource(),
+        type: 'Polygon',
+      });
+
+      map.addInteraction(draw);
+
+      const style = new Style({
+        fill: new Fill({
+          color: 'rgba(255, 255, 255, 0.2)',
+        }),
+        stroke: new Stroke({
+          color: '#ffcc33',
+          width: 2,
+        }),
+      });
+
+      draw.on('drawend', (e) => {
+        const feature = e.feature;
+        feature.setStyle(style);
+      });
+    }
+  }, []);
+
   if (!isVisible) return null;
 
   return (
-    <Dialog 
-      open={true} 
-      onClose={onClose} 
-      aria-labelledby="form-dialog-title"
-      fullWidth
-      maxWidth="md" // Adjust the maxWidth as needed
-    >
-      <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag} </DialogTitle>
+    <Dialog open={true} onClose={onClose} aria-labelledby="form-dialog-title" fullWidth maxWidth="md">
+      <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag}</DialogTitle>
       <DialogContent style={{ overflow: 'hidden' }}>
         <TextField
           autoFocus
@@ -142,19 +186,14 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
             valueLabelDisplay="auto"
             min={0}
             max={timestamps.length - 1}
-            valueLabelFormat={(value) => {
-              return valueLabelFormat(value);
-            }}
+            valueLabelFormat={valueLabelFormat}
           />
         </Box>
+        <Box sx={{ mt: 2, height: '400px' }} ref={mapRef} />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} color="primary">
-          Cancel
-        </Button>
-        <Button onClick={handleExport} color="primary">
-          Export
-        </Button>
+        <Button onClick={onClose} color="primary">Cancel</Button>
+        <Button onClick={handleExport} color="primary">Export</Button>
       </DialogActions>
     </Dialog>
   );

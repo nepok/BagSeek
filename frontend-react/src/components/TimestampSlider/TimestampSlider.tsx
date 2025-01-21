@@ -276,7 +276,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           variant="outlined"
           label="Search"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}  // Update the query as the user types
+          onChange={(e: { target: { value: React.SetStateAction<string>; }; }) => setSearchQuery(e.target.value)}  // Update the query as the user types
           onKeyDown={handleSearchKeyDown} // Trigger API call only when Enter is pressed
           size="small"
           sx={{
