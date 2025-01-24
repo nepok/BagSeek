@@ -1,14 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent } from '@mui/material';
-import * as ol from 'ol';
-import 'ol/ol.css';
-import { Map, View } from 'ol';
-import OSM from 'ol/source/OSM';
-import { Tile as TileLayer } from 'ol/layer';
-import { Draw } from 'ol/interaction';
-import { Polygon } from 'ol/geom';
-import { Style, Fill, Stroke } from 'ol/style';
-import VectorSource from 'ol/source/Vector';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface ExportProps {
   timestamps: number[];
@@ -21,8 +14,39 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   const [selectedRosbag, setSelectedRosbag] = useState('');
   const [newRosbagName, setNewRosbagName] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
-  const [exportRange, setExportRange] = useState<number[]>([0, 100]);
-  const mapRef = useRef<HTMLDivElement | null>(null);
+  const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
+  const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const initializeMap = () => {
+      if (!mapContainerRef.current) return;
+
+      // Remove existing map instance if it exists
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+
+      // Create a new Leaflet map instance
+      mapRef.current = L.map(mapContainerRef.current).setView([51.25757432197879, 12.51589660271899], 16);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(mapRef.current);
+    };
+
+    setTimeout(initializeMap, 100); // Ensure the dialog is fully rendered
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, [isVisible]);
 
   useEffect(() => {
     const fetchSelectedRosbag = async () => {
@@ -43,11 +67,13 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   }, []);
 
   const handleExport = async () => {
+    if (timestamps.length === 0) return;
+
     const exportData = {
       new_rosbag_name: newRosbagName,
       topics: selectedTopics,
-      start_timestamp: timestamps[exportRange[0]],
-      end_timestamp: timestamps[exportRange[1]],
+      start_timestamp: timestamps[Math.min(exportRange[0], timestamps.length - 1)],
+      end_timestamp: timestamps[Math.min(exportRange[1], timestamps.length - 1)],
     };
 
     try {
@@ -84,8 +110,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
     if (!timestamp || isNaN(timestamp)) {
       return 'Invalid Timestamp';
     }
-    const date = new Date(timestamp / 1000000); // Divide by 1,000,000 to convert to seconds
-    const berlinTime = new Intl.DateTimeFormat('de-DE', {
+    const date = new Date(timestamp / 1000000);
+    return new Intl.DateTimeFormat('de-DE', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -93,57 +119,14 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
       minute: '2-digit',
       second: '2-digit',
       fractionalSecondDigits: 3,
-      hour12: false, // 24-hour format
+      hour12: false,
     }).format(date);
-
-    return berlinTime;
   };
 
   const valueLabelFormat = (value: number) => {
-    const timestamp = timestamps[value];
-    const formattedDate = formatDate(timestamp);
-    return `${formattedDate} (${timestamp})`;
+    if (value < 0 || value >= timestamps.length) return 'Invalid';
+    return `${formatDate(timestamps[value])} (${timestamps[value]})`;
   };
-
-  // OpenLayers Map setup
-  useEffect(() => {
-    if (mapRef.current) {
-      const map = new Map({
-        target: mapRef.current,
-        layers: [
-          new TileLayer({
-            source: new OSM(),
-          }),
-        ],
-        view: new View({
-          center: [0, 0],
-          zoom: 4,
-        }),
-      });
-
-      const draw = new Draw({
-        source: new VectorSource(),
-        type: 'Polygon',
-      });
-
-      map.addInteraction(draw);
-
-      const style = new Style({
-        fill: new Fill({
-          color: 'rgba(255, 255, 255, 0.2)',
-        }),
-        stroke: new Stroke({
-          color: '#ffcc33',
-          width: 2,
-        }),
-      });
-
-      draw.on('drawend', (e) => {
-        const feature = e.feature;
-        feature.setStyle(style);
-      });
-    }
-  }, []);
 
   if (!isVisible) return null;
 
@@ -185,15 +168,21 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
             onChange={handleSliderChange}
             valueLabelDisplay="auto"
             min={0}
-            max={timestamps.length - 1}
+            max={Math.max(0, timestamps.length - 1)}
             valueLabelFormat={valueLabelFormat}
           />
         </Box>
-        <Box sx={{ mt: 2, height: '400px' }} ref={mapRef} />
+        <Box sx={{ mt: 2, height: 400 }}>
+          <div ref={mapContainerRef} style={{ height: '400px', width: '100%' }}></div>
+        </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} color="primary">Cancel</Button>
-        <Button onClick={handleExport} color="primary">Export</Button>
+        <Button onClick={onClose} color="primary">
+          Cancel
+        </Button>
+        <Button onClick={handleExport} color="primary">
+          Export
+        </Button>
       </DialogActions>
     </Dialog>
   );
