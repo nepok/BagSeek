@@ -1,8 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import './TimestampSlider.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, CircularProgress, Skeleton } from '@mui/material';
+import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, CircularProgress, Skeleton, Paper } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SearchIcon from '@mui/icons-material/Search';
+import FilterAltIcon from '@mui/icons-material/FilterAlt';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface TimestampSliderProps {
   timestamps: number[];
@@ -43,6 +46,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
+  const [showFilter, setShowFilter] = useState(false); // State to control the visibility of the filter
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string }[]>([]); // Initialize as an empty array of SearchResult objects  
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
@@ -50,6 +54,97 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
+  const filterIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the filter icon
+
+  const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+      if (!showFilter) return;
+    
+      const initializeMap = () => {
+        if (!mapContainerRef.current) return;
+    
+        if (mapRef.current) {
+          mapRef.current.remove();
+          mapRef.current = null;
+        }
+    
+        mapRef.current = L.map(mapContainerRef.current).setView(
+          [51.25757432197879, 12.51589660271899], 16
+        );
+    
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(mapRef.current);
+    
+        let points: L.LatLng[] = [];
+        let circles: L.CircleMarker[] = [];
+        let polygon: L.Polygon | null = null;
+    
+        const onMapClick = (e: L.LeafletMouseEvent) => {
+          const clickedLatLng = e.latlng;
+    
+          // If user clicks near the first point, close the polygon
+          if (points.length > 2 && clickedLatLng.distanceTo(points[0]) < 10) {
+            if (polygon) {
+              polygon.remove();
+            }
+            polygon = L.polygon(points, { color: 'blue', fillOpacity: 0.5 }).addTo(mapRef.current!);
+            
+            // Reset points and circles
+            circles.forEach(circle => circle.remove());
+            points = [];
+            circles = [];
+            return;
+          }
+    
+          // Add small circle instead of default marker
+          const circle = L.circleMarker(clickedLatLng, {
+            radius: 5,
+            color: 'blue',
+            fillColor: 'blue',
+            fillOpacity: 0.8,
+          }).addTo(mapRef.current!);
+    
+          circles.push(circle);
+          points.push(clickedLatLng);
+        };
+    
+        const onRightClick = (e: L.LeafletMouseEvent) => {
+          // Remove polygon if it exists
+          if (polygon) {
+            polygon.remove();
+            polygon = null;
+          }
+          // Remove all circles
+          circles.forEach(circle => circle.remove());
+          circles = [];
+          points = [];
+        };
+    
+        mapRef.current.on('click', onMapClick);
+        mapRef.current.on('contextmenu', onRightClick); // Right-click event
+    
+        return () => {
+          if (mapRef.current) {
+            mapRef.current.off('click', onMapClick);
+            mapRef.current.off('contextmenu', onRightClick);
+          }
+        };
+      };
+    
+      setTimeout(initializeMap, 100);
+    
+      return () => {
+        if (mapRef.current) {
+          mapRef.current.remove();
+          mapRef.current = null;
+        }
+      };
+    }, [showFilter]);
+
 
   // update selected timestamp if slider or possible timestamps change
   useEffect(() => {
@@ -154,6 +249,10 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     setShowSearchInput(!showSearchInput);
   };
 
+  const toggleFilter = () => {
+    setShowFilter(!showFilter);
+  };
+  
   useEffect(() => {
     if (searchResults.length > 0) {
       fetchAllImages();
@@ -242,7 +341,16 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
         </Select>
       </FormControl>
-
+      
+      {/* Filter icon button */}  
+      <IconButton
+        ref={filterIconRef}
+        aria-label='filter'
+        onClick={toggleFilter}
+        sx={{ fontSize: '1.2rem' }}
+      >
+        <FilterAltIcon />
+      </IconButton>
       {/* Search icon button to toggle the search input */}
       <IconButton 
         ref={searchIconRef} 
@@ -252,7 +360,29 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       >
         <SearchIcon />
       </IconButton>
-
+      
+      {/* Popper for Filter */}
+      <Popper
+        open={showFilter}
+        anchorEl={filterIconRef.current} // Position relative to the search icon
+        placement="top-end" // Places the popper above the icon
+        sx={{
+          zIndex: 100, // Ensure it appears above other content
+          width: "600px", // Adjust width to make the input box thinner
+        }}
+        modifiers={[
+          {
+            name: 'offset',
+            options: {
+              offset: [0, 12], // Move the popper 10px higher above the search icon (increase value for higher)
+            },
+          },
+        ]}
+      >
+        <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
+            <div ref={mapContainerRef} style={{ height: '400px', width: '600px' }}></div>
+        </Paper>
+      </Popper>
 
       {/* Popper for Search Input */}
       <Popper
@@ -287,6 +417,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           }}
         />
       </Popper>
+  
 
 
       {/* Popper for Search Results */}

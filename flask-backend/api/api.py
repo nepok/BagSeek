@@ -91,7 +91,8 @@ def get_file_paths():
 @app.route('/api/get-selected-rosbag', methods=['GET'])
 def get_selected_rosbag():
     try:
-        return jsonify({"selected_rosbag": str(SELECTED_ROSBAG)}), 200
+        selected_rosbag = os.path.basename(SELECTED_ROSBAG)
+        return jsonify({"selected_rosbag": selected_rosbag}), 200
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500

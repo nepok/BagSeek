@@ -20,26 +20,82 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
 
   useEffect(() => {
     if (!isVisible) return;
-
+  
     const initializeMap = () => {
       if (!mapContainerRef.current) return;
-
-      // Remove existing map instance if it exists
+  
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
-
-      // Create a new Leaflet map instance
-      mapRef.current = L.map(mapContainerRef.current).setView([51.25757432197879, 12.51589660271899], 16);
+  
+      mapRef.current = L.map(mapContainerRef.current).setView(
+        [51.25757432197879, 12.51589660271899], 16
+      );
+  
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(mapRef.current);
+  
+      let points: L.LatLng[] = [];
+      let circles: L.CircleMarker[] = [];
+      let polygon: L.Polygon | null = null;
+  
+      const onMapClick = (e: L.LeafletMouseEvent) => {
+        const clickedLatLng = e.latlng;
+  
+        // If user clicks near the first point, close the polygon
+        if (points.length > 2 && clickedLatLng.distanceTo(points[0]) < 10) {
+          if (polygon) {
+            polygon.remove();
+          }
+          polygon = L.polygon(points, { color: 'blue', fillOpacity: 0.5 }).addTo(mapRef.current!);
+          
+          // Reset points and circles
+          circles.forEach(circle => circle.remove());
+          points = [];
+          circles = [];
+          return;
+        }
+  
+        // Add small circle instead of default marker
+        const circle = L.circleMarker(clickedLatLng, {
+          radius: 5,
+          color: 'blue',
+          fillColor: 'blue',
+          fillOpacity: 0.8,
+        }).addTo(mapRef.current!);
+  
+        circles.push(circle);
+        points.push(clickedLatLng);
+      };
+  
+      const onRightClick = (e: L.LeafletMouseEvent) => {
+        // Remove polygon if it exists
+        if (polygon) {
+          polygon.remove();
+          polygon = null;
+        }
+        // Remove all circles
+        circles.forEach(circle => circle.remove());
+        circles = [];
+        points = [];
+      };
+  
+      mapRef.current.on('click', onMapClick);
+      mapRef.current.on('contextmenu', onRightClick); // Right-click event
+  
+      return () => {
+        if (mapRef.current) {
+          mapRef.current.off('click', onMapClick);
+          mapRef.current.off('contextmenu', onRightClick);
+        }
+      };
     };
-
-    setTimeout(initializeMap, 100); // Ensure the dialog is fully rendered
-
+  
+    setTimeout(initializeMap, 100);
+  
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
