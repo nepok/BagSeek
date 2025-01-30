@@ -20,9 +20,10 @@ interface NodeMetadata {
 interface SplittableCanvasProps {
   topics: string[];
   selectedTimestamp: number | null;
+  selectedRosbag: string | null;
 }
 
-function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) {
+function SplittableCanvas({ topics, selectedTimestamp, selectedRosbag }: SplittableCanvasProps) {
   const [root, setRoot] = useState<Node>({ id: 1 });
   const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({});
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -132,8 +133,11 @@ function SplittableCanvas({ topics, selectedTimestamp }: SplittableCanvasProps) 
     if (!node.left && !node.right) {
       return (
         <div className="canvas-node" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-          <NodeContent topic={metadata.topic} timestamp={metadata.timestamp} />
-
+          <NodeContent 
+            topic={metadata.topic} 
+            timestamp={metadata.timestamp}
+            rosbag={selectedRosbag}
+          />
           <IconButton
             size="small"
             onClick={(e) => handleClickMenu(e, node)}

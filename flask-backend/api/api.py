@@ -6,7 +6,7 @@ from rosbags.rosbag2 import Reader, Writer
 from rosbags.typesys import Stores, get_typestore
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import logging
 import pandas as pd
@@ -91,8 +91,8 @@ def get_file_paths():
 @app.route('/api/get-selected-rosbag', methods=['GET'])
 def get_selected_rosbag():
     try:
-        selected_rosbag = os.path.basename(SELECTED_ROSBAG)
-        return jsonify({"selected_rosbag": selected_rosbag}), 200
+        selectedRosbag = os.path.basename(SELECTED_ROSBAG)
+        return jsonify({"selectedRosbag": selectedRosbag}), 200
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500
@@ -116,6 +116,12 @@ def get_timestamps():
     # Extract the first column (Reference Timestamp) from the PD Frame
     timestamps = aligned_data['Reference Timestamp'].astype(str).tolist()
     return jsonify({'timestamps': timestamps})
+
+@app.route('/images/<path:filename>')
+def serve_image(filename):
+    response = send_from_directory(IMAGES_DIR, filename)
+    response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
+    return response
 
 @app.route('/api/ros', methods=['GET'])
 def get_ros():
@@ -154,8 +160,11 @@ def get_ros():
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
 
                 match connection.msgtype:
+
                     case 'sensor_msgs/msg/Image':
-                        if hasattr(msg, 'encoding'):
+                        print("Image")
+                        
+                        """if hasattr(msg, 'encoding'):
                             if msg.encoding == 'rgb8' or msg.encoding == 'bgr8':
                                 image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
                                 if msg.encoding == 'rgb8':
@@ -167,7 +176,8 @@ def get_ros():
                                 # Convert to base64
                                 img_base64 = base64.b64encode(img_bytes.tobytes()).decode('utf-8')
 
-                                return jsonify({'image': img_base64, 'realTimestamp': realTimestamp})
+                                return jsonify({'image': img_base64, 'realTimestamp': realTimestamp}) """
+                    
 
                     case 'sensor_msgs/msg/PointCloud2':
                         # Extract point cloud data

@@ -8,13 +8,21 @@ import * as THREE from "three";
 interface NodeContentProps {
   topic: string | null;
   timestamp: number | null; // Timestamp passed for fetching relevant data
+  rosbag: string | null;
 }
 
-const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
-  const [image, setImage] = useState<string | null>(null); // Store the fetched image
+const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, rosbag }) => {
+  //const [image, setImage] = useState<string | null>(null); // Store the fetched image
   const [text, setText] = useState<string | null>(null);   // Store the fetched text
   const [points, setPoints] = useState<number[] | null>(null); // Store fetched point cloud
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
+
+  const imageUrl =
+  topic && timestamp && rosbag
+    ? `http://localhost:5000/images/${rosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
+    : undefined;
+
+  const isImage = topic && topic.includes("image");
 
   // Function to fetch data based on the topic and timestamp
   const fetchData = async () => {
@@ -22,14 +30,14 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
       const response = await fetch(`/api/ros?timestamp=${timestamp}&topic=${topic}`);
       const data = await response.json();
       // Reset all states
-      setImage(null);
+      //setImage(null);
       setText(null);
       setPoints(null);
 
       // Dynamically update state based on the keys present in the response
-      if (data.image) {
-        setImage(data.image);
-      }
+      //if (data.image) {
+      //  setImage(data.image);
+      //}
       if (data.points) {
         setPoints(data.points);
       }
@@ -42,7 +50,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
     } catch (error) {
       console.error("Error fetching data:", error);
       // Reset all states in case of error
-      setImage(null);
+      //setImage(null);
       setText(null);
       setPoints(null);
       setRealTimestamp(null);
@@ -51,14 +59,15 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
 
   // Trigger fetch when topic or timestamp changes
   useEffect(() => {
-    if (topic) {
-      fetchData();
-    } else {
-      setImage(null);
-      setText(null);
-      setPoints(null);
+    if (topic && timestamp) {
+      if (!topic.includes("image")) { // Only call the API if there is NO image
+        fetchData();
+      } else {
+        setText(null);
+        setPoints(null);
+      }
     }
-  }, [topic, timestamp]);
+  }, [topic, timestamp, imageUrl]);
 
   // Point cloud rendering component
   const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
@@ -88,10 +97,12 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
   // Render content based on the type of data fetched
   return (
     <div className="node-content">
-      {image && (
+      {isImage && (
         <div className="image-container">
           <img
-            src={`data:image/webp;base64,${image}`}
+          // src={`/extracted_images/${rosbag}/${topics}-${timestamp}.webp`}
+            //src={`data:image/webp;base64,${image}`}
+            src={imageUrl}
             alt="Fetched from ROS"
             loading="lazy"
           />
@@ -139,7 +150,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp }) => {
       )}
 
       {/* Default case: No data */}
-      {!image && !points && !text && (
+      {!imageUrl && !points && !text && (
         <div className="centered-text">
           <p style={{ color: "white", fontSize: "0.8rem" }}>
             {topic ? "No data availible" : "Select a topic"}

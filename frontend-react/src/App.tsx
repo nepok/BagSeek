@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import Header from './components/Header/Header';
 import TimestampSlider from './components/TimestampSlider/TimestampSlider';
-import './App.css'; // Import the CSS file
+import './App.css';
 import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
-import FileInput from './components/FileInput/FileInput'; // Import FileInput
+import FileInput from './components/FileInput/FileInput';
 import { ThemeProvider } from '@mui/material/styles';
 import darkTheme from './theme';
 import Export from './components/Export/Export';
@@ -12,6 +12,7 @@ function App() {
   const [timestamps, setTimestamps] = useState<number[]>([]);
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
   const [topics, setTopics] = useState<string[]>([]);
+  const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);
   const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);
 
@@ -47,6 +48,16 @@ function App() {
       .catch((error) => {
         console.error('Error fetching timestamps:', error);
       });
+
+    fetch('/api/get-selected-rosbag')
+      .then((response) => response.json())
+      .then((data) => {
+        setSelectedRosbag(data.selectedRosbag);
+      })
+      .catch((error) => {
+        console.error('Error fetching selected rosbag:', error);
+      });
+
   }, []);
 
   const handleSliderChange = (value: number) => {
@@ -91,7 +102,11 @@ function App() {
           setIsFileInputVisible={setIsFileInputVisible} 
           setIsExportDialogVisible={setIsExportDialogVisible} 
         />
-        <SplittableCanvas selectedTimestamp={selectedTimestamp} topics={topics} />
+        <SplittableCanvas 
+          topics={topics} 
+          selectedTimestamp={selectedTimestamp} 
+          selectedRosbag={selectedRosbag}
+        />
         <TimestampSlider
           timestamps={timestamps}
           selectedTimestamp={selectedTimestamp}
