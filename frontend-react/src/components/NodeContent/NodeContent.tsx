@@ -8,18 +8,18 @@ import * as THREE from "three";
 interface NodeContentProps {
   topic: string | null;
   timestamp: number | null; // Timestamp passed for fetching relevant data
-  rosbag: string | null;
+  selectedRosbag: string | null;
 }
 
-const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, rosbag }) => {
+const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRosbag }) => {
   //const [image, setImage] = useState<string | null>(null); // Store the fetched image
   const [text, setText] = useState<string | null>(null);   // Store the fetched text
   const [points, setPoints] = useState<number[] | null>(null); // Store fetched point cloud
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
 
   const imageUrl =
-  topic && timestamp && rosbag
-    ? `http://localhost:5000/images/${rosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
+  topic && timestamp && selectedRosbag
+    ? `http://localhost:5000/images/${selectedRosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
     : undefined;
 
   const isImage = topic && topic.includes("image");
@@ -59,7 +59,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, rosbag }) =
 
   // Trigger fetch when topic or timestamp changes
   useEffect(() => {
-    if (topic && timestamp) {
+    if (topic && timestamp && selectedRosbag) {
       if (!topic.includes("image")) { // Only call the API if there is NO image
         fetchData();
       } else {
@@ -67,7 +67,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, rosbag }) =
         setPoints(null);
       }
     }
-  }, [topic, timestamp, imageUrl]);
+  }, [topic, timestamp, selectedRosbag]);
 
   // Point cloud rendering component
   const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
@@ -100,10 +100,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, rosbag }) =
       {isImage && (
         <div className="image-container">
           <img
-          // src={`/extracted_images/${rosbag}/${topics}-${timestamp}.webp`}
-            //src={`data:image/webp;base64,${image}`}
             src={imageUrl}
-            alt="Fetched from ROS"
+            //alt="Select a topic"
             loading="lazy"
           />
           <div className="typography-box">

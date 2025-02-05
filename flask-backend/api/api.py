@@ -1,3 +1,4 @@
+import json
 import os
 import base64
 import csv
@@ -27,6 +28,7 @@ INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
 EXPORT_DIR = os.path.join(BASE_DIR, 'exported_rosbags')
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
+CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
 
 # Create a typestore
 typestore = get_typestore(Stores.LATEST)
@@ -59,6 +61,18 @@ def search_faiss_index(query_embedding, index, k=5):
     # Perform the search (returning k nearest neighbors)
     distances, indices = index.search(query_embedding.reshape(1, -1), k)
     return distances, indices
+
+# Load canvases from file
+def load_canvases():
+    if os.path.exists(CANVASES_FILE):
+        with open(CANVASES_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+# Save canvases to file
+def save_canvases(data):
+    with open(CANVASES_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 @app.route('/api/set-file-paths', methods=['POST'])
 def post_file_paths():
@@ -284,6 +298,30 @@ def export_rosbag():
 
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/api/load-canvases", methods=["GET"])
+def api_load_canvases():
+    return jsonify(load_canvases())
+
+@app.route("/api/save-canvases", methods=["POST"])
+def api_save_canvases():
+    data = request.json
+    save_canvases(data)
+    return jsonify({"message": "Canvas saved successfully"})
+
+@app.route("/api/delete-canvas", methods=["POST"])
+def api_delete_canvas():
+    data = request.json
+    name = data.get("name")
+    canvases = load_canvases()
+
+    if name in canvases:
+        del canvases[name]
+        save_canvases(canvases)
+        return jsonify({"message": f"Canvas '{name}' deleted successfully"})
+    
+    return jsonify({"error": "Canvas not found"}), 404
 
 if __name__ == '__main__':
     app.run(debug=True)

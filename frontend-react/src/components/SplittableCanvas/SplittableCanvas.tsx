@@ -21,9 +21,13 @@ interface SplittableCanvasProps {
   topics: string[];
   selectedTimestamp: number | null;
   selectedRosbag: string | null;
+  onCanvasChange: (root: Node, metadata: { [id: number]: NodeMetadata }) => void;
+  currentRoot: Node | null;
+  currentMetadata: { [id: number]: NodeMetadata };
 }
 
-function SplittableCanvas({ topics, selectedTimestamp, selectedRosbag }: SplittableCanvasProps) {
+const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTimestamp, selectedRosbag, onCanvasChange, currentRoot, currentMetadata }) => {
+  
   const [root, setRoot] = useState<Node>({ id: 1 });
   const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({});
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -42,15 +46,74 @@ function SplittableCanvas({ topics, selectedTimestamp, selectedRosbag }: Splitta
     );
   }, [selectedTimestamp]);
 
-  const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
-    if (!node.left && !node.right) {
-      node.direction = direction;
-      node.size = 50;
-      node.left = { id: node.id * 2 };
-      node.right = { id: node.id * 2 + 1 };
-      setRoot({ ...root });
-    }
+  useEffect(() => {
+    setNodeMetadata((prev) => {
+      const updatedMetadata = { ...prev };
+      Object.keys(updatedMetadata).forEach((key) => {
+        updatedMetadata[parseInt(key)].topic = null;
+      });
+      return updatedMetadata;
+    });
+  }, [selectedRosbag]);
+
+  // If currentRoot or currentMetadata changes, you can apply the update logic here
+  useEffect(() => {
+    if (!currentRoot || !currentMetadata) return;
+  
+    setRoot((prevRoot) => {
+      return JSON.stringify(prevRoot) === JSON.stringify(currentRoot) ? prevRoot : currentRoot;
+    });
+  
+    setNodeMetadata((prevMetadata) => {
+      return JSON.stringify(prevMetadata) === JSON.stringify(currentMetadata) ? prevMetadata : currentMetadata;
+    });
+  }, [currentRoot, currentMetadata]);
+
+  useEffect(() => {
+    onCanvasChange(root, nodeMetadata);
+  }, [root, nodeMetadata]);
+
+  const updateNodeInTree = (currentNode: Node, updatedNode: Node): Node => {
+    if (!currentNode) return updatedNode;
+    if (currentNode.id === updatedNode.id) return updatedNode;
+    
+    return {
+      ...currentNode,
+      left: currentNode.left ? updateNodeInTree(currentNode.left, updatedNode) : undefined,
+      right: currentNode.right ? updateNodeInTree(currentNode.right, updatedNode) : undefined,
+    };
   };
+
+  const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
+  if (!node.left && !node.right) {
+    const newLeft = { id: node.id * 2 };
+    const newRight = { id: node.id * 2 + 1 };
+
+    const updatedNode = {
+      ...node,
+      direction,
+      size: 50,
+      left: newLeft,
+      right: newRight
+    };
+
+    const updatedRoot = updateNodeInTree(root, updatedNode);
+    setRoot(updatedRoot);
+
+    setNodeMetadata((prev) => {
+      const newMetadata = { ...prev };
+
+      // Entferne alte Metadaten der gesplitteten Node
+      delete newMetadata[node.id];
+
+      // Füge neue Nodes mit leeren Metadaten hinzu
+      newMetadata[newLeft.id] = { topic: null, timestamp: null };
+      newMetadata[newRight.id] = { topic: null, timestamp: null };
+
+      return newMetadata;
+    });
+  }
+};
 
   const startResizing = (e: React.MouseEvent, node: Node) => {
     document.body.style.userSelect = 'none';
@@ -136,7 +199,7 @@ function SplittableCanvas({ topics, selectedTimestamp, selectedRosbag }: Splitta
           <NodeContent 
             topic={metadata.topic} 
             timestamp={metadata.timestamp}
-            rosbag={selectedRosbag}
+            selectedRosbag={selectedRosbag}
           />
           <IconButton
             size="small"
@@ -259,6 +322,6 @@ function SplittableCanvas({ topics, selectedTimestamp, selectedRosbag }: Splitta
       {renderNode(root)}
     </Box>
   );
-}
+};
 
 export default SplittableCanvas;

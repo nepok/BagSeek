@@ -1,17 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import { ConstructionOutlined } from '@mui/icons-material';
 
 interface FileInputProps {
   isVisible: boolean;
   onClose: () => void;
   onTopicsUpdate: () => void; // Callback for refreshing topics
   onTimestampsUpdate: () => void; //Callback for refreshing timestamps
+  onRosbagUpdate: () => void; // Callback for refreshing rosbag
 }
 
-const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate, onTimestampsUpdate }) => {
-  const [filePaths, setFilePaths] = useState<string[]>([]);
-  const [rosbag, setRosbag] = useState<string>('');
+const generateColor = (selectedRosbag: string) => {
+  // Generate a hash-based color from the rosbag name
+  const hash = selectedRosbag.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const colors = ['#ff5733', '#33ff57', '#3357ff', '#ff33a6', '#ffd633', '#33fff5'];
+  return colors[hash % colors.length]; // Pick a color based on hash
+};
 
+const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate, onTimestampsUpdate, onRosbagUpdate }) => {
+  const [filePaths, setFilePaths] = useState<string[]>([]);
+  const [selectedRosbagPath, setSelectedRosbagPath] = useState<string>('');
+  
   useEffect(() => {
     if (isVisible) {
       // Fetch file paths from the API when the component becomes visible
@@ -28,7 +37,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
 
   const handleChange = (event: SelectChangeEvent<string>) => {
     const path = event.target.value;
-    setRosbag(path);
+    setSelectedRosbagPath(path);
 
     // Post the selected path to the API immediately
     fetch('/api/set-file-paths', {
@@ -40,11 +49,12 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
     })
       .then((response) => response.json())
       .then((data) => {
-        console.log('File path updated:', data);
+        //console.log('File path updated:', data);
 
         // Trigger the topics update callback after setting the file path
         onTopicsUpdate();
         onTimestampsUpdate();
+        onRosbagUpdate();
       })
       .catch((error) => {
         console.error('Error setting file path:', error);
@@ -69,7 +79,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
             <Select
               labelId="rosbag-select-label"
               id="rosbag-select"
-              value={rosbag}
+              value={selectedRosbagPath}
               onChange={handleChange}
               sx={{
                 width: '100%',
@@ -98,15 +108,33 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
                   value={path}
                   sx={{
                     display: 'flex',
-                    alignItems: 'center',
+                    alignItems: 'center', // Ensures items stay on the same height level
                     width: '100%',
                     maxWidth: '100%',
+                    gap: 1,
                     overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
                   }}
                 >
-                  {path}
+                  <Box
+                    sx={{
+                      flexShrink: 0, // Prevents the circle from shrinking
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      backgroundColor: generateColor(path.split('/').pop() || ''),
+                    }}
+                  />
+                  <Box
+                    sx={{
+                      flexGrow: 1, // Allows text to take up remaining space
+                      minWidth: 0, // <== KEY FIX: Prevents text from forcing a
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {path}
+                  </Box>
                 </MenuItem>
               ))}
             </Select>
