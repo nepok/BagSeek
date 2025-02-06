@@ -25,7 +25,7 @@ const generateColor = (rosbagName: string) => {
 
 const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas }) => {
   const [showCanvasPopper, setShowCanvasPopper] = useState(false);
-  const [canvasList, setCanvasList] = useState<{ name: string, color: string }[]>([]);
+  const [canvasList, setCanvasList] = useState<{ name: string, rosbag: string, color: string }[]>([]);
   const [showTextField, setShowTextField] = useState(false);
   const [newCanvasName, setNewCanvasName] = useState('');
   const canvasIconRef = useRef<HTMLButtonElement | null>(null);
@@ -34,10 +34,11 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
     try {
       const response = await fetch('/api/load-canvases');
       const data = await response.json();
-      // Assuming the data is a dictionary where keys are canvas names
+      
       setCanvasList(Object.keys(data).map((name) => ({
         name,
-        color: generateColor(selectedRosbag || ''), // Ensure selectedRosbag is not null
+        rosbag: data[name].rosbag, // Store the rosbag name
+        color: generateColor(data[name].rosbag || ''),
       })));
     } catch (error) {
       console.error('Error fetching canvas list:', error);
@@ -55,7 +56,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   const onAddCanvas = async () => {
     if (!newCanvasName.trim()) return;
     handleAddCanvas(newCanvasName);
-    setCanvasList([...canvasList, { name: newCanvasName, color: generateColor(selectedRosbag || '') }]);
+    setCanvasList([...canvasList, { name: newCanvasName, rosbag: selectedRosbag || '', color: generateColor(selectedRosbag || '') }]);
     setNewCanvasName('');
     setShowTextField(false);
   };
@@ -92,17 +93,24 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
             {canvasList.map((canvas, index) => (
               <MenuItem 
-                key={index} 
-                style={{ fontSize: '0.8rem', padding: '0px 8px', display: 'flex', alignItems: 'center' }}
-                onClick={() => onLoadCanvas(canvas.name)}
-                >
-                {/* Color Circle */}
-                <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px' }} />
-                {canvas.name}
-                <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </MenuItem>
+              key={index} 
+              style={{ 
+                fontSize: '0.8rem', 
+                padding: '0px 8px', 
+                display: 'flex', 
+                alignItems: 'center',
+                color: selectedRosbag === canvas.rosbag ? 'white' : 'gray' // Gray out if not matching
+              }}
+              onClick={() => selectedRosbag === canvas.rosbag && onLoadCanvas(canvas.name)}
+              disabled={selectedRosbag !== canvas.rosbag} // Disable if rosbag doesn't match
+            >
+              {/* Color Circle */}
+              <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px' }} />
+              {canvas.name}
+              <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </MenuItem>
             ))}
 
             {showTextField ? (
@@ -141,7 +149,13 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           </IconButton>
         </Tooltip>
         <Tooltip title="Open Rosbag" arrow>
-          <IconButton className="header-icon" onClick={() => setIsFileInputVisible((prev: boolean) => !prev)}>
+          <IconButton 
+            className="header-icon" 
+            onClick={() => {
+              setShowCanvasPopper(false); // Close canvas popper
+              setIsFileInputVisible((prev) => !prev); // Toggle file input
+            }}
+          >
             <FolderIcon />
           </IconButton>
         </Tooltip>
