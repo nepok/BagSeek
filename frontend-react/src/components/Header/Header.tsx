@@ -105,7 +105,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               disabled={selectedRosbag !== canvas.rosbag} // Disable if rosbag doesn't match
             >
               {/* Color Circle */}
-              <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px' }} />
+              <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px', marginBottom: '3.5px' }} />
               {canvas.name}
               <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
                 <DeleteIcon fontSize="small" />
