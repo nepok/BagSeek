@@ -58,8 +58,8 @@ def get_text_embedding(text):
 # Function to perform similarity search in FAISS TODO: warum error, wenn nicht genutzt?
 # TODO: eher binary search implementieren? oder mehr 
 def search_faiss_index(query_embedding, index, k=5):
-    # Perform the search (returning k nearest neighbors)
-    distances, indices = index.search(query_embedding.reshape(1, -1), k)
+    # Perform the search
+    _, distances, indices = index.range_search(query_embedding.reshape(1, -1), 1.5)
     return distances, indices
 
 # Load canvases from file
@@ -221,29 +221,26 @@ def search():
     query_embedding = get_text_embedding(query_text)
 
     # Define paths for the specified rosbag
-    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '').replace('.bag', '')
+    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')#.replace('.bag', '')
     index_path = os.path.join(INDICES_DIR, rosbag_name, "faiss_index.index")
     embedding_paths_file = os.path.join(INDICES_DIR, rosbag_name, "embedding_paths.npy")
-
-    logging.warning(rosbag_name)
 
     # Check if the index and embedding paths exist
     if not Path(index_path).exists() or not Path(embedding_paths_file).exists():
         print(f"FAISS index or embedding paths not found for rosbag: {rosbag_name}")
-        return
+        return jsonify({'error': f'FAISS index or embedding paths not found for rosbag: {rosbag_name}'}), 404
     
     # Load FAISS index and embedding paths
     index = faiss.read_index(index_path)
     embedding_paths = np.load(embedding_paths_file)
 
     # Perform the FAISS search
-    distances, indices = search_faiss_index(query_embedding, index, 5)
-
+    distances, indices = search_faiss_index(query_embedding, index)
     # Prepare the results
     results = []
     marks = []
 
-    for i, idx in enumerate(indices[0]):
+    for i, idx in enumerate(indices):
         # Prepare the result object
         embedding_path = str(embedding_paths[idx])
         path_of_interest = str(os.path.basename(embedding_path))
@@ -253,14 +250,15 @@ def search():
         results.append({
             'rank': i + 1,
             'embedding_path': embedding_path,
-            'distance': float(distances[0][i]),
+            'distance': float(distances[i]),
             'topic': result_topic,
             'timestamp': result_timestamp
         })
 
         # Find matching reference timestamp and store in the dictionary
-        match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
-        for index, timestamp in match.items():
+        #match = aligned_data.loc[aligned_data[result_topic] == result_timestamp, "Reference Timestamp"]
+        match = aligned_data[aligned_data['Reference Timestamp'] == result_timestamp].index
+        for index in match:
             marks.append({
                 'value': index,    # Use the index as the "value"
                 #'label': str(timestamp)  # Use the timestamp as the "label"

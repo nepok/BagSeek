@@ -11,12 +11,14 @@ interface TimestampSliderProps {
   timestamps: number[];
   selectedTimestamp: number | null;
   onSliderChange: (value: number) => void;
+  selectedRosbag: string | null;
 }
 
 const TimestampSlider: React.FC<TimestampSliderProps> = ({
   timestamps,
   selectedTimestamp,
   onSliderChange,
+  selectedRosbag
 }) => {
 
   const formatDate = (timestamp: number): string => {
@@ -173,18 +175,19 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   // Fetch all images for the search results
   const fetchAllImages = async () => {
     try {
-      const imagePromises = searchResults.map(async (result) => {
-        const response = await fetch(
-          `/api/ros?timestamp=${result.timestamp}&topic=${result.topic}&mode=search`
-        );
-        const data = await response.json();
-        return data.image || null;
+      // Generate the image URLs directly without making fetch requests
+      const imageUrls = searchResults.map((result) => {
+        const imageUrl =
+          result.topic && result.timestamp && selectedRosbag
+            ? `http://localhost:5000/images/${selectedRosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
+            : undefined;
+        return imageUrl;
       });
-
-      const fetchedImages = await Promise.all(imagePromises);
-      setImageGallery(fetchedImages.filter((img) => img !== null)); // Filter out any null values 
+  
+      // Filter out any undefined values (in case any field was missing)
+      setImageGallery(imageUrls.filter((url) => url !== undefined) as string[]);
     } catch (error) {
-      console.error("Error fetching images:", error);
+      console.error("Error generating image URLs:", error);
     }
   };
 
@@ -418,8 +421,6 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         />
       </Popper>
   
-
-
       {/* Popper for Search Results */}
       <Popper
         open={searchResults.length > 0 && showSearchInput} // Show the Popper only when there are results
@@ -454,10 +455,10 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         padding: '8px',
       }}>
         {imageGallery && imageGallery.length > 0 ? (
-          imageGallery.map((imgBase64, index) => (
+          imageGallery.map((imgUrl, index) => (
             <div key={index} style={{ textAlign: 'left', width: '100%' }}>
               <img
-                src={`data:image/webp;base64,${imgBase64}`}
+                src={imgUrl}
                 alt={`Search result ${index + 1}`}
                 style={{
                   width: '100%', // Make the image fill the container's width

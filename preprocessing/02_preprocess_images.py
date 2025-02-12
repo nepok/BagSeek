@@ -24,7 +24,7 @@ preprocess = Compose([
 def preprocess_images(input_dir, output_dir):
     for root, _, files in os.walk(input_dir):
         for file in tqdm(files, desc=f"Processing images for {root[(len(IMAGES_DIR) + 1):]}"):
-            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
                 input_file_dir = os.path.join(root, file)
                 relative_dir = os.path.relpath(root, input_dir)
                 output_file_dir = os.path.join(output_dir, relative_dir)

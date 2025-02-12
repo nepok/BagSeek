@@ -194,6 +194,7 @@ function App() {
           timestamps={timestamps}
           selectedTimestamp={selectedTimestamp}
           onSliderChange={handleSliderChange}
+          selectedRosbag={selectedRosbag}
         />
       </div>
     </ThemeProvider>
