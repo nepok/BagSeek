@@ -172,7 +172,6 @@ def get_ros():
             if str(msg_timestamp) == realTimestamp:
                 # Deserialize the message based on the connection's message type
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
-
                 match connection.msgtype:
 
                     case 'sensor_msgs/msg/Image':
@@ -202,6 +201,9 @@ def get_ros():
                             points.extend([x, y, z])  # Add the x, y, z coordinates as a flat list
 
                         return jsonify({'points': points, 'realTimestamp': realTimestamp})
+                    
+                    case 'sensor_msgs/msg/NavSatFix':
+                        return jsonify({'gpsData': {'latitude': msg.latitude, 'longitude': msg.longitude, 'altitude': msg.altitude},'realTimestamp': realTimestamp})
 
                     case _:
                         # If the message type is something else, return msg.data as a list
