@@ -19,7 +19,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
   const [points, setPoints] = useState<number[] | null>(null); // Store fetched point cloud
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
   const [gpsData, setGpsData] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null);
-  
+  const [gpsPath, setGpsPath] = useState<[number, number][]>([]);
+
   const imageUrl =
   topic && timestamp && selectedRosbag
     ? `http://localhost:5000/images/${selectedRosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
@@ -29,7 +30,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
 
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-
+  
   // Function to fetch data based on the topic and timestamp
   const fetchData = async () => {
     try {
@@ -39,8 +40,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
       //setImage(null);
       setText(null);
       setPoints(null);
-
-      console.log(data);
+      setGpsData(null);
 
       // Dynamically update state based on the keys present in the response
       //if (data.image) {
@@ -76,49 +76,71 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
       } else {
         setText(null);
         setPoints(null);
+        setGpsData(null);
       }
     }
   }, [topic, timestamp, selectedRosbag]);
 
   useEffect(() => {
-    if (!gpsData) return;
-  
-    const initializeMap = () => {
-      if (!mapContainerRef.current) return;
-  
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-  
-      mapRef.current = L.map(mapContainerRef.current).setView(
-        [gpsData.latitude, gpsData.longitude], 16
-      );
-  
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(mapRef.current);
-
-      // Add a small red circle at the GPS point
-      L.circle([gpsData.latitude, gpsData.longitude], {
-        radius: 5, // Adjust the size of the circle
-        color: 'red',
-        fillColor: 'red',
-        fillOpacity: 0.8
-      }).addTo(mapRef.current);
-      
-    };
-  
-    setTimeout(initializeMap, 100);
-  
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
+    if (gpsData) {
+      setGpsPath(prevPath => [...prevPath, [gpsData.latitude, gpsData.longitude]]);
+    }
   }, [gpsData]);
+
+  useEffect(() => {
+  
+    // Clear the map if switching away from GPS
+    if (!topic?.includes("gps") && mapRef.current) {
+      mapRef.current.remove(); // Properly remove the map instance
+      mapRef.current = null;
+    }
+  
+    // Initialize or update the map if GPS topic is selected
+    if (topic?.includes("gps") && gpsData) {
+      // Initialize the map ONLY if it doesn't exist or when switching back to GPS
+      if (!mapRef.current && mapContainerRef.current) {
+        mapRef.current = L.map(mapContainerRef.current).setView(
+          [gpsData.latitude, gpsData.longitude], 16
+        );
+  
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(mapRef.current!);
+      }
+  
+      // Always update the view and layers when GPS data changes
+      if (mapRef.current) {
+        mapRef.current.setView([gpsData.latitude, gpsData.longitude], 16);
+        mapRef.current.invalidateSize();
+  
+        // Clear existing markers and polylines
+        mapRef.current.eachLayer((layer) => {
+          if (layer instanceof L.Circle || layer instanceof L.Polyline) {
+            mapRef.current?.removeLayer(layer);
+          }
+        });
+  
+        // Add the new marker
+        if (mapRef.current) {
+          L.circle([gpsData.latitude, gpsData.longitude], {
+            radius: 8, 
+            color: 'blue',
+            fillColor: 'blue',
+            fillOpacity: 0.8
+          }).addTo(mapRef.current);
+        }
+  
+        // Draw the path as a polyline
+        if (gpsPath.length > 1 && mapRef.current) {
+          L.polyline(gpsPath, {
+            color: 'blue',
+            weight: 3,
+          }).addTo(mapRef.current);
+        }
+      }
+    }
+  }, [topic, gpsData, gpsPath]);
 
   // Point cloud rendering component
   const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
@@ -198,11 +220,11 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
         </Box>
       )}
 
-      {gpsData && (
-        <div className="gps-container">           
-          <div ref={mapContainerRef} style={{ height: '400px', width: '600px' }}></div>
-        </div>
-      )}
+    {gpsData && (
+      <div className="gps-container">           
+        <div ref={mapContainerRef} className="map-container"></div>
+      </div>
+    )}
 
       {/* Default case: No data */}
       {!imageUrl && !points && !text && !gpsData && (

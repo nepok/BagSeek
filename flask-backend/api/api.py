@@ -242,7 +242,14 @@ def search():
     results = []
     marks = []
 
+    if len(indices) == 0 or len(distances) == 0:
+        return jsonify({'query': query_text, 'results': [], 'marks': []})  # Return empty lists if no results are found
+
     for i, idx in enumerate(indices):
+
+        if i >= 20:
+            break
+
         # Prepare the result object
         embedding_path = str(embedding_paths[idx])
         path_of_interest = str(os.path.basename(embedding_path))
@@ -265,6 +272,9 @@ def search():
                 'value': index,    # Use the index as the "value"
                 #'label': str(timestamp)  # Use the timestamp as the "label"
             })
+
+        if len(marks) >= 20:
+            break
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})
 

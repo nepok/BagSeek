@@ -164,8 +164,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       const response = await fetch(`/api/search?query=${query}`, { method: 'GET' });
       const data = await response.json();
 
-      setSearchResults(data.results);
-      setSearchMarks(data.marks)
+      setSearchMarks(data.marks || []);
+      setSearchResults(data.results || []);
     } catch (error) {
       console.error('Error fetching search results:', error);
       setSearchResults([]); // In case of an error, default to an empty array
@@ -264,6 +264,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      setSearchResults([]); // Clear the previous results
+      setImageGallery(["test"]); // Clear the previous images
       await fetchSearchResults(searchQuery);
     }
   };
@@ -423,7 +425,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   
       {/* Popper for Search Results */}
       <Popper
-        open={searchResults.length > 0 && showSearchInput} // Show the Popper only when there are results
+        open={showSearchInput} // Show the Popper only when there are results
         anchorEl={searchIconRef.current} // Position relative to the search icon
         placement="top" // Display results above the icon
         sx={{
@@ -459,7 +461,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
             <div key={index} style={{ textAlign: 'left', width: '100%' }}>
               <img
                 src={imgUrl}
-                alt={`Search result ${index + 1}`}
+                alt={"No result available"}
                 style={{
                   width: '100%', // Make the image fill the container's width
                   height: 'auto', // Maintain the aspect ratio
@@ -475,7 +477,15 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
                   fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
                 }}
               >
-                {`Distance: ${searchResults[index].distance}, Timestamp: ${searchResults[index].timestamp}, Topic: ${searchResults[index].topic}`} {/* Match the description with the image */}
+                {
+                  searchResults[index] && (
+                    <>
+                      <div>{searchResults[index].topic}</div>
+                      <div>{searchResults[index].timestamp}</div>
+                      <div>Distance: {searchResults[index].distance.toFixed(5)}</div>
+                    </>
+                  )
+                }              
               </Typography>
             </div>
           ))

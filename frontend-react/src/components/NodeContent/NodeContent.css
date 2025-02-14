@@ -47,3 +47,17 @@
   align-items: center;
   max-height: 30px; /* Ensure it stays small */
 }
+
+.gps-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.map-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
