@@ -174,7 +174,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
         <div className="image-container">
           <img
             src={imageUrl}
-            //alt="Select a topic"
+            alt="Select a topic"
             loading="lazy"
           />
           <div className="typography-box">

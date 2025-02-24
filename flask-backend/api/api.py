@@ -1,17 +1,14 @@
 import json
 import os
-import base64
-import csv
 from pathlib import Path
 from rosbags.rosbag2 import Reader, Writer
 from rosbags.typesys import Stores, get_typestore
-import cv2
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import logging
 import pandas as pd
-from sensor_msgs.msg import PointCloud2
+#from sensor_msgs.msg import PointCloud2
 import struct
 import torch
 from transformers import CLIPProcessor, CLIPModel
@@ -22,7 +19,7 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Define the base path
-BASE_DIR = '/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src'
+BASE_DIR = '../src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
@@ -37,7 +34,7 @@ typestore = get_typestore(Stores.LATEST)
 timestamps = []
 
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
-aligned_data = pd.read_csv('/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
+aligned_data = pd.read_csv('../src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
 
 # Load CLIP model and processor
 device = "cuda" if torch.cuda.is_available() else "cpu"

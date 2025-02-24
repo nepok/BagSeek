@@ -1,0 +1,9 @@
+flask
+flask-cors
+torch
+transformers
+faiss-cpu  # oder faiss-gpu, wenn eine GPU verwendet wird
+pandas
+numpy
+rosbags
+pillow

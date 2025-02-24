@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
-import { ConstructionOutlined } from '@mui/icons-material';
 
 interface FileInputProps {
   isVisible: boolean;
