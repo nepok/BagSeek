@@ -1,3 +1,4 @@
+#from __future__ import annotations
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,9 @@ import torch
 from transformers import CLIPProcessor, CLIPModel
 import faiss
 import traceback
+from typing import TYPE_CHECKING, cast
+from rosbags.interfaces import ConnectionExtRosbag2
+import time
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -23,7 +27,7 @@ BASE_DIR = '../src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
-EXPORT_DIR = os.path.join(BASE_DIR, 'exported_rosbags')
+EXPORT_DIR = os.path.join(BASE_DIR, 'rosbags')
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
 
@@ -70,6 +74,41 @@ def load_canvases():
 def save_canvases(data):
     with open(CANVASES_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+# logic for exporting rosbag
+def export_rosbag_with_topics(src: Path, dst: Path, includedTopics) -> None:
+   
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+    with Reader(src) as reader, Writer(dst, version=9) as writer:
+        conn_map = {}
+        for conn in reader.connections:
+            ext = cast(ConnectionExtRosbag2, conn.ext)
+
+            if conn.topic in includedTopics:
+                conn_map[conn.id] = writer.add_connection(
+                    conn.topic,
+                    conn.msgtype,
+                    typestore=typestore,
+                    serialization_format=ext.serialization_format,
+                    offered_qos_profiles=ext.offered_qos_profiles,
+                )
+
+        for conn, timestamp, data in reader.messages():
+            # Adjust header timestamps, too
+            if conn.id not in conn_map:  # ← Filtere Nachrichten, die nicht in conn_map sind
+                continue
+            
+            msg = typestore.deserialize_cdr(data, conn.msgtype)
+            if head := getattr(msg, 'header', None):
+                headstamp = head.stamp.sec * 10**9 + head.stamp.nanosec
+                head.stamp.sec = headstamp // 10**9
+                head.stamp.nanosec = headstamp % 10**9
+                outdata: memoryview | bytes = typestore.serialize_cdr(msg, conn.msgtype)
+            else:
+                outdata = data
+
+            writer.write(conn_map[conn.id], timestamp, outdata)
+
 
 @app.route('/api/set-file-paths', methods=['POST'])
 def post_file_paths():
@@ -275,12 +314,14 @@ def search():
 
     return jsonify({'query': query_text, 'results': results, 'marks': marks})
 
+
 @app.route('/api/export-rosbag', methods=['POST'])
 def export_rosbag():
     try:
         data = request.json
         new_rosbag_name = data.get('new_rosbag_name')
         topics = data.get('topics')
+
         start_timestamp = int(data.get('start_timestamp'))
         end_timestamp = int(data.get('end_timestamp'))
 
@@ -290,23 +331,14 @@ def export_rosbag():
         if not os.path.exists(SELECTED_ROSBAG):
             return jsonify({"error": "Rosbag not found"}), 404
 
-        export_path = os.path.join(EXPORT_DIR, f"{new_rosbag_name}_exported")
-        typestore = get_typestore(Stores.LATEST)
+        EXPORT_PATH = os.path.join(EXPORT_DIR, new_rosbag_name)
 
-        with Reader(SELECTED_ROSBAG) as reader, Writer(export_path) as writer:
-            for connection, timestamp, rawdata in reader.messages():
-                logging.warning(type(start_timestamp)), type(end_timestamp), type(timestamp)
-                #writer.add_connection(connection)
-                if connection.topic in topics and start_timestamp <= timestamp <= end_timestamp:
-                    msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
-                    writer.write(connection, timestamp, msg)
-
-        return jsonify({"message": "Rosbag exported successfully", "export_path": export_path}), 200
+        export_rosbag_with_topics(SELECTED_ROSBAG, EXPORT_PATH, topics)
+        return jsonify({"message": "Export successful", "exported_path": str(EXPORT_PATH)})
 
     except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
-
+        return jsonify({"error": str(e)}), 500
+    
 @app.route("/api/load-canvases", methods=["GET"])
 def api_load_canvases():
     return jsonify(load_canvases())

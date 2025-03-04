@@ -26,7 +26,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
     ? `http://localhost:5000/images/${selectedRosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
     : undefined;
 
-  const isImage = topic && topic.includes("image");
+  const isImage = topic && (topic.includes("image") || topic.includes("camera"));
 
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -71,7 +71,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
   // Trigger fetch when topic or timestamp changes
   useEffect(() => {
     if (topic && timestamp && selectedRosbag) {
-      if (!topic.includes("image")) { // Only call the API if there is NO image
+      if (!topic.includes("image") && !topic.includes("camera")) { // Only call the API if there is NO image or camera        
         fetchData();
       } else {
         setText(null);

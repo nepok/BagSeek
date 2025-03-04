@@ -19,7 +19,14 @@ interface HeaderProps {
 const generateColor = (rosbagName: string) => {
   // Generate a hash-based color from the rosbag name
   const hash = rosbagName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const colors = ['#ff5733', '#33ff57', '#3357ff', '#ff33a6', '#ffd633', '#33fff5'];
+  const colors = [
+    '#ff5733', '#33ff57', '#3357ff', '#ff33a6', '#ffd633', '#33fff5', // Original colors
+    '#ff9966', '#66ff99', '#6699ff', '#ff6699', '#ffee66', '#66ffee', // Softer tints
+    '#cc4422', '#22cc44', '#2244cc', '#cc2266', '#ccaa22', '#22ccaa', // Darker shades
+    '#ff7744', '#44ff77', '#4477ff', '#ff4477', '#ffdd44', '#44ffdd', // Intermediate tones
+    '#ffb366', '#66ffb3', '#b366ff', '#ff66b3', '#ffff66', '#66ffff', // More variety
+    '#aa3311', '#11aa33', '#1133aa', '#aa1133', '#aa8811', '#11aa88', // Deeper hues
+  ];
   return colors[hash % colors.length]; // Pick a color based on hash
 };
 
