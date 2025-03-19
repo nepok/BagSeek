@@ -18,6 +18,7 @@ import traceback
 from typing import TYPE_CHECKING, cast
 from rosbags.interfaces import ConnectionExtRosbag2
 import time
+import threading
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -25,6 +26,7 @@ CORS(app)  # Enable CORS for all routes
 # Define the base path
 BASE_DIR = '../src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
+EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
 EXPORT_DIR = os.path.join(BASE_DIR, 'rosbags')
@@ -40,10 +42,21 @@ timestamps = []
 # Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
 aligned_data = pd.read_csv('../src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
 
-# Load CLIP model and processor
+# init standard model
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+selected_model = "openai/clip-vit-base-patch32"
+
+# Add a lock for thread safety
+model_lock = threading.Lock()
+
+# Function to reload the model and processor
+def reload_model_and_processor():
+    global model, processor, selected_model
+    with model_lock:
+        model = CLIPModel.from_pretrained(selected_model).to(device)
+        processor = CLIPProcessor.from_pretrained(selected_model)
+
+reload_model_and_processor()
 
 # Function to compute text embedding using CLIP
 def get_text_embedding(text):
@@ -108,6 +121,36 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics) -> None:
                 outdata = data
 
             writer.write(conn_map[conn.id], timestamp, outdata)
+
+@app.route('/api/set-model', methods=['POST'])
+def post_model():
+    try:
+        data = request.get_json()  # Get the JSON payload
+        model_value = data.get('models')  # The path value from the JSON
+
+        global selected_model
+        selected_model = model_value
+
+        # Reload the model and processor
+        reload_model_and_processor()
+
+        return jsonify({"message": f"Model {model_value} successfully posted."}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@app.route('/api/get-models', methods=['GET'])
+def get_models():
+    try:
+        # List all files in the directory
+        models = []
+        for model in os.listdir(EMBEDDINGS_DIR):
+            models.append(model.replace("_", "/"))
+
+        return jsonify({"models": models}), 200
+    except Exception as e:
+        # Handle any errors that occur (e.g., directory not found, permission issues)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/set-file-paths', methods=['POST'])
@@ -259,9 +302,9 @@ def search():
     query_embedding = get_text_embedding(query_text)
 
     # Define paths for the specified rosbag
-    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')#.replace('.bag', '')
-    index_path = os.path.join(INDICES_DIR, rosbag_name, "faiss_index.index")
-    embedding_paths_file = os.path.join(INDICES_DIR, rosbag_name, "embedding_paths.npy")
+    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')
+    index_path = os.path.join(INDICES_DIR, selected_model.replace("/", "_"), rosbag_name, "faiss_index.index")
+    embedding_paths_file = os.path.join(INDICES_DIR, selected_model.replace("/", "_"), rosbag_name, "embedding_paths.npy")
 
     # Check if the index and embedding paths exist
     if not Path(index_path).exists() or not Path(embedding_paths_file).exists():

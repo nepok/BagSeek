@@ -56,7 +56,6 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
     });
   }, [selectedRosbag]);
 
-  // If currentRoot or currentMetadata changes, you can apply the update logic here
   useEffect(() => {
     if (!currentRoot || !currentMetadata) return;
   
@@ -85,35 +84,82 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
   };
 
   const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
-  if (!node.left && !node.right) {
-    const newLeft = { id: node.id * 2 };
-    const newRight = { id: node.id * 2 + 1 };
+    if (!node.left && !node.right) {
+      const newLeft = { id: node.id * 2 };
+      const newRight = { id: node.id * 2 + 1 };
 
-    const updatedNode = {
-      ...node,
-      direction,
-      size: 50,
-      left: newLeft,
-      right: newRight
+      const updatedNode = {
+        ...node,
+        direction,
+        size: 50,
+        left: newLeft,
+        right: newRight
+      };
+
+      const updatedRoot = updateNodeInTree(root, updatedNode);
+      setRoot(updatedRoot);
+
+      setNodeMetadata((prev) => {
+        const newMetadata = { ...prev };
+
+        // Remove old metadata of the split node
+        delete newMetadata[node.id];
+
+        // Add new nodes with empty metadata
+        newMetadata[newLeft.id] = { topic: null, timestamp: null };
+        newMetadata[newRight.id] = { topic: null, timestamp: null };
+
+        return newMetadata;
+      });
+    }
+  };
+
+  const deleteNode = (nodeToDelete: Node): Node | null => {
+    const traverseAndDelete = (node: Node | null): Node | undefined => {
+      if (!node) return undefined;
+      if (node.left && node.left.id === nodeToDelete.id) {
+        return node.right || undefined;
+      }
+      if (node.right && node.right.id === nodeToDelete.id) {
+        return node.left || undefined;
+      }
+      return {
+        ...node,
+        left: traverseAndDelete(node.left || null),
+        right: traverseAndDelete(node.right || null),
+      };
     };
 
-    const updatedRoot = updateNodeInTree(root, updatedNode);
-    setRoot(updatedRoot);
+    if (root.id === nodeToDelete.id) {
+      return null; // If the root is deleted, return undefined
+    }
 
-    setNodeMetadata((prev) => {
-      const newMetadata = { ...prev };
+    return traverseAndDelete(root as Node) || root;
+  };
 
-      // Entferne alte Metadaten der gesplitteten Node
-      delete newMetadata[node.id];
+  const handleDeletePanel = () => {
+    if (currentNode) {
+      const newRoot = deleteNode(currentNode);
+      if (newRoot) {
+        setRoot(newRoot);
+      } else {
+        setRoot({ id: 1 }); // Reset to a new root if the entire tree is deleted
+      }
 
-      // Füge neue Nodes mit leeren Metadaten hinzu
-      newMetadata[newLeft.id] = { topic: null, timestamp: null };
-      newMetadata[newRight.id] = { topic: null, timestamp: null };
+      setNodeMetadata((prev) => {
+        const newMetadata = { ...prev };
+        const removeMetadata = (node: Node) => {
+          delete newMetadata[node.id];
+          if (node.left) removeMetadata(node.left);
+          if (node.right) removeMetadata(node.right);
+        };
+        removeMetadata(currentNode);
+        return newMetadata;
+      });
 
-      return newMetadata;
-    });
-  }
-};
+      handleCloseMenu();
+    }
+  };
 
   const startResizing = (e: React.MouseEvent, node: Node) => {
     document.body.style.userSelect = 'none';
@@ -223,7 +269,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
                   padding: "6px 12px",
                   display: "flex",
                   alignItems: "center",
-                  gap: "5px", // Ensures consistent spacing between icon & text
+                  gap: "5px",
                 }}
               >
                 <svg 
@@ -283,13 +329,13 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
                 Split Vertically
               </MenuItem>
               <MenuItem
-                //onClick={handleDeletePanel}
+                onClick={handleDeletePanel}
                 style={{
                   fontSize: "0.8rem",
                   padding: "6px 12px",
                   display: "flex",
                   alignItems: "center",
-                  gap: "5px", // Ensures consistent spacing between icon & text
+                  gap: "5px",
                 }}
               >
                 <svg 

@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import './TimestampSlider.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper } from '@mui/material';
+import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from "@mui/icons-material/Pause";
 import SearchIcon from '@mui/icons-material/Search';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import L from 'leaflet';
@@ -49,10 +50,13 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
   const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
   const [showFilter, setShowFilter] = useState(false); // State to control the visibility of the filter
+  const [showModelSelection, setShowModelSelection] = useState(false); // State to control the visibility of the model selection
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string }[]>([]); // Initialize as an empty array of SearchResult objects  
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
+  const [models, setModels] = useState<string[]>([]); // State to store the list of models
+  const [selectedModel, setSelectedModel] = useState<string>(''); // State to store the selected model
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
@@ -265,11 +269,60 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       setSearchResults([]); // Clear the previous results
-      setImageGallery(["test"]); // Clear the previous images
+      setImageGallery([]); // Clear the previous images
       await fetchSearchResults(searchQuery);
     }
   };
 
+  const toggleModelSelection = () => {
+    setShowModelSelection(!showModelSelection);
+  };
+
+  // Fetch models from the API when the dropdown is opened
+  useEffect(() => {
+    if (showModelSelection) {
+      fetchModels();
+    }
+  }, [showModelSelection]);
+
+  // Function to fetch models from the API
+  const fetchModels = async () => {
+    try {
+      const response = await fetch('/api/get-models');
+      if (!response.ok) {
+        throw new Error('Failed to fetch models');
+      }
+      const data = await response.json();
+      setModels(data.models); // Update the state with the fetched models
+    } catch (error) {
+      console.error('Error fetching models:', error);
+    }
+  };
+
+  // Function to handle model selection
+  const handleModelSelect = async (event: SelectChangeEvent<string>) => {
+    const selectedValue = event.target.value;
+    setSelectedModel(selectedValue); // Update the selected model state
+
+    try {
+      const response = await fetch('/api/set-model', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ models: selectedValue }), // Send the selected model to the API
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to set model');
+      }
+
+      const data = await response.json();
+      console.log(data.message); // Log the success message
+    } catch (error) {
+      console.error('Error setting model:', error);
+    }
+  };
 
   return (
     <div className="timestamp-slider-container">
@@ -296,10 +349,10 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
 
       {/* Play icon button */}
       <IconButton 
-        aria-label="play" 
+        aria-label={isPlaying ? "pause" : "play"} 
         color="primary" 
         onClick={togglePlayback}>
-        <PlayArrowIcon />
+        {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
       </IconButton>
 
       {/* Timestamp slider */}
@@ -396,7 +449,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         placement="top-end" // Places the popper above the icon
         sx={{
           zIndex: 1300, // Ensure it appears above other content
-          width: "200px", // Adjust width to make the input box thinner
+          width: "252px", // Adjust width to make the input box thinner
         }}
         modifiers={[
           {
@@ -407,20 +460,70 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           },
         ]}
       >
-        <TextField
-          variant="outlined"
-          label="Search"
-          value={searchQuery}
-          onChange={(e: { target: { value: React.SetStateAction<string>; }; }) => setSearchQuery(e.target.value)}  // Update the query as the user types
-          onKeyDown={handleSearchKeyDown} // Trigger API call only when Enter is pressed
-          size="small"
+        <Box sx={{ display: 'flex', flexDirection: 'row', gap: '8px', paddingBlock: '8px'}}>
+          <IconButton
+            aria-label="model"
+            onClick={toggleModelSelection}
+            sx={{ fontSize: '1.2rem', background: "#202020"}} 
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M720-140 560-300l160-160 56 56-63 64h167v80H713l63 64-56 56Zm-560-20q-33 0-56.5-23.5T80-240v-120q0-33 23.5-56.5T160-440h240q33 0 56.5 23.5T480-360v120q0 33-23.5 56.5T400-160H160Zm0-80h240v-120H160v120Zm80-260-56-56 63-64H80v-80h167l-63-64 56-56 160 160-160 160Zm320-20q-33 0-56.5-23.5T480-600v-120q0-33 23.5-56.5T560-800h240q33 0 56.5 23.5T880-720v120q0 33-23.5 56.5T800-520H560Zm0-80h240v-120H560v120ZM400-240v-120 120Zm160-360v-120 120Z"/></svg>
+          </IconButton>
+          <TextField
+            variant="outlined"
+            label="Search"
+            value={searchQuery}
+            onChange={(e: { target: { value: React.SetStateAction<string>; }; }) => setSearchQuery(e.target.value)}  // Update the query as the user types
+            onKeyDown={handleSearchKeyDown} // Trigger API call only when Enter is pressed
+            size="small"
+            sx={{
+              fontSize: '0.7rem', // Smaller font size
+              background: "#202020", // Dark background color for input box
+              width: '100%', // Ensure the width fits the parent container (Popper)
+              borderRadius: '4px', // Optional: Add rounded corners for a smoother look
+            }}
+          />
+        </Box>
+        {/* Nested Popper for Model Selection Dropdown */}
+        <Popper
+          open={showModelSelection} // Controlled by the toggleModelSelection state
+          anchorEl={searchIconRef.current} // Anchor to the same search icon
+          placement="top-end" // Place the dropdown below the IconButton
           sx={{
-            fontSize: '0.7rem', // Smaller font size
-            background: "#202020", // Dark background color for input box
-            width: '100%', // Ensure the width fits the parent container (Popper)
-            borderRadius: '4px', // Optional: Add rounded corners for a smoother look
+            zIndex: 1300, // Ensure it appears above other content
+            width: "200px", // Adjust width to make the input box thinner
+            background: "#202020", // Dark background color
+            borderRadius: '8px', // Rounded corners
+            marginTop: '8px', // Add some spacing from the IconButton
           }}
-        />
+          modifiers={[
+            {
+              name: 'offset',
+              options: {
+                offset: [-213, 70], // Move the popper 10px higher above the search icon (increase value for higher)
+              },
+            },
+          ]}
+        >
+          <Box sx={{ padding: '8px' }}>
+            <Typography variant="body2" sx={{ color: "#e8eaed", marginBottom: '8px' }}>
+              Select a Model
+            </Typography>
+            <Select
+              labelId="model-select-label"
+              id="model-select"
+              value={selectedModel}
+              onChange={handleModelSelect}
+              sx={{ width: '100%', color: "#e8eaed", background: "#404040" }} // Styling for the Select component
+            >
+              {models.map((model, index) => (
+                <MenuItem key={index} value={model}>
+                  {model}
+                </MenuItem>
+              ))}
+            </Select>
+          </Box>
+        </Popper>
+
       </Popper>
   
       {/* Popper for Search Results */}

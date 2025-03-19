@@ -1,2 +1,10 @@
 node_modules
 flask-backend/src
+flask-backend/api/venv
+flask-backend/api/__pycache__
+.vscode
+test.py
+exporttest.py
+docker-compose.yml
+preprocessing
+
