@@ -68,9 +68,9 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
     });
   }, [currentRoot, currentMetadata]);
 
-  useEffect(() => {
-    onCanvasChange(root, nodeMetadata);
-  }, [root, nodeMetadata]);
+  //useEffect(() => {
+  //  onCanvasChange(root, nodeMetadata);
+  //}, [root, nodeMetadata]);
 
   const updateNodeInTree = (currentNode: Node, updatedNode: Node): Node => {
     if (!currentNode) return updatedNode;
@@ -171,6 +171,8 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
   const stopResizing = () => {
     document.body.style.userSelect = '';
     resizingNode.current = null;
+    onCanvasChange(root, nodeMetadata);
+
     document.removeEventListener('mousemove', handleMouseMove);
     document.removeEventListener('mouseup', stopResizing);
   };
@@ -189,6 +191,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
     newSize = Math.max(10, Math.min(90, newSize));
 
     resizingNode.current.size = newSize;
+    console.log(root);
     setRoot({ ...root });
   };
 

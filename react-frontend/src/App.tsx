@@ -100,15 +100,21 @@ function App() {
       rosbag: selectedRosbag,
     };
   
-    const updatedCanvasList = { ...canvasList, [name]: newCanvas };
-    setCanvasList(updatedCanvasList);
-  
     try {
-      await fetch('/api/save-canvases', {
+      await fetch('/api/save-canvas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedCanvasList),
+        body: JSON.stringify({
+          name: name,
+          canvas: newCanvas
+        }),
       });
+  
+      // Update local state
+      setCanvasList(prev => ({
+        ...prev,
+        [name]: newCanvas
+      }));
     } catch (error) {
       console.error('Error saving canvas:', error);
     }

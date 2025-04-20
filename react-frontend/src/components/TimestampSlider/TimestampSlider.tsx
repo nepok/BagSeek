@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import './TimestampSlider.css'; // Import the CSS file
 import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -6,6 +6,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import SearchIcon from '@mui/icons-material/Search';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import L from 'leaflet';
+import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface TimestampSliderProps {
@@ -324,6 +325,34 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     }
   };
 
+  const heatmapData = useMemo(() => {
+    const bins = 1000; // mehr = glattere Heatmap
+    const windowSize = 50; // Anzahl Nachbarn links + rechts
+
+    const counts = new Array(bins).fill(0);
+    const total = timestamps.length;
+  
+    const markPositions = searchMarks.map((m) => m.value / total); // Normalisierte Positionen [0, 1]
+  
+    // Für jedes Bin die "Dichte" berechnen
+    for (let i = 0; i < bins; i++) {
+      const binCenter = i / bins;
+  
+      let score = 0;
+      for (const p of markPositions) {
+        const dist = Math.abs(p - binCenter);
+        if (dist < windowSize / bins) {
+          score += 1 - dist * bins / windowSize; // Linear fallend
+        }
+      }
+  
+      counts[i] = score;
+    }
+  
+    const max = Math.max(...counts);
+    return counts.map((c) => c / (max || 1)); // Normalisieren auf [0, 1]
+  }, [searchMarks, timestamps.length]);
+
   return (
     <div className="timestamp-slider-container">
       
@@ -364,15 +393,26 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         value={sliderValue}
         onChange={handleSliderChange}
         aria-label="Timestamp"
-        sx={{ 
+        components={{
+          Track: (props) => (
+            <CustomTrack
+              {...props}
+              marks={searchMarks}
+              timestampCount={timestamps.length}
+              bins={1000} // optional
+              windowSize={50} // optional
+            />
+          ),
+        }}
+        sx={{
           marginRight: '12px',
           '& .MuiSlider-mark': {
             backgroundColor: '#FFA500',
             width: '3px',
-            height: '7px'
+            height: '7px',
           },
-         }}
-        marks={searchMarks}
+        }}
+        //marks={searchMarks}
       />
 
       {/* Display the selected timestamp */}

@@ -2,11 +2,11 @@
 import json
 import os
 from pathlib import Path
-from rosbags.rosbag2 import Reader, Writer
-from rosbags.typesys import Stores, get_typestore
+from rosbags.rosbag2 import Reader, Writer  # type: ignore
+from rosbags.typesys import Stores, get_typestore  # type: ignore
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
+from flask import Flask, jsonify, request, send_from_directory # type: ignore
+from flask_cors import CORS  # type: ignore
 import logging
 import pandas as pd
 #from sensor_msgs.msg import PointCloud2
@@ -16,7 +16,7 @@ from transformers import CLIPProcessor, CLIPModel
 import faiss
 import traceback
 from typing import TYPE_CHECKING, cast
-from rosbags.interfaces import ConnectionExtRosbag2
+from rosbags.interfaces import ConnectionExtRosbag2  # type: ignore
 import time
 import threading
 
@@ -26,9 +26,10 @@ CORS(app)  # Enable CORS for all routes
 # Define the base path
 BASE_DIR = '../src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
+LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, 'lookup_tables')
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
-ROSBAGS_DIR = os.path.join(BASE_DIR, 'rosbags')
+ROSBAGS_DIR = "/mnt/data/rosbags"
 EXPORT_DIR = os.path.join(BASE_DIR, 'rosbags')
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
@@ -145,7 +146,8 @@ def get_models():
         # List all files in the directory
         models = []
         for model in os.listdir(EMBEDDINGS_DIR):
-            models.append(model.replace("_", "/"))
+            if not model in ['.DS_Store', 'README.md']:
+                models.append(model.replace("_", "/"))
 
         return jsonify({"models": models}), 200
     except Exception as e:
@@ -163,7 +165,8 @@ def post_file_paths():
         SELECTED_ROSBAG = path_value
 
         global aligned_data
-        csv_path = str(path_value).replace("rosbags", "lookup_tables") + ".csv"
+        
+        csv_path = LOOKUP_TABLES_DIR + "/" + os.path.basename(SELECTED_ROSBAG) + ".csv"
         aligned_data = pd.read_csv(csv_path, dtype=str)
         return jsonify({"message": "File path updated successfully."}), 200
 
@@ -325,7 +328,6 @@ def search():
         return jsonify({'query': query_text, 'results': [], 'marks': []})  # Return empty lists if no results are found
 
     for i, idx in enumerate(indices):
-
         if i >= 20:
             break
 
@@ -386,11 +388,22 @@ def export_rosbag():
 def api_load_canvases():
     return jsonify(load_canvases())
 
-@app.route("/api/save-canvases", methods=["POST"])
-def api_save_canvases():
+@app.route("/api/save-canvas", methods=["POST"])
+def api_save_canvas():
     data = request.json
-    save_canvases(data)
-    return jsonify({"message": "Canvas saved successfully"})
+    name = data.get("name")
+    canvas_data = data.get("canvas")
+    
+    # Load existing canvases
+    canvases = load_canvases()
+    
+    # Update or add the single canvas
+    canvases[name] = canvas_data
+    
+    # Save back to file
+    save_canvases(canvases)
+    
+    return jsonify({"message": f"Canvas '{name}' saved successfully"})
 
 @app.route("/api/delete-canvas", methods=["POST"])
 def api_delete_canvas():

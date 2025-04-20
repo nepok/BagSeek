@@ -96,7 +96,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
       </Typography>
 
       <Box display="flex" alignItems="center">
-        <Popper open={showCanvasPopper} anchorEl={canvasIconRef.current} placement="bottom-end" sx={{ zIndex: 100, width: '300px' }}>
+        <Popper open={showCanvasPopper} anchorEl={canvasIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '300px' }}>
           <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
             {canvasList.map((canvas, index) => (
               <MenuItem 
@@ -171,11 +171,11 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             <IosShareIcon />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Settings" arrow>
+        {/* <Tooltip title="Settings" arrow>
           <IconButton className="header-icon">
             <SettingsIcon />
           </IconButton>
-        </Tooltip>
+        </Tooltip> */}
       </Box>
     </Box>
   );
