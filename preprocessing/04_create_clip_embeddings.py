@@ -6,11 +6,11 @@ from torchvision.transforms.functional import to_pil_image
 from tqdm import tqdm
 
 # Define constants for paths
-BASE_DIR = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src"
+BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
 PREPROCESSED_DIR = os.path.join(BASE_DIR, "preprocessed_images")
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
 
-models = ["openai/clip-vit-base-patch32", "openai/clip-vit-large-patch14", "geolocal/StreetCLIP"]
+models = ["openai/clip-vit-base-patch32", "openai/clip-vit-base-patch16", "openai/clip-vit-large-patch14", "geolocal/StreetCLIP"]
 
 # Create output directory if it doesn't exist
 Path(EMBEDDINGS_DIR).mkdir(parents=True, exist_ok=True)

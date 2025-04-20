@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 # Define constants for paths
-BASE_DIR = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src"
+BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
 INDICES_DIR = os.path.join(BASE_DIR, "faiss_indices")
 
@@ -70,11 +70,7 @@ def main():
         if os.path.isdir(model_folder_path):
             for rosbag in os.listdir(model_folder_path):
                 #index_path = os.path.join(model_folder_path, rosbag)
-
-                if rosbag != "test3":
-                    continue
-                else:
-                    process_embedding_folder(model_folder, rosbag)
+                process_embedding_folder(model_folder, rosbag)
 
 if __name__ == "__main__":
     main()

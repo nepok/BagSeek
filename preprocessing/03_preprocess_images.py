@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 
 # Define constants for paths
-BASE_DIR = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src"
+BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
 IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
 PREPROCESSED_DIR = os.path.join(BASE_DIR, "preprocessed_images")
 

@@ -1,53 +1,26 @@
 import os
 import csv
-import json
 import numpy as np
-from rosbags.rosbag2 import Reader
+from rosbags.rosbag2 import Reader  # type: ignore
 from collections import defaultdict
-import rosbag2_py
-from rclpy.serialization import deserialize_message
-from rosidl_runtime_py.utilities import get_message
 
 # Define constants for paths
-BASE_DIR = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src"
-ROSBAGS_DIR = os.path.join(BASE_DIR, "rosbags")
-LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, "lookup_tables")
+BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
+ROSBAGS_DIR = "/mnt/data/rosbags"
+LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, "lookup_tables/lookup_tables_new_test")
 
 def process_rosbag(rosbag_path, csv_path):
     topic_data = defaultdict(list)
     
-    def process_mcap_bag(input_bag):
-        reader = rosbag2_py.SequentialReader()
-        reader.open(
-            rosbag2_py.StorageOptions(uri=input_bag, storage_id="mcap"),
-            rosbag2_py.ConverterOptions(
-                input_serialization_format="cdr", output_serialization_format="cdr"
-            ),
-        )
-        topic_types = reader.get_all_topics_and_types()
-        
-        def typename(topic_name):
-            for topic_type in topic_types:
-                if topic_type.name == topic_name:
-                    return topic_type.type
-            raise ValueError(f"Topic {topic_name} not in bag")
-        
-        while reader.has_next():
-            topic, data, timestamp = reader.read_next()
-            topic_data[topic].append(timestamp)
-        del reader
-
-    # Determine if it's an MCAP or DB3 bag
-    if rosbag_path.endswith(".db3") or os.path.isfile(os.path.join(rosbag_path, "metadata.yaml")):
-        try:
-            with Reader(rosbag_path) as reader:
-                for connection, timestamp, rawdata in reader.messages():
-                    topic_data[connection.topic].append(timestamp)
-        except Exception as e:
-            print(f"Error reading .db3 bag: {e}")
-            return
-    else:
-        process_mcap_bag(rosbag_path)
+    try:
+        with Reader(rosbag_path) as reader:
+            for connection, timestamp, rawdata in reader.messages():
+                if connection.topic in ["/tf", "/tf_static"]:
+                    continue
+                topic_data[connection.topic].append(timestamp)
+    except Exception as e:
+        print(f"Error reading .db3 bag: {e}")
+        return
     
     if not topic_data:
         print(f"No topics found in {rosbag_path}")
@@ -58,12 +31,8 @@ def process_rosbag(rosbag_path, csv_path):
     max_size = len(topic_data[max_topic])
     
     # Create a reference timeline of `max_size` evenly spaced timestamps
-    reference_timestamps = np.linspace(
-        topic_data[max_topic][0],
-        topic_data[max_topic][-1],
-        max_size
-    )
-    
+    reference_timestamps = np.array(sorted(set(topic_data[max_topic])))
+
     # Align each topic to the reference timeline
     aligned_data = {}
     for topic, timestamps in topic_data.items():

@@ -3,7 +3,7 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 # Hardcoded path to the ROS 2 bag folder
-MCAP_FOLDER = "/home/ubuntu/Documents/Bachelor/bagseek/flask-backend/src/rosbags/rosbag2_2025_02_21-09_17_40"
+MCAP_FOLDER = "/mnt/data/bagseek/flask-backend/src/rosbags/rosbag2_2025_02_21-09_17_40"
 
 def read_messages(input_bag: str):
     reader = rosbag2_py.SequentialReader()
