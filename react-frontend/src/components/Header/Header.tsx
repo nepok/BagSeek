@@ -150,11 +150,6 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           </Paper>
         </Popper>
 
-        <Tooltip title="Load/Save Canvas" arrow>
-          <IconButton className="header-icon" ref={canvasIconRef} onClick={toggleCanvasOptions}>
-            <ViewQuiltRoundedIcon />
-          </IconButton>
-        </Tooltip>
         <Tooltip title="Open Rosbag" arrow>
           <IconButton 
             className="header-icon" 
@@ -164,6 +159,11 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             }}
           >
             <FolderIcon />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Load/Save Canvas" arrow>
+          <IconButton className="header-icon" ref={canvasIconRef} onClick={toggleCanvasOptions}>
+            <ViewQuiltRoundedIcon />
           </IconButton>
         </Tooltip>
         <Tooltip title="Export Rosbag" arrow>

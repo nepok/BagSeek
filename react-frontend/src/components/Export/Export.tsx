@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent } from '@mui/material';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress } from '@mui/material';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
@@ -15,8 +15,23 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   const [newRosbagName, setNewRosbagName] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
+  const [exportStatus, setExportStatus] = useState<{progress: number, message: string, status: string} | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!exportStatus || exportStatus.status !== "running") return;
+  
+    const interval = setInterval(async () => {
+      const res = await fetch("/api/export-status");
+      const data = await res.json();
+      setExportStatus(data);
+  
+      if (data.status === "done") clearInterval(interval);
+    }, 100);
+  
+    return () => clearInterval(interval);
+  }, [exportStatus]);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -125,6 +140,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   const handleExport = async () => {
     if (timestamps.length === 0) return;
 
+    setExportStatus({ status: "running", progress: 0, message: "Export started..." });
+
     const exportData = {
       new_rosbag_name: newRosbagName,
       topics: selectedTopics,
@@ -184,9 +201,33 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
     return `${formatDate(timestamps[value])} (${timestamps[value]})`;
   };
 
-  if (!isVisible) return null;
+  if (!isVisible) {
+    return (
+      <>
+        {exportStatus && exportStatus.status === "running" && (
+          <Box sx={{
+            position: 'fixed',
+            bottom: 80,
+            left: 20,
+            backgroundColor: '#202020',
+            color: 'white',
+            padding: '8px 16px',
+            borderRadius: '8px',
+            zIndex: 9999,
+            boxShadow: '0px 0px 10px rgba(0,0,0,0.5)'
+          }}>
+            <Typography variant="body2">{exportStatus.message}</Typography>
+            <Box sx={{ width: 200, mt: 1 }}>
+              <LinearProgress variant="determinate" value={exportStatus.progress * 100} />
+            </Box>
+          </Box>
+        )}
+      </>
+    );
+  }
 
   return (
+    
     <Dialog open={true} onClose={onClose} aria-labelledby="form-dialog-title" fullWidth maxWidth="md">
       <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag}</DialogTitle>
       <DialogContent style={{ overflow: 'hidden' }}>
@@ -241,6 +282,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
         </Button>
       </DialogActions>
     </Dialog>
+
+    
   );
 };
 
