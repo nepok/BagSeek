@@ -6,5 +6,4 @@ flask-backend/api/
 test.py
 exporttest.py
 docker-compose.yml
-preprocessing
 
