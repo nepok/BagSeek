@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 import concurrent.futures
+from sensor_msgs.msg import CompressedImage, Image # type: ignore
 
 # Define paths
 BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
@@ -85,16 +86,13 @@ def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir):
         return
 
     try:
-        # Check for ROS 2 message types
-        msg_type = type(msg).__name__
-        
-        if msg_type == 'sensor_msgs__msg__CompressedImage':
-            # For compressed image (e.g., JPEG)
+        if isinstance(msg, CompressedImage) or msg.__class__.__name__ == "sensor_msgs__msg__CompressedImage":
+            # For compressed image (e.g., JPEG)        elif isinstance(msg, Image) or msg.__class__.__name__ == "sensor_msgs__msg__Image":
             np_arr = np.frombuffer(msg.data, np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if img is None:
                 raise ValueError("Failed to decode CompressedImage")
-        elif msg_type == 'sensor_msgs__msg__Image':
+        elif isinstance(msg, Image) or msg.__class__.__name__ == "sensor_msgs__msg__Image":
             # For raw image in ROS 2
             channels = {
                 "mono8": 1,
@@ -117,7 +115,7 @@ def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir):
             else:
                 img = img_data
         else:
-            raise TypeError(f"Unsupported message type: {msg_type}")
+            raise TypeError(f"Unsupported message type: {type(msg)}")
 
         save_image(img, img_filepath)
 
@@ -136,29 +134,35 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str, csv_path: str,
             with Reader(rosbag_path) as reader:
                 connections = [x for x in reader.connections if 'image' in x.topic.lower() and x.topic != '/camera_image/Cam_MR']
                 for connection, timestamp, rawdata in tqdm(reader.messages(connections=connections), desc=f"Extracting {os.path.basename(rosbag_path)}"):
-                    msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
-                    if connection.topic not in aligned_data.columns:
-                        print(f'Error: Topic {connection.topic} not found in aligned_data')
-                        continue
+                    try:
+                        msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
+                        if connection.topic not in aligned_data.columns:
+                            print(f'Error: Topic {connection.topic} not found in aligned_data')
+                            continue
 
-                    future = executor.submit(extract_image_from_message, msg, connection.topic, timestamp, aligned_data, output_dir)
-                    futures.append(future)
+                        future = executor.submit(extract_image_from_message, msg, connection.topic, timestamp, aligned_data, output_dir)
+                        futures.append(future)
+                    except Exception as e:
+                        print(f"Error processing message from topic {connection.topic} at {timestamp}: {e}")
 
         elif format == 'mcap':
             message_reader = read_mcap_messages(rosbag_path)
             for message in tqdm(message_reader, desc=f"Extracting {os.path.basename(rosbag_path)}"):
-                topic, msg, timestamp = message
-                if not ('image' in topic.lower() or 'camera' in topic.lower()):
-                    continue
-                if msg is None:
-                    print(f"Skipping {topic} at {timestamp}: No valid message data.")
-                    continue
-                if topic not in aligned_data.columns:
-                    print(f'Error: Topic {topic} not found in aligned_data')
-                    continue
-                
-                future = executor.submit(extract_image_from_message, msg, topic, timestamp, aligned_data, output_dir)
-                futures.append(future)
+                try:
+                    topic, msg, timestamp = message
+                    if not ('image' in topic.lower() or 'camera' in topic.lower()):
+                        continue
+                    if msg is None:
+                        print(f"Skipping {topic} at {timestamp}: No valid message data.")
+                        continue
+                    if topic not in aligned_data.columns:
+                        print(f'Error: Topic {topic} not found in aligned_data')
+                        continue
+
+                    future = executor.submit(extract_image_from_message, msg, topic, timestamp, aligned_data, output_dir)
+                    futures.append(future)
+                except Exception as e:
+                    print(f"Error processing message from topic {topic} at {timestamp}: {e}")
 
         # Wait for all threads to finish
         for future in futures:
@@ -166,26 +170,30 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str, csv_path: str,
 
 def main():
     """Main function to iterate over all rosbags and extract images."""
-    for rosbag_file in tqdm(os.listdir(ROSBAGS_DIR), desc="Processing rosbags"):
-        print(rosbag_file)
-        
-        if not (rosbag_file == '2011_09_29_drive_0071_sync_bag'):
-            continue
-        rosbag_path = os.path.join(ROSBAGS_DIR, rosbag_file)
-        output_dir = os.path.join(OUTPUT_BASE_DIR, rosbag_file) 
-        csv_dir = os.path.join(CSV_DIR, rosbag_file + '.csv')
+    processed_paths = set()
 
-        format = detect_bag_format(rosbag_path)
-        if not format:
-            print(f"Skipping unknown format: {rosbag_file}")
-            continue
+    for root, dirs, files in os.walk(ROSBAGS_DIR):
+        if "metadata.yaml" in files:
+            rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
+            if rosbag_path in processed_paths:
+                continue
+            processed_paths.add(rosbag_path)
 
-        if os.path.exists(output_dir) and os.listdir(output_dir):
-            print(f"Skipping already processed rosbag: {rosbag_file}")
-            continue
-        
-        print(f"Processing rosbag: {rosbag_file}")
-        extract_images_from_rosbag(rosbag_path, output_dir, csv_dir, format)
+            rosbag_name = os.path.basename(rosbag_path)
+            output_dir = os.path.join(OUTPUT_BASE_DIR, rosbag_name)
+            csv_path = os.path.join(CSV_DIR, rosbag_name + '.csv')
+
+            format = detect_bag_format(rosbag_path)
+            if not format:
+                print(f"Skipping unknown format: {rosbag_name}")
+                continue
+
+            if os.path.exists(output_dir) and os.listdir(output_dir):
+                print(f"Skipping already processed rosbag: {rosbag_name}")
+                continue
+
+            print(f"Processing rosbag: {rosbag_name}")
+            extract_images_from_rosbag(rosbag_path, output_dir, csv_path, format)
 
 if __name__ == "__main__":
     main()

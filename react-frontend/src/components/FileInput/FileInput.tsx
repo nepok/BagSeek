@@ -107,6 +107,31 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
                   overflowX: 'hidden',
                 },
               }}
+              renderValue={(selected) => {
+                const color = generateColor(selected.split('/').pop() || '');
+                return (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box
+                      sx={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        backgroundColor: color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {selected}
+                    </Box>
+                  </Box>
+                );
+              }}
             >
               {filePaths.map((path, index) => (
                 <MenuItem

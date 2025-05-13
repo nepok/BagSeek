@@ -4,17 +4,19 @@ import numpy as np
 from rosbags.rosbag2 import Reader  # type: ignore
 from collections import defaultdict
 
+from tqdm import tqdm
+
 # Define constants for paths
 BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
 ROSBAGS_DIR = "/mnt/data/rosbags"
-LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, "lookup_tables/lookup_tables_new_test")
+LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, "lookup_tables")
 
 def process_rosbag(rosbag_path, csv_path):
     topic_data = defaultdict(list)
     
     try:
         with Reader(rosbag_path) as reader:
-            for connection, timestamp, rawdata in reader.messages():
+            for connection, timestamp, rawdata in tqdm(reader.messages(), desc="Reading rosbag"):
                 if connection.topic in ["/tf", "/tf_static"]:
                     continue
                 topic_data[connection.topic].append(timestamp)
@@ -35,7 +37,7 @@ def process_rosbag(rosbag_path, csv_path):
 
     # Align each topic to the reference timeline
     aligned_data = {}
-    for topic, timestamps in topic_data.items():
+    for topic, timestamps in tqdm(topic_data.items(), desc="Aligning topics"):
         aligned_list = []
         index = 0
         for ref_time in reference_timestamps:
@@ -75,15 +77,23 @@ def process_rosbag(rosbag_path, csv_path):
     print(f"CSV file generated: {csv_path}")
 
 def main():
-    for rosbag_name in os.listdir(ROSBAGS_DIR):
-        rosbag_path = os.path.join(ROSBAGS_DIR, rosbag_name)
-        csv_path = os.path.join(LOOKUP_TABLES_DIR, f"{rosbag_name}.csv")
-        
-        if not os.path.exists(csv_path):
-            print(f"Processing rosbag: {rosbag_name}")
-            process_rosbag(rosbag_path, csv_path)
-        else:
-            print(f"Skipping already processed rosbag: {rosbag_name}")
+    processed_paths = set()
+
+    for root, dirs, files in os.walk(ROSBAGS_DIR):
+        if "metadata.yaml" in files:
+            rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
+            if rosbag_path in processed_paths:
+                continue
+            processed_paths.add(rosbag_path)
+
+            rosbag_name = os.path.basename(rosbag_path)
+            csv_path = os.path.join(LOOKUP_TABLES_DIR, f"{rosbag_name}.csv")
+            
+            if not os.path.exists(csv_path):
+                print(f"Processing rosbag: {rosbag_name}")
+                process_rosbag(rosbag_path, csv_path)
+            else:
+                print(f"Skipping already processed rosbag: {rosbag_name}")
 
 if __name__ == "__main__":
     main()

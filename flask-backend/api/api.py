@@ -23,6 +23,8 @@ import threading
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+EXPORT_PROGRESS = {"status": "idle", "progress": 0.0, "message": ""}
+
 # Define the base path
 BASE_DIR = '../src'
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
@@ -30,7 +32,7 @@ LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, 'lookup_tables')
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = "/mnt/data/rosbags"
-EXPORT_DIR = os.path.join(BASE_DIR, 'rosbags')
+EXPORT_DIR = "/mnt/data/rosbags/EXPORTED"
 SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
 CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
 
@@ -91,13 +93,14 @@ def save_canvases(data):
 
 # logic for exporting rosbag
 def export_rosbag_with_topics(src: Path, dst: Path, includedTopics) -> None:
-   
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     with Reader(src) as reader, Writer(dst, version=9) as writer:
         conn_map = {}
+        total_msgs = sum(1 for _ in reader.messages())  # Count total messages
+        msg_counter = 0
+
         for conn in reader.connections:
             ext = cast(ConnectionExtRosbag2, conn.ext)
-
             if conn.topic in includedTopics:
                 conn_map[conn.id] = writer.add_connection(
                     conn.topic,
@@ -107,21 +110,36 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics) -> None:
                     offered_qos_profiles=ext.offered_qos_profiles,
                 )
 
+        #from api import EXPORT_PROGRESS
+        EXPORT_PROGRESS["status"] = "running"
+        EXPORT_PROGRESS["progress"] = 0.0
+        EXPORT_PROGRESS["message"] = "Export started"
+
         for conn, timestamp, data in reader.messages():
-            # Adjust header timestamps, too
-            if conn.id not in conn_map:  # ← Filtere Nachrichten, die nicht in conn_map sind
+            if conn.id not in conn_map:
                 continue
-            
+            msg_counter += 1
+            EXPORT_PROGRESS["progress"] = round(msg_counter / total_msgs, 3)
+            EXPORT_PROGRESS["message"] = f"Exporting message {msg_counter} of {total_msgs}"
+
             msg = typestore.deserialize_cdr(data, conn.msgtype)
             if head := getattr(msg, 'header', None):
                 headstamp = head.stamp.sec * 10**9 + head.stamp.nanosec
                 head.stamp.sec = headstamp // 10**9
                 head.stamp.nanosec = headstamp % 10**9
-                outdata: memoryview | bytes = typestore.serialize_cdr(msg, conn.msgtype)
+                outdata = typestore.serialize_cdr(msg, conn.msgtype)
             else:
                 outdata = data
 
             writer.write(conn_map[conn.id], timestamp, outdata)
+
+        EXPORT_PROGRESS["status"] = "done"
+        EXPORT_PROGRESS["message"] = "Export completed"
+        EXPORT_PROGRESS["progress"] = 1.0
+
+@app.route('/api/export-status', methods=['GET'])
+def get_export_status():
+    return jsonify(EXPORT_PROGRESS)
 
 @app.route('/api/set-model', methods=['POST'])
 def post_model():

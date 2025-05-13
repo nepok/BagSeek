@@ -27,6 +27,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
     : undefined;
 
   const isImage = topic && (topic.includes("image") || topic.includes("camera"));
+  // Consider both "gps" topics and "/novatel/oem7/fix" as GPS topics
+  const isGpsTopic = topic?.includes("gps") || topic === "/novatel/oem7/fix";
 
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -88,39 +90,38 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
   }, [gpsData]);
 
   useEffect(() => {
-  
     // Clear the map if switching away from GPS
-    if (!topic?.includes("gps") && mapRef.current) {
+    if (!isGpsTopic && mapRef.current) {
       mapRef.current.remove(); // Properly remove the map instance
       mapRef.current = null;
     }
-  
+
     // Initialize or update the map if GPS topic is selected
-    if (topic?.includes("gps") && gpsData) {
+    if (isGpsTopic && gpsData) {
       // Initialize the map ONLY if it doesn't exist or when switching back to GPS
       if (!mapRef.current && mapContainerRef.current) {
         mapRef.current = L.map(mapContainerRef.current).setView(
           [gpsData.latitude, gpsData.longitude], 16
         );
-  
+
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
           attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         }).addTo(mapRef.current!);
       }
-  
+
       // Always update the view and layers when GPS data changes
       if (mapRef.current) {
         mapRef.current.setView([gpsData.latitude, gpsData.longitude], 16);
         mapRef.current.invalidateSize();
-  
+
         // Clear existing markers and polylines
         mapRef.current.eachLayer((layer) => {
           if (layer instanceof L.Circle || layer instanceof L.Polyline) {
             mapRef.current?.removeLayer(layer);
           }
         });
-  
+
         // Add the new marker
         if (mapRef.current) {
           L.circle([gpsData.latitude, gpsData.longitude], {
@@ -130,7 +131,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
             fillOpacity: 0.8
           }).addTo(mapRef.current);
         }
-  
+
         // Draw the path as a polyline
         if (gpsPath.length > 1 && mapRef.current) {
           L.polyline(gpsPath, {
