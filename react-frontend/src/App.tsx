@@ -17,14 +17,16 @@ interface Node {
 }
 
 interface NodeMetadata {
-  topic: string | null;
-  timestamp: number | null;
+  nodeTopic: string | null;
+  nodeTopicType: string | null; // Type of the topic, e.g., "sensor_msgs/Image"
 }
 
 function App() {
-  const [timestamps, setTimestamps] = useState<number[]>([]);
+  const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
-  const [topics, setTopics] = useState<string[]>([]);
+  const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});
+  const [availableTopics, setAvailableTopics] = useState<string[]>([]);
+  const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});
   const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);
   const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);
@@ -32,63 +34,54 @@ function App() {
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null); 
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});
-
-  //console.log("Current Root: ", currentRoot, "Current Metadata: ", currentMetadata);
+  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);
 
   const handleCanvasChange = (root: Node, metadata: { [id: number]: NodeMetadata }) => {
     setCurrentRoot(root);
     setCurrentMetadata(metadata);
   };
   
-  // Update selectedTimestamp when timestamps change
+  // Update selectedTimestamp when availableTimestamps change
   useEffect(() => {
-    if (timestamps.length > 0) {
-      setSelectedTimestamp(timestamps[0]); // Default to the first timestamp
+    if (availableTimestamps.length > 0) {
+      setSelectedTimestamp(availableTimestamps[0]); // Default to the first timestamp
     } else {
       setSelectedTimestamp(null); // Clear the selection if no timestamps
     }
-  }, [timestamps]); // This effect runs whenever `timestamps` changes
+  }, [availableTimestamps]); // This effect runs whenever `availableTimestamps` changes
 
-  // Update topics, timestamps and rosbag name if rosbag changes
+  
   useEffect(() => {
-    fetch('/api/topics')
-      .then((response) => response.json())
-      .then((data) => {
-        setTopics(data.topics);
-      })
-      .catch((error) => {
-        console.error('Error fetching topics:', error);
-      });
+    const loadAllCanvases = async () => {
+      try {
+        const response = await fetch('/api/load-canvases');
+        const data = await response.json();
+        setCanvasList(data);
+      } catch (error) {
+        console.error('Error loading all canvases:', error);
+      }
+    };
 
-    fetch('/api/timestamps')
-      .then((response) => response.json())
-      .then((data) => {
-        setTimestamps(data.timestamps);
-        if (data.timestamps.length > 0) {
-          setSelectedTimestamp(data.timestamps[0]);
-        }
-      })
-      .catch((error) => {
-        console.error('Error fetching timestamps:', error);
-      });
-
-    fetch('/api/get-selected-rosbag')
-      .then((response) => response.json())
-      .then((data) => {
-        setSelectedRosbag(data.selectedRosbag);
-      })
-      .catch((error) => {
-        console.error('Error fetching selected rosbag:', error);
-      });
-
-  }, [selectedRosbag]);
-
-  useEffect(() => {
-    handleLoadCanvas(""); // Load all canvases on startup
+    loadAllCanvases();
   }, []);
 
-  const handleSliderChange = (value: number) => {
+  const handleSliderChange = async (value: number) => {
     setSelectedTimestamp(value);
+    
+    try {
+      const response = await fetch('/api/set-reference-timestamp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ referenceTimestamp: value }),
+      });
+
+      const data = await response.json(); // Expecting { mappedTimestamps: { "/topic/name": real_ts, ... } }
+      setMappedTimestamps(data.mappedTimestamps); // 👈 Store it here
+    } catch (error) {
+      console.error('Error sending reference timestamp:', error);
+    }
   };
 
   const handleAddCanvas = async (name: string) => {
@@ -99,7 +92,7 @@ function App() {
       metadata: currentMetadata,
       rosbag: selectedRosbag,
     };
-  
+
     try {
       await fetch('/api/save-canvas', {
         method: 'POST',
@@ -109,7 +102,6 @@ function App() {
           canvas: newCanvas
         }),
       });
-  
       // Update local state
       setCanvasList(prev => ({
         ...prev,
@@ -141,29 +133,37 @@ function App() {
       <FileInput
         isVisible={isFileInputVisible}
         onClose={() => setIsFileInputVisible(false)}
-        onTopicsUpdate={() => {
-          fetch('/api/topics')
+        onAvailableTopicsUpdate={() => {
+          fetch('/api/get-available-topics')
             .then((response) => response.json())
             .then((data) => {
-              setTopics(data.topics);
+              setAvailableTopics(data.availableTopics);
             })
             .catch((error) => {
-              console.error('Error fetching topics:', error);
+              console.error('Error fetching available topics:', error);
             });
         }}
-        onTimestampsUpdate={() => {
-          //console.log("Timstamps update");
-          fetch('/api/timestamps')
+        onAvailableTopicTypesUpdate={() => {
+          fetch('/api/get-available-topic-types')
             .then((response) => response.json())
             .then((data) => {
-              setTimestamps(data.timestamps);
+              setAvailableTopicTypes(data.availableTopicTypes);
             })
             .catch((error) => {
-              console.error('Error fetching timestamps:', error);
+              console.error('Error fetching available topic types:', error);
             });
         }}
-        onRosbagUpdate={() => {
-          //console.log("Rosbag update");
+        onAvailableTimestampsUpdate={() => {
+          fetch('/api/get-available-timestamps')
+            .then((response) => response.json())
+            .then((data) => {
+              setAvailableTimestamps(data.availableTimestamps);
+            })
+            .catch((error) => {
+              console.error('Error fetching available timestamps:', error);
+            });
+        }}
+        onSelectedRosbagUpdate={() => {
           fetch('/api/get-selected-rosbag')
             .then((response) => response.json())
             .then((data) => {
@@ -175,10 +175,12 @@ function App() {
         }}
       />
       <Export
-        timestamps={timestamps}
-        topics={topics}
+        timestamps={availableTimestamps}
+        topics={availableTopics}
+        topicTypes={availableTopicTypes}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
+        searchMarks={searchMarks}
       />
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header 
@@ -189,18 +191,21 @@ function App() {
           handleAddCanvas={handleAddCanvas}
         />
         <SplittableCanvas 
-          topics={topics} 
-          selectedTimestamp={selectedTimestamp} 
+          availableTopics={availableTopics} 
+          availableTopicTypes={availableTopicTypes}
+          mappedTimestamps={mappedTimestamps}
           selectedRosbag={selectedRosbag}
           onCanvasChange={handleCanvasChange}
           currentRoot={currentRoot} // Pass currentRoot here
           currentMetadata={currentMetadata} // Pass currentMetadata here
         />
         <TimestampSlider
-          timestamps={timestamps}
+          availableTimestamps={availableTimestamps}
           selectedTimestamp={selectedTimestamp}
           onSliderChange={handleSliderChange}
           selectedRosbag={selectedRosbag}
+          searchMarks={searchMarks}
+          setSearchMarks={setSearchMarks}
         />
       </div>
     </ThemeProvider>

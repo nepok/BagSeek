@@ -1,7 +1,5 @@
 node_modules
 flask-backend/src/
-flask-backend/api/
-!flask-backend/api/api.py
 .vscode
 test.py
 exporttest.py

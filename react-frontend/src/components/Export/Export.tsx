@@ -1,19 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress } from '@mui/material';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress, ButtonGroup } from '@mui/material';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
+import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
 
 interface ExportProps {
   timestamps: number[];
   topics: string[];
   isVisible: boolean;
   onClose: () => void;
+  searchMarks: { value: number; label: string }[];
+  topicTypes: Record<string, string>;
 }
 
-const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose }) => {
+const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose, searchMarks, topicTypes }) => {
+
   const [selectedRosbag, setSelectedRosbag] = useState('');
   const [newRosbagName, setNewRosbagName] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState<'topic' | 'type'>('topic');
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
   const [exportStatus, setExportStatus] = useState<{progress: number, message: string, status: string} | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -176,7 +182,21 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
   };
 
   const handleTopicChange = (event: SelectChangeEvent<string[]>) => {
-    setSelectedTopics(event.target.value as string[]);
+    const topicsSelected = event.target.value as string[];
+    setSelectedTopics(topicsSelected);
+    // Falls im Type-Modus: synchronisiere selectedTypes
+    if (selectionMode === 'type') {
+      // Finde alle Typen, die in den neuen Topics enthalten sind
+      const types = Array.from(new Set(topicsSelected.map(t => topicTypes[t])));
+      setSelectedTypes(types);
+    }
+  };
+
+  const handleTypeChange = (event: SelectChangeEvent<string[]>) => {
+    const types = event.target.value as string[];
+    setSelectedTypes(types);
+    const filteredTopics = topics.filter(t => types.includes(topicTypes[t]));
+    setSelectedTopics(filteredTopics);
   };
 
   const formatDate = (timestamp: number): string => {
@@ -241,24 +261,65 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
           value={newRosbagName}
           onChange={(e) => setNewRosbagName(e.target.value)}
         />
-        <FormControl fullWidth margin="dense">
-          <InputLabel id="topics-label">Topics</InputLabel>
-          <Select
-            labelId="topics-label"
-            id="topics"
-            multiple
-            value={selectedTopics}
-            onChange={handleTopicChange}
-            renderValue={(selected) => (selected as string[]).join(', ')}
+        <ButtonGroup
+          sx={{ my: 2, display: 'flex', width: '100%' }}
+          variant="outlined"
+        >
+          <Button
+            sx={{ flex: 1 }}
+            variant={selectionMode === 'topic' ? 'contained' : 'outlined'}
+            onClick={() => setSelectionMode('topic')}
           >
-            {topics.map((topic) => (
-              <MenuItem key={topic} value={topic}>
-                <Checkbox checked={selectedTopics.includes(topic)} />
-                <ListItemText primary={topic} />
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+            Topics
+          </Button>
+          <Button
+            sx={{ flex: 1 }}
+            variant={selectionMode === 'type' ? 'contained' : 'outlined'}
+            onClick={() => setSelectionMode('type')}
+          >
+            Types
+          </Button>
+        </ButtonGroup>
+        {selectionMode === 'topic' && (
+          <FormControl fullWidth margin="dense">
+            <InputLabel id="topics-label">Topics</InputLabel>
+            <Select
+              labelId="topics-label"
+              id="topics"
+              multiple
+              value={selectedTopics}
+              onChange={handleTopicChange}
+              renderValue={(selected) => (selected as string[]).join(', ')}
+            >
+              {topics.map((topic) => (
+                <MenuItem key={topic} value={topic}>
+                  <Checkbox checked={selectedTopics.includes(topic)} />
+                  <ListItemText primary={topic} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
+        {selectionMode === 'type' && (
+          <FormControl fullWidth margin="dense">
+            <InputLabel id="types-label">Types</InputLabel>
+            <Select
+              labelId="types-label"
+              id="types"
+              multiple
+              value={selectedTypes}
+              onChange={handleTypeChange}
+              renderValue={(selected) => (selected as string[]).join(', ')}
+            >
+              {Array.from(new Set(Object.values(topicTypes))).map((type) => (
+                <MenuItem key={type} value={type}>
+                  <Checkbox checked={selectedTypes.includes(type)} />
+                  <ListItemText primary={type} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
         <Box sx={{ mt: 2 }}>
           <Slider
             value={exportRange}
@@ -267,11 +328,22 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose 
             min={0}
             max={Math.max(0, timestamps.length - 1)}
             valueLabelFormat={valueLabelFormat}
+            components={{
+              Track: (props) => (
+                <CustomTrack
+                  {...props}
+                  marks={searchMarks}
+                  timestampCount={timestamps.length}
+                  bins={1000} // optional
+                  windowSize={50} // optional
+                />
+              ),
+            }}
           />
         </Box>
-        <Box sx={{ mt: 2, height: 400 }}>
+        {/* <Box sx={{ mt: 2, height: 400 }}>
           <div ref={mapContainerRef} style={{ height: '400px', width: '100%' }}></div>
-        </Box>
+        </Box>*/} 
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} color="primary">

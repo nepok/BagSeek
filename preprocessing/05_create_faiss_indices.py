@@ -31,14 +31,24 @@ def load_embeddings(input_dir):
 
 def create_faiss_index(embeddings):
     """Create a FAISS index from the given embeddings."""
-    index = faiss.IndexFlatL2(embeddings.shape[1])
+    num_embeddings, dim = embeddings.shape
+    if num_embeddings <= 50_000:
+        print(f"Creating IndexFlatIP for {num_embeddings} embeddings.")
+        index = faiss.IndexFlatIP(dim)
+    else:
+        print(f"Creating IndexIVFFlat for {num_embeddings} embeddings.")
+        nlist = int(8 * (num_embeddings ** 0.5))  # 8 * sqrt(n) as a heuristic
+        print(f"Using nlist = {nlist}")
+        quantizer = faiss.IndexFlatIP(dim)  # Coarse quantizer
+        index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        index.train(embeddings)
     index.add(embeddings)
     return index
 
 def process_embedding_folder(model, folder_name):
     """Process a single embedding folder and create a FAISS index."""
     embedding_folder_path = os.path.join(EMBEDDINGS_DIR, model, folder_name)
-    index_output_dir = os.path.join(INDICES_DIR, model, folder_name)
+    index_output_dir = os.path.join(INDICES_DIR, model, f"{folder_name}_big_index")
     
     print(embedding_folder_path)
     print(index_output_dir)
@@ -62,13 +72,14 @@ def process_embedding_folder(model, folder_name):
         print(f"No embeddings found in {embedding_folder_path}")
 
 def main():
-
     """Main function to iterate over all embedding folders and process them."""
     # List all model-specific embedding folders
     for model_folder in tqdm(os.listdir(EMBEDDINGS_DIR), desc="Processing model folders"):
         model_folder_path = os.path.join(EMBEDDINGS_DIR, model_folder)
         if os.path.isdir(model_folder_path):
             for rosbag in os.listdir(model_folder_path):
+                if not rosbag.startswith("scheibenegge_long_"):
+                    continue
                 #index_path = os.path.join(model_folder_path, rosbag)
                 process_embedding_folder(model_folder, rosbag)
 

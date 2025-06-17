@@ -8,27 +8,26 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface NodeContentProps {
-  topic: string | null;
-  timestamp: number | null; // Timestamp passed for fetching relevant data
+  nodeTopic: string | null;
+  nodeTopicType: string | null; // Type of the topic, e.g., "sensor_msgs/Image"
   selectedRosbag: string | null;
+  mappedTimestamp: number | null; // Optional timestamp for image reference
 }
 
-const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRosbag }) => {
+const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp }) => {
   //const [image, setImage] = useState<string | null>(null); // Store the fetched image
+  const [referenceMap, setReferenceMap] = useState<Record<string, Record<string, string>>>({});
   const [text, setText] = useState<string | null>(null);   // Store the fetched text
-  const [points, setPoints] = useState<number[] | null>(null); // Store fetched point cloud
+  const [pointCloud, setPointCloud] = useState<number[] | null>(null); // Store fetched point cloud
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
-  const [gpsData, setGpsData] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null);
+  const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null);
   const [gpsPath, setGpsPath] = useState<[number, number][]>([]);
-
+  const [dataType, setDataType] = useState<string | null>(null); // Store the type of data fetched
+ 
   const imageUrl =
-  topic && timestamp && selectedRosbag
-    ? `http://localhost:5000/images/${selectedRosbag}/${topic.replaceAll("/", "__")}-${timestamp}.webp`
-    : undefined;
-
-  const isImage = topic && (topic.includes("image") || topic.includes("camera"));
-  // Consider both "gps" topics and "/novatel/oem7/fix" as GPS topics
-  const isGpsTopic = topic?.includes("gps") || topic === "/novatel/oem7/fix";
+    nodeTopic && mappedTimestamp && selectedRosbag
+      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}-${mappedTimestamp}.webp`
+      : undefined;
 
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -36,72 +35,75 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
   // Function to fetch data based on the topic and timestamp
   const fetchData = async () => {
     try {
-      const response = await fetch(`/api/ros?timestamp=${timestamp}&topic=${topic}`);
+      const response = await fetch(`/api/content?timestamp=${mappedTimestamp}&topic=${nodeTopic}`);
       const data = await response.json();
-      // Reset all states
-      //setImage(null);
-      setText(null);
-      setPoints(null);
-      setGpsData(null);
 
-      // Dynamically update state based on the keys present in the response
-      //if (data.image) {
-      //  setImage(data.image);
-      //}
-      if (data.gpsData) {
-        setGpsData(data.gpsData);
+      setText(null);
+      setPointCloud(null);
+      setPosition(null);
+
+      if(data.type) {
+        setDataType(data.type);
       }
-      if (data.points) {
-        setPoints(data.points);
-      }
-      if (data.text) {
-        setText(data.text);
-      }
-      if (data.realTimestamp) {
-        setRealTimestamp(data.realTimestamp);
+
+      switch (data.type) {
+        case 'text':
+          setText(data.text);
+          break;
+        case 'pointCloud':
+          setPointCloud(data.pointCloud);
+          break;
+        case 'position':
+          setPosition(data.position);
+          break;
+        default:
+          console.warn("Unknown data type:", data.type);
       }
     } catch (error) {
       console.error("Error fetching data:", error);
       // Reset all states in case of error
-      //setImage(null);
       setText(null);
-      setPoints(null);
+      setPointCloud(null);
       setRealTimestamp(null);
     }
   };
 
   // Trigger fetch when topic or timestamp changes
   useEffect(() => {
-    if (topic && timestamp && selectedRosbag) {
-      if (!topic.includes("image") && !topic.includes("camera")) { // Only call the API if there is NO image or camera        
+    if (nodeTopic && nodeTopicType && mappedTimestamp && selectedRosbag) {
+      // Only call the API if the topicType is not an image
+      if (
+        nodeTopicType !== "sensor_msgs/msg/CompressedImage" &&
+        nodeTopicType !== "sensor_msgs/msg/Image"
+      ) {
         fetchData();
       } else {
         setText(null);
-        setPoints(null);
-        setGpsData(null);
+        setPointCloud(null);
+        setPosition(null);
       }
     }
-  }, [topic, timestamp, selectedRosbag]);
+  }, [nodeTopic, nodeTopicType, mappedTimestamp, selectedRosbag]);
 
   useEffect(() => {
-    if (gpsData) {
-      setGpsPath(prevPath => [...prevPath, [gpsData.latitude, gpsData.longitude]]);
+    if (position) {
+      setGpsPath(prevPath => [...prevPath, [position.latitude, position.longitude]]);
     }
-  }, [gpsData]);
+  }, [position]);
 
   useEffect(() => {
     // Clear the map if switching away from GPS
-    if (!isGpsTopic && mapRef.current) {
-      mapRef.current.remove(); // Properly remove the map instance
+    if ((nodeTopicType !== "sensor_msgs/msg/NavSatFix" && nodeTopicType !== "novatel_oem7_msgs/msg/BESTPOS") && mapRef.current) {
+      mapRef.current.remove();
       mapRef.current = null;
     }
 
     // Initialize or update the map if GPS topic is selected
-    if (isGpsTopic && gpsData) {
+    if (position) {
       // Initialize the map ONLY if it doesn't exist or when switching back to GPS
       if (!mapRef.current && mapContainerRef.current) {
         mapRef.current = L.map(mapContainerRef.current).setView(
-          [gpsData.latitude, gpsData.longitude], 16
+          [position.latitude, position.longitude], 16
         );
 
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -112,7 +114,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
 
       // Always update the view and layers when GPS data changes
       if (mapRef.current) {
-        mapRef.current.setView([gpsData.latitude, gpsData.longitude], 16);
+        mapRef.current.setView([position.latitude, position.longitude], 16);
         mapRef.current.invalidateSize();
 
         // Clear existing markers and polylines
@@ -124,8 +126,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
 
         // Add the new marker
         if (mapRef.current) {
-          L.circle([gpsData.latitude, gpsData.longitude], {
-            radius: 8, 
+          L.circle([position.latitude, position.longitude], {
+            radius: 8,
             color: 'blue',
             fillColor: 'blue',
             fillOpacity: 0.8
@@ -133,20 +135,20 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
         }
 
         // Draw the path as a polyline
-        if (gpsPath.length > 1 && mapRef.current) {
+        /*if (gpsPath.length > 1 && mapRef.current) {
           L.polyline(gpsPath, {
             color: 'blue',
             weight: 3,
           }).addTo(mapRef.current);
-        }
+        }*/
       }
     }
-  }, [topic, gpsData, gpsPath]);
+  }, [nodeTopicType, position, gpsPath]);
 
   // Point cloud rendering component
-  const PointCloud: React.FC<{ points: number[] }> = ({ points }) => {
+  const PointCloud: React.FC<{ pointCloud: number[] }> = ({ pointCloud }) => {
     const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(points);
+    const positions = new Float32Array(pointCloud);
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
     const material = new THREE.PointsMaterial({
@@ -168,73 +170,77 @@ const NodeContent: React.FC<NodeContentProps> = ({ topic, timestamp, selectedRos
     return null; // No need to render anything here
   };
 
-  // Render content based on the type of data fetched
-  return (
-    <div className="node-content">
-      {isImage && (
-        <div className="image-container">
-          <img
-            src={imageUrl}
-            alt="Select a topic"
-            loading="lazy"
-          />
-          <div className="typography-box">
-            <Typography
-              variant="body2"
-              sx={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {topic}
-            </Typography>
-            <Typography variant="body2">{realTimestamp}</Typography>
-          </div>
-        </div>
-      )}
-
-      {points && (
-        <div className="canvas-container">
-          <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
-            <RotateScene /> {/* Rotate the whole scene */}
-            <OrbitControls /> {/* Set the target to rotate the camera */}
-            <pointLight position={[10, 10, 10]} />
-            <PointCloud points={points} />
-          </Canvas>
-          <div className="typography-box">
-            <Typography variant="body2">{topic}</Typography>
-            <Typography variant="body2">{realTimestamp}</Typography>
-          </div>
-        </div>
-      )}
-
-      {text && (
-        <Box>
-          <Typography variant="body2" sx={{ color: "white", whiteSpace: "pre-wrap" }}>
-            {text}
+  // Render content based on the topicType
+  let renderedContent: React.ReactNode = null;
+  if ((nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image") && imageUrl) {
+    renderedContent = (
+      <div className="image-container">
+        <img
+          src={imageUrl}
+          alt={`Image for ${nodeTopic}`}
+          loading="lazy"
+        />
+        <div className="typography-box">
+          <Typography
+            variant="body2"
+            sx={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {nodeTopic}
           </Typography>
-          <div className="typography-box">
-            <Typography variant="body2">{topic}</Typography>
-            <Typography variant="body2">{realTimestamp}</Typography>
-          </div>
-        </Box>
-      )}
-
-    {gpsData && (
-      <div className="gps-container">           
+          <Typography variant="body2">{realTimestamp}</Typography>
+        </div>
+      </div>
+    );
+  } else if (pointCloud) {
+    renderedContent = (
+      <div className="canvas-container">
+        <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
+          <RotateScene />
+          <OrbitControls />
+          <pointLight position={[10, 10, 10]} />
+          <PointCloud pointCloud={pointCloud} />
+        </Canvas>
+        <div className="typography-box">
+          <Typography variant="body2">{nodeTopic}</Typography>
+          <Typography variant="body2">{realTimestamp}</Typography>
+        </div>
+      </div>
+    );
+  } else if (text) {
+    renderedContent = (
+      <Box>
+        <Typography variant="body2" sx={{ color: "white", whiteSpace: "pre-wrap" }}>
+          {text}
+        </Typography>
+        <div className="typography-box">
+          <Typography variant="body2">{nodeTopic}</Typography>
+          <Typography variant="body2">{realTimestamp}</Typography>
+        </div>
+      </Box>
+    );
+  } else if (position) {
+    renderedContent = (
+      <div className="gps-container">
         <div ref={mapContainerRef} className="map-container"></div>
       </div>
-    )}
+    );
+  } else {
+    renderedContent = (
+      <div className="centered-text">
+        <p style={{ color: "white", fontSize: "0.8rem" }}>
+          {nodeTopic ? "No content found for this topic and timestamp." : "Select a topic"}
+        </p>
+      </div>
+    );
+  }
 
-      {/* Default case: No data */}
-      {!imageUrl && !points && !text && !gpsData && (
-        <div className="centered-text">
-          <p style={{ color: "white", fontSize: "0.8rem" }}>
-            {topic ? "No data availible" : "Select a topic"}
-          </p>
-        </div>
-      )}
+  return (
+    <div className="node-content">
+      {renderedContent}
     </div>
   );
 };

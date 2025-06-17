@@ -1,3 +1,4 @@
+import json
 import os
 import csv
 import pandas as pd
@@ -70,15 +71,18 @@ def save_image(img, img_filepath):
 
 def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir):
     """Extracts and saves an image from a single message."""
-    row = aligned_data[aligned_data[topic] == str(timestamp)]
-
+    # Find the row(s) in aligned_data where the topic timestamp matches the current message timestamp
+    matching_rows = aligned_data[topic] == str(timestamp)
     try:
-        reference_timestamp = row['Reference Timestamp'].iloc[0]
-    except:
+        # Use the index of the first matching row to get the correct reference timestamp
+        ref_row_index = matching_rows.idxmax()
+        reference_timestamp = aligned_data.iloc[ref_row_index]["Reference Timestamp"]
+    except Exception as e:
         print(f"Error: No reference timestamp found for {topic} at {timestamp}")
         return
 
-    img_filename = f"{topic.replace('/', '__')}-{reference_timestamp}.webp"
+    # Save image using the actual message timestamp (not the reference timestamp)
+    img_filename = f"{topic.replace('/', '__')}-{timestamp}.webp"
     img_filepath = os.path.join(output_dir, img_filename)
 
     if os.path.exists(img_filepath):
@@ -87,7 +91,7 @@ def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir):
 
     try:
         if isinstance(msg, CompressedImage) or msg.__class__.__name__ == "sensor_msgs__msg__CompressedImage":
-            # For compressed image (e.g., JPEG)        elif isinstance(msg, Image) or msg.__class__.__name__ == "sensor_msgs__msg__Image":
+            # For compressed image (e.g., JPEG)
             np_arr = np.frombuffer(msg.data, np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if img is None:
@@ -127,17 +131,39 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str, csv_path: str,
     os.makedirs(output_dir, exist_ok=True)
     aligned_data = pd.read_csv(csv_path, dtype=str)
 
+    # Detect rosbag format
+    format = detect_bag_format(rosbag_path)
+
+    # Load image topics from the topic JSON file
+    rosbag_name = os.path.basename(rosbag_path)
+    topic_json_path = os.path.join(BASE_DIR, "topics", rosbag_name + ".json")
+    with open(topic_json_path, "r") as f:
+        topic_metadata = json.load(f)
+
+    image_topics = [
+        topic for topic, msg_type in topic_metadata["types"].items()
+        if msg_type in ("sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image")
+    ]
+
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = []
 
         if format == 'db3':
             with Reader(rosbag_path) as reader:
-                connections = [x for x in reader.connections if 'image' in x.topic.lower() and x.topic != '/camera_image/Cam_MR']
+                connections = [x for x in reader.connections if x.topic in image_topics]
                 for connection, timestamp, rawdata in tqdm(reader.messages(connections=connections), desc=f"Extracting {os.path.basename(rosbag_path)}"):
                     try:
                         msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
+                        # Robust timestamp lookup and topic existence
+                        # Ensure the topic exists in the aligned data
                         if connection.topic not in aligned_data.columns:
-                            print(f'Error: Topic {connection.topic} not found in aligned_data')
+                            print(f"Warning: Topic {connection.topic} not found in aligned data — skipping message at {timestamp}")
+                            continue
+
+                        # Check if the current message timestamp is referenced
+                        matching_rows = aligned_data[connection.topic] == str(timestamp)
+                        if not matching_rows.any():
+                            print(f"\nWarning: No reference timestamp found for {connection.topic} at {timestamp} — skipping.")
                             continue
 
                         future = executor.submit(extract_image_from_message, msg, connection.topic, timestamp, aligned_data, output_dir)
@@ -155,8 +181,14 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str, csv_path: str,
                     if msg is None:
                         print(f"Skipping {topic} at {timestamp}: No valid message data.")
                         continue
+                    # Robust timestamp lookup and topic existence
                     if topic not in aligned_data.columns:
-                        print(f'Error: Topic {topic} not found in aligned_data')
+                        print(f"Warning: Topic {topic} not found in aligned data — skipping message at {timestamp}")
+                        continue
+
+                    matching_rows = aligned_data[topic] == str(timestamp)
+                    if not matching_rows.any():
+                        print(f"Warning: No reference timestamp found for {topic} at {timestamp} — skipping.")
                         continue
 
                     future = executor.submit(extract_image_from_message, msg, topic, timestamp, aligned_data, output_dir)
@@ -170,16 +202,15 @@ def extract_images_from_rosbag(rosbag_path: str, output_dir: str, csv_path: str,
 
 def main():
     """Main function to iterate over all rosbags and extract images."""
-    processed_paths = set()
 
     for root, dirs, files in os.walk(ROSBAGS_DIR):
         if "metadata.yaml" in files:
             rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
-            if rosbag_path in processed_paths:
-                continue
-            processed_paths.add(rosbag_path)
 
-            rosbag_name = os.path.basename(rosbag_path)
+            if "EXCLUDED" in rosbag_path:
+                continue
+            rosbag_name = os.path.basename(rosbag_path).replace(".db3", "")
+
             output_dir = os.path.join(OUTPUT_BASE_DIR, rosbag_name)
             csv_path = os.path.join(CSV_DIR, rosbag_name + '.csv')
 
@@ -193,7 +224,7 @@ def main():
                 continue
 
             print(f"Processing rosbag: {rosbag_name}")
-            extract_images_from_rosbag(rosbag_path, output_dir, csv_path, format)
+            #extract_images_from_rosbag(rosbag_path, output_dir, csv_path, format)
 
 if __name__ == "__main__":
     main()

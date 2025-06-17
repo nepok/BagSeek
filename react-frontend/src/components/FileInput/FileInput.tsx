@@ -4,9 +4,10 @@ import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormCon
 interface FileInputProps {
   isVisible: boolean;
   onClose: () => void;
-  onTopicsUpdate: () => void; // Callback for refreshing topics
-  onTimestampsUpdate: () => void; //Callback for refreshing timestamps
-  onRosbagUpdate: () => void; // Callback for refreshing rosbag
+  onAvailableTopicsUpdate: () => void; // Callback for refreshing topics
+  onAvailableTopicTypesUpdate: () => void; // Callback for refreshing topic types
+  onAvailableTimestampsUpdate: () => void; //Callback for refreshing timestamps
+  onSelectedRosbagUpdate: () => void; // Callback for refreshing rosbag
 }
 
 const generateColor = (selectedRosbag: string) => {
@@ -23,7 +24,7 @@ const generateColor = (selectedRosbag: string) => {
   return colors[hash % colors.length]; // Pick a color based on hash
 };
 
-const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdate, onTimestampsUpdate, onRosbagUpdate }) => {
+const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTopicsUpdate, onAvailableTopicTypesUpdate, onAvailableTimestampsUpdate, onSelectedRosbagUpdate }) => {
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [selectedRosbagPath, setSelectedRosbagPath] = useState<string>('');
   
@@ -58,9 +59,10 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onTopicsUpdat
         //console.log('File path updated:', data);
 
         // Trigger the topics update callback after setting the file path
-        onTopicsUpdate();
-        onTimestampsUpdate();
-        onRosbagUpdate();
+        onAvailableTopicsUpdate();      
+        onAvailableTopicTypesUpdate();  
+        onAvailableTimestampsUpdate();
+        onSelectedRosbagUpdate();
       })
       .catch((error) => {
         console.error('Error setting file path:', error);

@@ -60,7 +60,7 @@ export const CustomTrack: React.FC<CustomTrackProps> = ({
   }, [marks, timestampCount, bins, windowSize]);
 
   return (
-    <span className={className}>
+    <span>
       <StyledTrack>
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
           {densityData.map((val, idx) => (

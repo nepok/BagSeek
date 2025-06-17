@@ -13,21 +13,22 @@ interface Node {
 }
 
 interface NodeMetadata {
-  topic: string | null;
-  timestamp: number | null;
+  nodeTopic: string | null;
+  nodeTopicType: string | null;
 }
 
 interface SplittableCanvasProps {
-  topics: string[];
-  selectedTimestamp: number | null;
+  availableTopics: string[];
+  availableTopicTypes: { [topic: string]: string };
+  mappedTimestamps: { [topic: string]: number };
   selectedRosbag: string | null;
   onCanvasChange: (root: Node, metadata: { [id: number]: NodeMetadata }) => void;
   currentRoot: Node | null;
   currentMetadata: { [id: number]: NodeMetadata };
 }
 
-const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTimestamp, selectedRosbag, onCanvasChange, currentRoot, currentMetadata }) => {
-  
+const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, availableTopicTypes, mappedTimestamps, selectedRosbag, onCanvasChange, currentRoot, currentMetadata }) => {
+
   const [root, setRoot] = useState<Node>({ id: 1 });
   const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({});
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -40,17 +41,17 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
       Object.fromEntries(
         Object.entries(prev).map(([id, metadata]) => [
           id,
-          { ...metadata, timestamp: selectedTimestamp },
+          { ...metadata },
         ])
       )
     );
-  }, [selectedTimestamp]);
+  }, [mappedTimestamps]);
 
   useEffect(() => {
     setNodeMetadata((prev) => {
       const updatedMetadata = { ...prev };
       Object.keys(updatedMetadata).forEach((key) => {
-        updatedMetadata[parseInt(key)].topic = null;
+        updatedMetadata[parseInt(key)].nodeTopic = null;
       });
       return updatedMetadata;
     });
@@ -68,9 +69,9 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
     });
   }, [currentRoot, currentMetadata]);
 
-  //useEffect(() => {
-  //  onCanvasChange(root, nodeMetadata);
-  //}, [root, nodeMetadata]);
+  useEffect(() => {
+    onCanvasChange(root, nodeMetadata);
+  }, [root, nodeMetadata]);
 
   const updateNodeInTree = (currentNode: Node, updatedNode: Node): Node => {
     if (!currentNode) return updatedNode;
@@ -106,8 +107,8 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
         delete newMetadata[node.id];
 
         // Add new nodes with empty metadata
-        newMetadata[newLeft.id] = { topic: null, timestamp: null };
-        newMetadata[newRight.id] = { topic: null, timestamp: null };
+        newMetadata[newLeft.id] = { nodeTopic: null, nodeTopicType: null };
+        newMetadata[newRight.id] = { nodeTopic: null, nodeTopicType: null };
 
         return newMetadata;
       });
@@ -214,11 +215,11 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
   const handleSplitAction = (direction: 'horizontal' | 'vertical') => {
     if (currentNode) {
       splitNode(currentNode, direction);
-      const currentNodeMetadata = nodeMetadata[currentNode.id] || { topic: null, timestamp: null };
+      const currentNodeMetadata = nodeMetadata[currentNode.id] || { nodeTopic: null, nodeTopicType: null };
       setNodeMetadata((prev) => ({
         ...prev,
         [currentNode.id * 2]: { ...currentNodeMetadata },
-        [currentNode.id * 2 + 1]: { topic: null, timestamp: null },
+        [currentNode.id * 2 + 1]: { nodeTopic: null, nodeTopicType: null },
       }));
     }
     handleCloseMenu();
@@ -232,7 +233,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
     if (currentNode) {
       setNodeMetadata((prev) => ({
         ...prev,
-        [currentNode.id]: { topic, timestamp: selectedTimestamp },
+        [currentNode.id]: { nodeTopic: topic, nodeTopicType: availableTopicTypes[topic] },
       }));
     }
     setTopicMenuAnchorEl(null);
@@ -240,15 +241,20 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
   };
 
   const renderNode = (node: Node) => {
-    const metadata = nodeMetadata[node.id] || { topic: null, timestamp: null };
+    const metadata = nodeMetadata[node.id] || { nodeTopic: null, nodeTopicType: null };
 
     if (!node.left && !node.right) {
       return (
         <div className="canvas-node" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
           <NodeContent 
-            topic={metadata.topic} 
-            timestamp={metadata.timestamp}
+            nodeTopic={metadata.nodeTopic} 
+            nodeTopicType={metadata.nodeTopicType}
             selectedRosbag={selectedRosbag}
+            mappedTimestamp={
+              metadata.nodeTopic && mappedTimestamps[metadata.nodeTopic]
+                ? mappedTimestamps[metadata.nodeTopic]
+                : null
+            }
           />
           <IconButton
             size="small"
@@ -371,7 +377,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ topics, selectedTim
             ]}
           >
             <Paper>
-              {topics.map((topic) => (
+              {availableTopics.map((topic) => (
                 <MenuItem
                   key={topic}
                   onClick={() => handleTopicSelection(topic)}

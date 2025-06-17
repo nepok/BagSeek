@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import './TimestampSlider.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton } from '@mui/material';
+import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton, LinearProgress, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
 import SearchIcon from '@mui/icons-material/Search';
@@ -10,18 +10,23 @@ import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface TimestampSliderProps {
-  timestamps: number[];
+  availableTimestamps: number[];
   selectedTimestamp: number | null;
   onSliderChange: (value: number) => void;
   selectedRosbag: string | null;
+  searchMarks: { value: number; label: string }[];
+  setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; label: string }[]>>;
 }
 
-const TimestampSlider: React.FC<TimestampSliderProps> = ({
-  timestamps,
-  selectedTimestamp,
-  onSliderChange,
-  selectedRosbag
-}) => {
+const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
+  const {
+    availableTimestamps,
+    selectedTimestamp,
+    onSliderChange,
+    selectedRosbag,
+    searchMarks,
+    setSearchMarks,
+  } = props;
 
   const formatDate = (timestamp: number): string => {
     if (!timestamp || isNaN(timestamp)) {
@@ -37,13 +42,14 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       minute: '2-digit',
       second: '2-digit',
       hour12: false, // 24-hour format
+
     }).format(date);
 
     return berlinTime;
   };
 
   const [sliderValue, setSliderValue] = useState(
-    selectedTimestamp ? timestamps.indexOf(selectedTimestamp) : 0
+    selectedTimestamp ? availableTimestamps.indexOf(selectedTimestamp) : 0
   );
 
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
@@ -53,11 +59,12 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const [showFilter, setShowFilter] = useState(false); // State to control the visibility of the filter
   const [showModelSelection, setShowModelSelection] = useState(false); // State to control the visibility of the model selection
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string }[]>([]); // Initialize as an empty array of SearchResult objects  
-  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
+  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string; model?: string }[]>([]); // Initialize as an empty array of SearchResult objects  
+  //const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
   const [models, setModels] = useState<string[]>([]); // State to store the list of models
-  const [selectedModel, setSelectedModel] = useState<string>(''); // State to store the selected model
+  const [selectedModel, setSelectedModel] = useState<string>('ViT-B-16-quickgelu__openai');
+  const [isSearching, setIsSearching] = useState(false);
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
@@ -153,13 +160,13 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
     }, [showFilter]);
 
 
-  // update selected timestamp if slider or possible timestamps change
+  // update selected timestamp if slider or available timestamps change
   useEffect(() => {
     if (selectedTimestamp !== null) {
-      const index = timestamps.indexOf(selectedTimestamp);
+      const index = availableTimestamps.indexOf(selectedTimestamp);
       setSliderValue(index);
     }
-  }, [selectedTimestamp, timestamps]);
+  }, [selectedTimestamp, availableTimestamps]);
 
   // Method for fetching the API search results
   const fetchSearchResults = async (query: string) => {
@@ -199,7 +206,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   const handleSliderChange = (event: Event, value: number | number[]) => {
     const newValue = Array.isArray(value) ? value[0] : value;
     setSliderValue(newValue);
-    onSliderChange(timestamps[newValue]);
+    onSliderChange(availableTimestamps[newValue]);
   };
 
   const handlePlaybackSpeedChange = (event: SelectChangeEvent<number>) => {
@@ -211,8 +218,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       const intervalTime = 83.33 / newSpeed;
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + 1) % timestamps.length;
-          onSliderChange(timestamps[nextIndex]);
+          const nextIndex = (prevSliderValue + 1) % availableTimestamps.length;
+          onSliderChange(availableTimestamps[nextIndex]);
           return nextIndex;
         });
       }, intervalTime);
@@ -234,8 +241,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       }
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + 1) % timestamps.length;
-          onSliderChange(timestamps[nextIndex]);
+          const nextIndex = (prevSliderValue + 1) % availableTimestamps.length;
+          onSliderChange(availableTimestamps[nextIndex]);
           return nextIndex;
         });
       }, intervalTime);
@@ -269,9 +276,11 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
   
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      setIsSearching(true); // Start searching
       setSearchResults([]); // Clear the previous results
       setImageGallery([]); // Clear the previous images
       await fetchSearchResults(searchQuery);
+      setIsSearching(false); // End searching
     }
   };
 
@@ -311,7 +320,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ models: selectedValue }), // Send the selected model to the API
+        body: JSON.stringify({ model: selectedValue }), // Send the selected model to the API
       });
 
       if (!response.ok) {
@@ -324,34 +333,6 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       console.error('Error setting model:', error);
     }
   };
-
-  const heatmapData = useMemo(() => {
-    const bins = 1000; // mehr = glattere Heatmap
-    const windowSize = 50; // Anzahl Nachbarn links + rechts
-
-    const counts = new Array(bins).fill(0);
-    const total = timestamps.length;
-  
-    const markPositions = searchMarks.map((m) => m.value / total); // Normalisierte Positionen [0, 1]
-  
-    // Für jedes Bin die "Dichte" berechnen
-    for (let i = 0; i < bins; i++) {
-      const binCenter = i / bins;
-  
-      let score = 0;
-      for (const p of markPositions) {
-        const dist = Math.abs(p - binCenter);
-        if (dist < windowSize / bins) {
-          score += 1 - dist * bins / windowSize; // Linear fallend
-        }
-      }
-  
-      counts[i] = score;
-    }
-  
-    const max = Math.max(...counts);
-    return counts.map((c) => c / (max || 1)); // Normalisieren auf [0, 1]
-  }, [searchMarks, timestamps.length]);
 
   return (
     <div className="timestamp-slider-container">
@@ -388,7 +369,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       <Slider
         size="small"
         min={0}
-        max={timestamps.length - 1}
+        max={availableTimestamps.length - 1}
         step={1}
         value={sliderValue}
         onChange={handleSliderChange}
@@ -398,7 +379,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
             <CustomTrack
               {...props}
               marks={searchMarks}
-              timestampCount={timestamps.length}
+              timestampCount={availableTimestamps.length}
               bins={1000} // optional
               windowSize={50} // optional
             />
@@ -406,6 +387,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
         }}
         sx={{
           marginRight: '12px',
+          marginLeft: '10px',
           '& .MuiSlider-mark': {
             backgroundColor: '#FFA500',
             width: '3px',
@@ -441,14 +423,14 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
       </FormControl>
       
       {/* Filter icon button */}  
-      <IconButton
+      {/*<IconButton
         ref={filterIconRef}
         aria-label='filter'
         onClick={toggleFilter}
         sx={{ fontSize: '1.2rem' }}
       >
         <FilterAltIcon />
-      </IconButton>
+      </IconButton>*/} 
       {/* Search icon button to toggle the search input */}
       <IconButton 
         ref={searchIconRef} 
@@ -590,64 +572,60 @@ const TimestampSlider: React.FC<TimestampSliderProps> = ({
           },
         ]}
       >
-      <div style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'flex-start', // Align items to the left
-        width: '100%', // Allow images to fill the width of the container
-        gap: '8px', // Space between image and text
-        overflowY: 'auto', // In case there are many images, allow scrolling
-        padding: '8px',
-      }}>
-        {imageGallery && imageGallery.length > 0 ? (
-          imageGallery.map((imgUrl, index) => (
-            <div key={index} style={{ textAlign: 'left', width: '100%' }}>
-              <img
-                src={imgUrl}
-                alt={"No result available"}
-                style={{
-                  width: '100%', // Make the image fill the container's width
-                  height: 'auto', // Maintain the aspect ratio
-                  objectFit: 'contain', // Keep the image proportion intact
-                }}
-              />
-              <Typography 
-                variant="body2" 
-                sx={{ 
-                  color: 'white', 
-                  wordBreak: 'break-word', 
-                  marginTop: '4px', // Tiny margin between image and text
-                  fontSize: '0.7rem', // Make the font smaller (you can adjust this value)
-                }}
-              >
-                {
-                  searchResults[index] && (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          width: '100%',
+          gap: '8px',
+          padding: '8px',
+          maxHeight: '400px',
+          overflowY: 'auto',
+        }}>
+          {imageGallery && imageGallery.length > 0 ? (
+            imageGallery.slice(0, 5).map((imgUrl, index) => (
+              <div key={index} style={{ textAlign: 'left', width: '100%' }}>
+                <img
+                  src={imgUrl}
+                  alt={"No result available"}
+                  style={{
+                    width: '100%',
+                    height: 'auto',
+                    objectFit: 'contain',
+                  }}
+                />
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: 'white',
+                    wordBreak: 'break-word',
+                    marginTop: '4px',
+                    fontSize: '0.7rem',
+                  }}
+                >
+                  {searchResults[index] && (
                     <>
                       <div>{searchResults[index].topic}</div>
                       <div>{searchResults[index].timestamp}</div>
-                      <div>Distance: {searchResults[index].distance.toFixed(5)}</div>
+                      {/*<div>Distance: {searchResults[index].distance.toFixed(5)}</div>*/}
+                      {/*<div>Model: {searchResults[index].model}</div>*/}
                     </>
-                  )
-                }              
-              </Typography>
-            </div>
-          ))
-        ) : (
-          //<p style={{ color: "white", fontSize: "0.8rem" }}>
-          //  Loading...
-          //</p>
-          //<div className="circular-progress-container">
-          //  <CircularProgress />
-          //</div>
-          <>
-            <Skeleton variant="rounded" width={178} height={60} />
-            <Skeleton variant="rounded" width={178} height={60} />
-            <Skeleton variant="rounded" width={178} height={60} />
-            <Skeleton variant="rounded" width={178} height={60} />
-            <Skeleton variant="rounded" width={178} height={60} />
-          </>
-        )}
-      </div>
+                  )}
+                </Typography>
+              </div>
+            ))
+          ) : (
+            <>
+              {isSearching && (
+                <LinearProgress
+                  sx={{
+                    width: '100%',
+                  }}
+                />
+              )}
+            </>
+          )}
+        </div>
       </Popper>
 
     </div>
