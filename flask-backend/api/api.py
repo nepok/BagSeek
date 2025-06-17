@@ -345,6 +345,48 @@ def get_ros():
                     case 'novatel_oem7_msgs/msg/BESTPOS':
                         return jsonify({'type': 'position', 'position': {'latitude': msg.lat, 'longitude': msg.lon, 'altitude': msg.hgt}, 'timestamp': timestamp})
 
+                    case 'tf2_msgs/msg/TFMessage':
+                        # Assume single transform for simplicity
+                        if len(msg.transforms) > 0:
+                            transform = msg.transforms[0]
+                            translation = transform.transform.translation
+                            rotation = transform.transform.rotation
+                            tf_data = {
+                                'translation': {
+                                    'x': translation.x,
+                                    'y': translation.y,
+                                    'z': translation.z
+                                },
+                                'rotation': {
+                                    'x': rotation.x,
+                                    'y': rotation.y,
+                                    'z': rotation.z,
+                                    'w': rotation.w
+                                }
+                            }
+                            return jsonify({'type': 'tf', 'tf': tf_data, 'timestamp': timestamp})
+
+                    case 'sensor_msgs/msg/Imu':
+                        imu_data = {
+                            "orientation": {
+                                "x": msg.orientation.x,
+                                "y": msg.orientation.y,
+                                "z": msg.orientation.z,
+                                "w": msg.orientation.w
+                            },
+                            "angular_velocity": {
+                                "x": msg.angular_velocity.x,
+                                "y": msg.angular_velocity.y,
+                                "z": msg.angular_velocity.z
+                            },
+                            "linear_acceleration": {
+                                "x": msg.linear_acceleration.x,
+                                "y": msg.linear_acceleration.y,
+                                "z": msg.linear_acceleration.z
+                            }
+                        }
+                        return jsonify({'type': 'imu', 'imu': imu_data, 'timestamp': timestamp})
+
                     case _:
                         # If the message type is something else, return msg.data as a list
                         return jsonify({'type': 'text', 'text': str(msg), 'timestamp': timestamp})

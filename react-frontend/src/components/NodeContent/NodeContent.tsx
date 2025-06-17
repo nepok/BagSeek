@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./NodeContent.css"; // Import the CSS file
 import { Box, Typography } from "@mui/material";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import { ArrowHelper } from "three";
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
@@ -23,7 +24,12 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null);
   const [gpsPath, setGpsPath] = useState<[number, number][]>([]);
   const [dataType, setDataType] = useState<string | null>(null); // Store the type of data fetched
- 
+  const [imuData, setImuData] = useState<{
+    orientation: { x: number; y: number; z: number; w: number };
+    angular_velocity: { x: number; y: number; z: number };
+    linear_acceleration: { x: number; y: number; z: number };
+  } | null>(null);
+  
   const imageUrl =
     nodeTopic && mappedTimestamp && selectedRosbag
       ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}-${mappedTimestamp}.webp`
@@ -56,9 +62,51 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
         case 'position':
           setPosition(data.position);
           break;
+        case 'imu':
+            setImuData(data.imu);
+          break;
+        case 'tf':
+            const { translation, rotation } = data.tf;
+            setImuData({
+              orientation: rotation,
+              angular_velocity: { x: 0, y: 0, z: 0 },
+              linear_acceleration: { x: 0, y: 0, z: 0 }
+            });
+          break;
         default:
           console.warn("Unknown data type:", data.type);
       }
+  // IMU Visualizer component
+  const ImuVisualizer: React.FC<{ imu: typeof imuData }> = ({ imu }) => {
+    const groupRef = useRef<THREE.Group>(null);
+
+    useEffect(() => {
+      if (groupRef.current && imu) {
+        const { x, y, z, w } = imu.orientation;
+        const quaternion = new THREE.Quaternion(x, y, z, w);
+        groupRef.current.setRotationFromQuaternion(quaternion);
+      }
+    }, [imu]);
+
+    return (
+      <>
+        <group ref={groupRef}>
+          <mesh position={[1, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
+            <coneGeometry args={[0.05, 0.2, 8]} />
+            <meshBasicMaterial color="red" />
+          </mesh>
+          <mesh position={[0, 1, 0]}>
+            <coneGeometry args={[0.05, 0.2, 8]} />
+            <meshBasicMaterial color="green" />
+          </mesh>
+          <mesh position={[0, 0, 1]} rotation={[Math.PI / 2, 0, 0]}>
+            <coneGeometry args={[0.05, 0.2, 8]} />
+            <meshBasicMaterial color="blue" />
+          </mesh>
+        </group>
+      </>
+    );
+  };
     } catch (error) {
       console.error("Error fetching data:", error);
       // Reset all states in case of error
@@ -170,6 +218,65 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     return null; // No need to render anything here
   };
 
+  // ImuVisualizer component
+  const ImuVisualizer: React.FC<{ imu: NonNullable<typeof imuData> }> = ({ imu }) => {
+    const groupRef = useRef<THREE.Group>(null);
+
+    useEffect(() => {
+      if (groupRef.current && imu.orientation) {
+        const { x, y, z, w } = imu.orientation;
+        const quaternion = new THREE.Quaternion(x, y, z, w);
+        groupRef.current.setRotationFromQuaternion(quaternion);
+      }
+    }, [imu]);
+
+    return (
+      <>
+        <group ref={groupRef}>
+          <primitive object={new THREE.AxesHelper(1)} />
+          <primitive object={new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1, 0xff0000, 0.2, 0.1)} />
+          <primitive object={new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), 1, 0x00ff00, 0.2, 0.1)} />
+          <primitive object={new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0), 1, 0x0000ff, 0.2, 0.1)} />
+
+          {(() => {
+            const angularVector = new THREE.Vector3(
+              imu.angular_velocity.x,
+              imu.angular_velocity.y,
+              imu.angular_velocity.z
+            );
+            if (angularVector.length() === 0) return null;
+            return (
+              <primitive object={new THREE.ArrowHelper(
+                angularVector.clone().normalize(),
+                new THREE.Vector3(0, 0, 0),
+                angularVector.length(),
+                0xff69b4, 0.2, 0.1
+              )} />
+            );
+          })()}
+
+          {(() => {
+            const accVector = new THREE.Vector3(
+              imu.linear_acceleration.x,
+              imu.linear_acceleration.y,
+              imu.linear_acceleration.z
+            );
+            const accScale = 0.2;
+            if (accVector.length() === 0) return null; // Don't render yellow arrow if zero
+            return (
+              <primitive object={new THREE.ArrowHelper(
+                accVector.clone().normalize(),
+                new THREE.Vector3(0, 0, 0),
+                accVector.length() * accScale,
+                0xffff00, 0.2, 0.1
+              )} />
+            );
+          })()}
+        </group>
+      </>
+    );
+  };
+
   // Render content based on the topicType
   let renderedContent: React.ReactNode = null;
   if ((nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image") && imageUrl) {
@@ -226,6 +333,15 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     renderedContent = (
       <div className="gps-container">
         <div ref={mapContainerRef} className="map-container"></div>
+      </div>
+    );
+  } else if (imuData) {
+    renderedContent = (
+      <div className="canvas-container">
+        <Canvas camera={{ position: [0, 0, 5], fov: 70 }}>
+          <ambientLight />
+          <ImuVisualizer imu={imuData} />
+        </Canvas>
       </div>
     );
   } else {
