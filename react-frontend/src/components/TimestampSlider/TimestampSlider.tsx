@@ -579,7 +579,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
           width: '100%',
           gap: '8px',
           padding: '8px',
-          maxHeight: '400px',
+          maxHeight: 'calc(100vh - 100px)', // if you want to leave room for header/footer
           overflowY: 'auto',
         }}>
           {imageGallery && imageGallery.length > 0 ? (

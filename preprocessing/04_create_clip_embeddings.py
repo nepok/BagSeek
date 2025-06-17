@@ -4,6 +4,7 @@ import torch
 from torchvision.transforms.functional import to_pil_image
 from tqdm import tqdm
 import open_clip
+import gc
 
 # Define constants for paths
 BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
@@ -80,7 +81,7 @@ def main():
             # Free model from memory
             del model, preprocess
             torch.cuda.empty_cache()
-            import gc; gc.collect()
+            gc.collect()
 
         except Exception as e:                                          
             print(f"Failed to load model {model_name} ({pretrained}): {e}")

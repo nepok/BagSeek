@@ -48,7 +48,7 @@ def create_faiss_index(embeddings):
 def process_embedding_folder(model, folder_name):
     """Process a single embedding folder and create a FAISS index."""
     embedding_folder_path = os.path.join(EMBEDDINGS_DIR, model, folder_name)
-    index_output_dir = os.path.join(INDICES_DIR, model, f"{folder_name}_big_index")
+    index_output_dir = os.path.join(INDICES_DIR, model, f"{folder_name}")
     
     print(embedding_folder_path)
     print(index_output_dir)
@@ -78,8 +78,6 @@ def main():
         model_folder_path = os.path.join(EMBEDDINGS_DIR, model_folder)
         if os.path.isdir(model_folder_path):
             for rosbag in os.listdir(model_folder_path):
-                if not rosbag.startswith("scheibenegge_long_"):
-                    continue
                 #index_path = os.path.join(model_folder_path, rosbag)
                 process_embedding_folder(model_folder, rosbag)
 

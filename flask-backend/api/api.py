@@ -35,7 +35,7 @@ EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
 INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
 ROSBAGS_DIR = "/mnt/data/rosbags"
 EXPORT_DIR = "/mnt/data/rosbags/EXPORTED"
-SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'rosbag2_2024_08_01-16_00_23')
+SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'output_bag')
 CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
 TOPICS_DIR = os.path.join(BASE_DIR, "topics")
 
@@ -355,7 +355,7 @@ def get_ros():
 
 @app.route('/api/search', methods=['GET'])
 def search():
-    import torch
+
     query_text = request.args.get('query', default=None, type=str)
     if query_text is None:
         return jsonify({'error': 'No query text provided'}), 400
@@ -367,7 +367,6 @@ def search():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     try:
-        
         name, pretrained = selected_model.split('__')
         model, _, preprocess = open_clip.create_model_and_transforms(name, pretrained, device=device, cache_dir="/mnt/data/openclip_cache")
         tokenizer = open_clip.get_tokenizer(name)
@@ -418,8 +417,19 @@ def search():
                 'timestamp': result_timestamp,
                 'model': selected_model
             })
-            match = aligned_data[aligned_data['Reference Timestamp'] == result_timestamp].index
-            for index in match:
+            # New logic: map from result_timestamp back to all reference timestamps using aligned_data
+            matching_reference_timestamps = aligned_data.loc[
+                aligned_data.isin([result_timestamp]).any(axis=1),
+                'Reference Timestamp'
+            ].tolist()
+
+            logging.warning(matching_reference_timestamps)
+
+            match_indices = []
+            for ref_ts in matching_reference_timestamps:
+                indices = aligned_data.index[aligned_data['Reference Timestamp'] == ref_ts].tolist()
+                match_indices.extend(indices)
+            for index in match_indices:
                 marks.append({'value': index})
 
         del model
@@ -433,7 +443,7 @@ def search():
         torch.cuda.empty_cache()
         return jsonify({'error': str(e)}), 500
 
-    return jsonify({'query': query_text, 'results': results[:60], 'marks': marks[:60]})
+    return jsonify({'query': query_text, 'results': results[:10], 'marks': marks})
 
 
 @app.route('/api/export-rosbag', methods=['POST'])
