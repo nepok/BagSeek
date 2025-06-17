@@ -12,8 +12,10 @@ interface CustomTrackProps {
 }
 
 function getHeatColor(value: number) {
-  const hue = (1 - value) * 209; // 209 = Blau, 0 = Rot
-  return `hsl(${hue}, 81%, 60%)`;
+  const hue = (1 - value) * 268; // 209 = Blau, 0 = Rot
+  const sat = 30 + value * 70; // 50% bei value = 0, 80% bei value = 1
+
+  return `hsl(${hue}, ${sat}%, 50%)`;
 }
 
 const StyledTrack = styled('span')(() => ({

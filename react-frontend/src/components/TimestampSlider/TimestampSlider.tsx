@@ -388,11 +388,6 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
         sx={{
           marginRight: '12px',
           marginLeft: '10px',
-          '& .MuiSlider-mark': {
-            backgroundColor: '#FFA500',
-            width: '3px',
-            height: '7px',
-          },
         }}
         //marks={searchMarks}
       />
