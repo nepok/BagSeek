@@ -143,6 +143,9 @@ def main():
     for root, dirs, files in os.walk(ROSBAGS_DIR):
         if "metadata.yaml" in files:
             rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
+            
+            if "EXCLUDED" in rosbag_path:
+                continue
 
             rosbag_name = os.path.basename(rosbag_path)
 

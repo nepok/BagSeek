@@ -3,13 +3,20 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
+import { ErrorProvider } from './components/ErrorContext/ErrorContext';
+import { ThemeProvider } from '@mui/material/styles';
+import darkTheme from './theme'; // ✅ your existing theme
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 root.render(
   <React.StrictMode>
-    <App />
+    <ThemeProvider theme={darkTheme}> {/* ✅ Moved here */}
+      <ErrorProvider>
+        <App />
+      </ErrorProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );
 

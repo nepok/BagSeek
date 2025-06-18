@@ -8,9 +8,12 @@ import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import L from 'leaflet';
 import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
+import { useError } from '../ErrorContext/ErrorContext'; // adjust path as needed
+import { set } from 'lodash';
 
 interface TimestampSliderProps {
   availableTimestamps: number[];
+  timestampDensity: number[];
   selectedTimestamp: number | null;
   onSliderChange: (value: number) => void;
   selectedRosbag: string | null;
@@ -21,13 +24,14 @@ interface TimestampSliderProps {
 const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   const {
     availableTimestamps,
+    timestampDensity,
     selectedTimestamp,
     onSliderChange,
     selectedRosbag,
     searchMarks,
     setSearchMarks,
   } = props;
-
+  
   const formatDate = (timestamp: number): string => {
     if (!timestamp || isNaN(timestamp)) {
       return 'Invalid Timestamp';
@@ -72,6 +76,8 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
 
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const { setError } = useError();
 
   useEffect(() => {
       if (!showFilter) return;
@@ -179,6 +185,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
       setSearchMarks(data.marks || []);
       setSearchResults(data.results || []);
     } catch (error) {
+      setError('Error fetching search results.');
       console.error('Error fetching search results:', error);
       setSearchResults([]); // In case of an error, default to an empty array
     }
@@ -199,6 +206,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
       // Filter out any undefined values (in case any field was missing)
       setImageGallery(imageUrls.filter((url) => url !== undefined) as string[]);
     } catch (error) {
+      setError('Error generating image URLs.');
       console.error("Error generating image URLs:", error);
     }
   };
@@ -273,6 +281,13 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
       fetchAllImages();
     }
   }, [searchResults]);
+
+  useEffect(() => {
+    // Clear search results and images when rosbag changes
+    setSearchResults([]);
+    setImageGallery([]);
+    setSearchMarks([]);
+  }, [selectedRosbag]);
   
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -305,6 +320,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
       const data = await response.json();
       setModels(data.models); // Update the state with the fetched models
     } catch (error) {
+      setError('Error fetching models.');
       console.error('Error fetching models:', error);
     }
   };
@@ -330,6 +346,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
       const data = await response.json();
       console.log(data.message); // Log the success message
     } catch (error) {
+      setError('Error setting model.');
       console.error('Error setting model:', error);
     }
   };
@@ -378,8 +395,9 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
           Track: (props) => (
             <CustomTrack
               {...props}
-              marks={searchMarks}
               timestampCount={availableTimestamps.length}
+              searchMarks={searchMarks}
+              timestampDensity={timestampDensity}
               bins={1000} // optional
               windowSize={50} // optional
             />
@@ -549,7 +567,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
         anchorEl={searchIconRef.current} // Position relative to the search icon
         placement="top" // Display results above the icon
         sx={{
-          zIndex: 1400,
+          zIndex: 1200,
           width: '210px',
           left: '50%', // Center the Popper horizontally
           transform: 'translateX(-50%)', // Center the Popper horizontally

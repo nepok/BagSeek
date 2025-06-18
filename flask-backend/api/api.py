@@ -1,4 +1,3 @@
-#from __future__ import annotations
 import json
 import os
 from pathlib import Path
@@ -9,44 +8,46 @@ from flask import Flask, jsonify, request, send_from_directory, send_file # type
 from flask_cors import CORS  # type: ignore
 import logging
 import pandas as pd
-#from sensor_msgs.msg import PointCloud2
 import struct
 import torch
 import faiss
-import traceback
 from typing import TYPE_CHECKING, cast
 from rosbags.interfaces import ConnectionExtRosbag2  # type: ignore
-import time
-import threading
 import open_clip
-import yaml  # Add yaml import for metadata.yaml parsing
 import math
 
+# Flask API for BagSeek: A tool for exploring Rosbag data and using semantic search via CLIP and FAISS to locate safety critical and relevant scenes.
+# This API provides endpoints for loading data, searching via CLIP embeddings, exporting segments, and more.
+
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 
-EXPORT_PROGRESS = {"status": "idle", "progress": 0.0, "message": ""}
-
-# Define the base path
+ # Define base directories for internal storage and resources
+ROSBAGS_DIR = '/mnt/data/rosbags'
 BASE_DIR = '/mnt/data/bagseek/flask-backend/src'
+TOPICS_DIR = os.path.join(BASE_DIR, "topics")
 IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
 LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, 'lookup_tables')
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
-INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
-ROSBAGS_DIR = "/mnt/data/rosbags"
-EXPORT_DIR = "/mnt/data/rosbags/EXPORTED"
-SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'output_bag')
 CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
-TOPICS_DIR = os.path.join(BASE_DIR, "topics")
+INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
+EXPORT_DIR = os.path.join(ROSBAGS_DIR, 'EXPORTED')
+SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'output_bag')
 
-# Create a typestore
+ALIGNED_DATA = pd.read_csv(os.path.join(LOOKUP_TABLES_DIR, os.path.basename(SELECTED_ROSBAG) + '.csv'), dtype=str)
+
+ # Define constants for Export progress tracking
+EXPORT_PROGRESS = {"status": "idle", "progress": 0.0, "message": ""}
+
+# Define default model for semantic search
+SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
+
+ # Load and register message types for ROS2 Humble, including custom Novatel messages
 typestore = get_typestore(Stores.ROS2_HUMBLE)
-
-# import custom message types from the novatel_oem7_msgs package
-msg_folder = Path('/opt/ros/humble/share/novatel_oem7_msgs/msg')
+novatel_msg_folder = Path('/opt/ros/humble/share/novatel_oem7_msgs/msg')
 custom_types = {}
 
-for msg_file in msg_folder.glob('*.msg'):
+for msg_file in novatel_msg_folder.glob('*.msg'):
     try:
         text = msg_file.read_text()
         typename = f"novatel_oem7_msgs/msg/{msg_file.stem}"
@@ -55,24 +56,13 @@ for msg_file in msg_folder.glob('*.msg'):
     except Exception as e:
         logging.warning(f"Failed to parse {msg_file.name}: {e}")
 
-# Registriere alle geladenen Typen
 typestore.register(custom_types)
 
-# Store the available timestamps globally
-timestamps = []
-
-# Load the CSV into a pandas DataFrame (global so it can be accessed by the API)
-aligned_data = pd.read_csv('../src/lookup_tables/rosbag2_2024_08_01-16_00_23.csv', dtype=str)
-
-topic_cache = {}
-
-selected_model = "ViT-B-16-quickgelu__openai"  # <-- oder was auch immer dein Default-Model sein soll
-
-
-# Reference timestamp mapping globals
+ # Used to track the currently selected reference timestamp and its aligned mappings
 current_reference_timestamp = None
 mapped_timestamps = {}
 
+ # Endpoint to set the current reference timestamp and retrieve its aligned mappings
 @app.route('/api/set-reference-timestamp', methods=['POST'])
 def set_reference_timestamp():
     global current_reference_timestamp, mapped_timestamps
@@ -83,23 +73,23 @@ def set_reference_timestamp():
         if not referenceTimestamp:
             return jsonify({"error": "Missing referenceTimestamp"}), 400
 
-        row = aligned_data[aligned_data["Reference Timestamp"] == str(referenceTimestamp)]
+        row = ALIGNED_DATA[ALIGNED_DATA["Reference Timestamp"] == str(referenceTimestamp)]
         if row.empty:
             return jsonify({"error": "Reference timestamp not found in CSV"}), 404
 
         current_reference_timestamp = referenceTimestamp
         mapped_timestamps = row.iloc[0].to_dict()
-        # Clean/sanitize mapped_timestamps before returning
-        cleaned = {
+        # Convert NaNs to None for safe JSON serialization
+        cleaned_mapped_timestamps = {
             k: (None if v is None or (isinstance(v, float) and math.isnan(v)) else v)
             for k, v in mapped_timestamps.items()
         }
-        return jsonify({"mappedTimestamps": cleaned, "message": "Reference timestamp updated"}), 200
+        return jsonify({"mappedTimestamps": cleaned_mapped_timestamps, "message": "Reference timestamp updated"}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Function to compute text embedding using CLIP
+ # Compute normalized CLIP embedding vector for a text query
 def get_text_embedding(text, model, tokenizer, device):
     with torch.no_grad():
         tokens = tokenizer([text])
@@ -108,19 +98,18 @@ def get_text_embedding(text, model, tokenizer, device):
         features /= features.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten()
 
-# Load canvases from file
+ # Canvas config utility functions (UI state persistence)
 def load_canvases():
     if os.path.exists(CANVASES_FILE):
         with open(CANVASES_FILE, "r") as f:
             return json.load(f)
     return {}
 
-# Save canvases to file
 def save_canvases(data):
     with open(CANVASES_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# logic for exporting rosbag
+ # Copy messages from one ROSbag to another within a timestamp range and selected topics
 def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timestamp, end_timestamp) -> None:
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     with Reader(src) as reader, Writer(dst, version=9) as writer:
@@ -179,8 +168,8 @@ def post_model():
         data = request.get_json()  # Get the JSON payload
         model_value = data.get('model')  # The path value from the JSON
 
-        global selected_model
-        selected_model = model_value
+        global SELECTED_MODEL
+        SELECTED_MODEL = model_value
 
         # Reload the model and processor
         # reload_model_and_processor()
@@ -193,7 +182,7 @@ def post_model():
 @app.route('/api/get-models', methods=['GET'])
 def get_models():
     try:
-        # List all files in the directoryx
+        # List all files in the directory
         models = []
         for model in os.listdir(EMBEDDINGS_DIR):
             if not model in ['.DS_Store', 'README.md']:
@@ -214,13 +203,10 @@ def post_file_paths():
         global SELECTED_ROSBAG
         SELECTED_ROSBAG = path_value
 
-        # Clear topic cache when selected rosbag changes
-        topic_cache.clear()
-
-        global aligned_data
+        global ALIGNED_DATA
         
         csv_path = LOOKUP_TABLES_DIR + "/" + os.path.basename(SELECTED_ROSBAG) + ".csv"
-        aligned_data = pd.read_csv(csv_path, dtype=str)
+        ALIGNED_DATA = pd.read_csv(csv_path, dtype=str)
         return jsonify({"message": f"File path updated successfully to {path_value}."}), 200
 
     except Exception as e:
@@ -270,7 +256,7 @@ def get_available_rosbag_topics():
         return jsonify({'availableTopics': []}), 200
 
 
-# Endpoint to get available topics from pre-generated JSON file
+# Read list of topic types from generated JSON for current ROSbag
 @app.route('/api/get-available-topic-types', methods=['GET'])
 def get_available_rosbag_topic_types():
     try:
@@ -290,12 +276,18 @@ def get_available_rosbag_topic_types():
         logging.error(f"Error reading topics JSON: {e}")
         return jsonify({'availableTopicTypes': []}), 200
     
+ # Returns list of all reference timestamps used for data alignment
 @app.route('/api/get-available-timestamps', methods=['GET'])
 def get_available_timestamps():
-    # Extract the first column (Reference Timestamp) from the PD Frame
-    availableTimestamps = aligned_data['Reference Timestamp'].astype(str).tolist()
-    return jsonify({'availableTimestamps': availableTimestamps})
+    availableTimestamps = ALIGNED_DATA['Reference Timestamp'].astype(str).tolist()
+    return jsonify({'availableTimestamps': availableTimestamps}), 200
 
+# Returns density of valid data fields per timestamp (used for heatmap intensity)
+@app.route('/api/get-timestamp-density', methods=['GET'])
+def get_timestamp_density():
+    density_array = ALIGNED_DATA.drop(columns=["Reference Timestamp"]).notnull().sum(axis=1).tolist()
+    return jsonify({'timestampDensity': density_array})
+    
 @app.route('/images/<path:filename>')
 def serve_image(filename):
     response = send_from_directory(IMAGES_DIR, filename)
@@ -310,6 +302,7 @@ def get_image_reference_map(rosbag_name):
         return jsonify({"error": f"Image reference map for {rosbag_name} not found."}), 404
     return send_file(map_path, mimetype='application/json')
 
+ # Return deserialized message content (image, TF, IMU, etc.) for currently selected topic and reference timestamp
 @app.route('/api/content', methods=['GET'])
 def get_ros():
     global mapped_timestamps
@@ -388,13 +381,13 @@ def get_ros():
                         return jsonify({'type': 'imu', 'imu': imu_data, 'timestamp': timestamp})
 
                     case _:
-                        # If the message type is something else, return msg.data as a list
+                        # Fallback for unsupported or unknown message types
                         return jsonify({'type': 'text', 'text': str(msg), 'timestamp': timestamp})
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
 
 
-
+ # Perform semantic search using CLIP embedding against precomputed image features
 @app.route('/api/search', methods=['GET'])
 def search():
 
@@ -409,7 +402,7 @@ def search():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     try:
-        name, pretrained = selected_model.split('__')
+        name, pretrained = SELECTED_MODEL.split('__')
         model, _, preprocess = open_clip.create_model_and_transforms(name, pretrained, device=device, cache_dir="/mnt/data/openclip_cache")
         tokenizer = open_clip.get_tokenizer(name)
         
@@ -457,11 +450,11 @@ def search():
                 'distance': float(distances[0][i]),
                 'topic': result_topic,
                 'timestamp': result_timestamp,
-                'model': selected_model
+                'model': SELECTED_MODEL
             })
-            # New logic: map from result_timestamp back to all reference timestamps using aligned_data
-            matching_reference_timestamps = aligned_data.loc[
-                aligned_data.isin([result_timestamp]).any(axis=1),
+            # New logic: map from result_timestamp back to all reference timestamps using ALIGNED_DATA
+            matching_reference_timestamps = ALIGNED_DATA.loc[
+                ALIGNED_DATA.isin([result_timestamp]).any(axis=1),
                 'Reference Timestamp'
             ].tolist()
 
@@ -469,7 +462,7 @@ def search():
 
             match_indices = []
             for ref_ts in matching_reference_timestamps:
-                indices = aligned_data.index[aligned_data['Reference Timestamp'] == ref_ts].tolist()
+                indices = ALIGNED_DATA.index[ALIGNED_DATA['Reference Timestamp'] == ref_ts].tolist()
                 match_indices.extend(indices)
             for index in match_indices:
                 marks.append({'value': index})
@@ -488,6 +481,7 @@ def search():
     return jsonify({'query': query_text, 'results': results[:10], 'marks': marks})
 
 
+ # Export portion of a ROSbag containing selected topics and time range
 @app.route('/api/export-rosbag', methods=['POST'])
 def export_rosbag():
     try:
@@ -512,10 +506,12 @@ def export_rosbag():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
+# Canvas configuration endpoints for restoring panel layouts
 @app.route("/api/load-canvases", methods=["GET"])
 def api_load_canvases():
     return jsonify(load_canvases())
 
+# Canvas configuration endpoints for saving panel layouts
 @app.route("/api/save-canvas", methods=["POST"])
 def api_save_canvas():
     data = request.json
@@ -533,6 +529,7 @@ def api_save_canvas():
     
     return jsonify({"message": f"Canvas '{name}' saved successfully"})
 
+# Canvas configuration endpoints for saving and restoring panel layouts
 @app.route("/api/delete-canvas", methods=["POST"])
 def api_delete_canvas():
     data = request.json
@@ -546,5 +543,6 @@ def api_delete_canvas():
     
     return jsonify({"error": "Canvas not found"}), 404
 
+# Start Flask server (debug mode enabled for development)
 if __name__ == '__main__':
     app.run(debug=True)

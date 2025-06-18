@@ -7,6 +7,8 @@ import FileInput from './components/FileInput/FileInput';
 import { ThemeProvider } from '@mui/material/styles';
 import darkTheme from './theme';
 import Export from './components/Export/Export';
+import { useError } from './components/ErrorContext/ErrorContext';
+import { set } from 'lodash';
 
 interface Node {
   id: number;
@@ -22,8 +24,12 @@ interface NodeMetadata {
 }
 
 function App() {
+
+  const { setError } = useError();
+
   const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
+  const [timestampDensity, setTimestampDensity] = useState<number[]>([]);
   const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});
   const [availableTopics, setAvailableTopics] = useState<string[]>([]);
   const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});
@@ -36,6 +42,74 @@ function App() {
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);
 
+  const fetchAvailableTopics = async () => {
+    try {
+      const response = await fetch('/api/get-available-topics');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch topics');
+      } 
+      setAvailableTopics(data.availableTopics);
+    } catch (error) {
+      setError('Error fetching available topics');
+      console.error('Error fetching available topics:', error);
+    }
+  };
+
+  const fetchAvailableTopicTypes = async () => {
+    try {
+      const response = await fetch('/api/get-available-topic-types');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch topic types');
+      }
+      setAvailableTopicTypes(data.availableTopicTypes);
+    } catch (error) {
+      setError('Error fetching available topic types');
+      console.error('Error fetching available topic types:', error);
+    }
+  };
+
+  const fetchAvailableTimestampsAndDensity = async () => {
+    try {
+      const response = await fetch('/api/get-available-timestamps');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch timestamps');
+      }
+      setAvailableTimestamps(data.availableTimestamps);
+    } catch (error) {
+      setError('Error fetching available timestamps');
+      console.error('Error fetching available timestamps:', error);
+    }
+
+    try {
+      const response = await fetch('/api/get-timestamp-density');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch timestamp density');
+      }
+      setTimestampDensity(data.timestampDensity);
+    } catch (error) {
+      setError('Error fetching timestamp density');
+      console.error('Error fetching timestamp density:', error);
+    }
+  };
+
+  const fetchSelectedRosbag = async () => {
+    try {
+      const response = await fetch('/api/get-selected-rosbag');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch selected rosbag');
+      }
+      setSelectedRosbag(data.selectedRosbag);
+    } catch (error) {
+      setError('Error fetching selected rosbag');
+      console.error('Error fetching selected rosbag:', error);
+    }
+  };
+
   const handleCanvasChange = (root: Node, metadata: { [id: number]: NodeMetadata }) => {
     setCurrentRoot(root);
     setCurrentMetadata(metadata);
@@ -45,19 +119,23 @@ function App() {
   useEffect(() => {
     if (availableTimestamps.length > 0) {
       setSelectedTimestamp(availableTimestamps[0]); // Default to the first timestamp
+      handleSliderChange(availableTimestamps[0]); // Call handleSliderChange with the new timestamp
     } else {
       setSelectedTimestamp(null); // Clear the selection if no timestamps
     }
   }, [availableTimestamps]); // This effect runs whenever `availableTimestamps` changes
 
-  
   useEffect(() => {
     const loadAllCanvases = async () => {
       try {
         const response = await fetch('/api/load-canvases');
         const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to load canvases');
+        }
         setCanvasList(data);
       } catch (error) {
+        setError('Error loading canvases');
         console.error('Error loading all canvases:', error);
       }
     };
@@ -77,9 +155,13 @@ function App() {
         body: JSON.stringify({ referenceTimestamp: value }),
       });
 
-      const data = await response.json(); // Expecting { mappedTimestamps: { "/topic/name": real_ts, ... } }
-      setMappedTimestamps(data.mappedTimestamps); // 👈 Store it here
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to set reference timestamp');
+      }
+      setMappedTimestamps(data.mappedTimestamps);
     } catch (error) {
+      setError('Error sending reference timestamp');
       console.error('Error sending reference timestamp:', error);
     }
   };
@@ -94,7 +176,7 @@ function App() {
     };
 
     try {
-      await fetch('/api/save-canvas', {
+      const response = await fetch('/api/save-canvas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -102,12 +184,17 @@ function App() {
           canvas: newCanvas
         }),
       });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save canvas');
+      }
       // Update local state
       setCanvasList(prev => ({
         ...prev,
         [name]: newCanvas
       }));
     } catch (error) {
+      setError('Error saving canvas');
       console.error('Error saving canvas:', error);
     }
   };
@@ -116,66 +203,32 @@ function App() {
     try {
       const response = await fetch('/api/load-canvases');
       const data = await response.json();
-      setCanvasList(data);
-  
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load canvases');
+      }
       if (data[name]) {
         setCurrentRoot(data[name].root);
         setCurrentMetadata(data[name].metadata);
-        setSelectedRosbag(data[name].rosbag);
       }
     } catch (error) {
+      setError('Error loading canvases');
       console.error('Error loading canvases:', error);
     }
   };
 
   return (
-    <ThemeProvider theme={darkTheme}>
+    <>
       <FileInput
         isVisible={isFileInputVisible}
         onClose={() => setIsFileInputVisible(false)}
-        onAvailableTopicsUpdate={() => {
-          fetch('/api/get-available-topics')
-            .then((response) => response.json())
-            .then((data) => {
-              setAvailableTopics(data.availableTopics);
-            })
-            .catch((error) => {
-              console.error('Error fetching available topics:', error);
-            });
-        }}
-        onAvailableTopicTypesUpdate={() => {
-          fetch('/api/get-available-topic-types')
-            .then((response) => response.json())
-            .then((data) => {
-              setAvailableTopicTypes(data.availableTopicTypes);
-            })
-            .catch((error) => {
-              console.error('Error fetching available topic types:', error);
-            });
-        }}
-        onAvailableTimestampsUpdate={() => {
-          fetch('/api/get-available-timestamps')
-            .then((response) => response.json())
-            .then((data) => {
-              setAvailableTimestamps(data.availableTimestamps);
-            })
-            .catch((error) => {
-              console.error('Error fetching available timestamps:', error);
-            });
-        }}
-        onSelectedRosbagUpdate={() => {
-          fetch('/api/get-selected-rosbag')
-            .then((response) => response.json())
-            .then((data) => {
-              setSelectedRosbag(data.selectedRosbag);
-            })
-            .catch((error) => {
-              console.error('Error fetching selected rosbag:', error);
-            });
-        }}
+        onAvailableTopicsUpdate={fetchAvailableTopics}
+        onAvailableTopicTypesUpdate={fetchAvailableTopicTypes}
+        onAvailableTimestampsUpdate={fetchAvailableTimestampsAndDensity}
+        onSelectedRosbagUpdate={fetchSelectedRosbag}
       />
       <Export
         timestamps={availableTimestamps}
+        timestampDensity={timestampDensity}
         topics={availableTopics}
         topicTypes={availableTopicTypes}
         isVisible={isExportDialogVisible}
@@ -201,6 +254,7 @@ function App() {
         />
         <TimestampSlider
           availableTimestamps={availableTimestamps}
+          timestampDensity={timestampDensity}
           selectedTimestamp={selectedTimestamp}
           onSliderChange={handleSliderChange}
           selectedRosbag={selectedRosbag}
@@ -208,7 +262,7 @@ function App() {
           setSearchMarks={setSearchMarks}
         />
       </div>
-    </ThemeProvider>
+    </>
   );
 }
 

@@ -224,7 +224,7 @@ def main():
                 continue
 
             print(f"Processing rosbag: {rosbag_name}")
-            #extract_images_from_rosbag(rosbag_path, output_dir, csv_path, format)
+            extract_images_from_rosbag(rosbag_path, output_dir, csv_path, format)
 
 if __name__ == "__main__":
     main()

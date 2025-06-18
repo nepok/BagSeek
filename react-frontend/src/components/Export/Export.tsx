@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress, ButtonGroup } from '@mui/material';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress, ButtonGroup, alpha } from '@mui/material';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
+import { times } from 'lodash';
 
 interface ExportProps {
   timestamps: number[];
+  timestampDensity: number[];
   topics: string[];
   isVisible: boolean;
   onClose: () => void;
@@ -13,7 +15,7 @@ interface ExportProps {
   topicTypes: Record<string, string>;
 }
 
-const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose, searchMarks, topicTypes }) => {
+const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, isVisible, onClose, searchMarks, topicTypes }) => {
 
   const [selectedRosbag, setSelectedRosbag] = useState('');
   const [newRosbagName, setNewRosbagName] = useState('');
@@ -247,7 +249,6 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose,
   }
 
   return (
-    
     <Dialog open={true} onClose={onClose} aria-labelledby="form-dialog-title" fullWidth maxWidth="md">
       <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag}</DialogTitle>
       <DialogContent style={{ overflow: 'hidden' }}>
@@ -320,7 +321,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose,
             </Select>
           </FormControl>
         )}
-        <Box sx={{ mt: 2 }}>
+        <Box sx={{ mt: 2, position: 'relative' }}>
           <Slider
             value={exportRange}
             onChange={handleSliderChange}
@@ -332,12 +333,32 @@ const Export: React.FC<ExportProps> = ({ timestamps, topics, isVisible, onClose,
               Track: (props) => (
                 <CustomTrack
                   {...props}
-                  marks={searchMarks}
                   timestampCount={timestamps.length}
-                  bins={1000} // optional
-                  windowSize={50} // optional
+                  searchMarks={searchMarks}
+                  timestampDensity={timestampDensity}
+                  bins={1000}
+                  windowSize={50}
                 />
               ),
+            }}
+            sx={{
+              '& .MuiSlider-thumb': {
+                backgroundColor: 'primary', // or another solid color
+                zIndex: 2, // ensure they sit above the highlight
+              }
+            }}
+          />
+          <Box
+            sx={{
+              position: 'absolute',
+              top: '50%',
+              transform: 'translateY(-10px)', // half of the defined height
+              left: `${(exportRange[0] / (timestamps.length - 1)) * 100}%`,
+              width: `${((exportRange[1] - exportRange[0]) / (timestamps.length - 1)) * 100}%`,
+              height: '20px', // fixed height in pixels
+              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.2), // semi-transparent primary color
+              pointerEvents: 'none',
+              zIndex: 1,
             }}
           />
         </Box>
