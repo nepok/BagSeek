@@ -93,9 +93,9 @@ BagSeek was developed as part of a Bachelor's thesis on semantic image retrieval
 
 ## ✨ Credits
 
-Developed by **Nepomuk Kindermann**
-Powered by [ROS](https://www.ros.org/), [OpenCLIP](https://github.com/mlfoundations/open_clip), [FAISS](https://github.com/facebookresearch/faiss), Flask, and React.
-Developed with support from the **Smart Farming Lab** at the **University of Leipzig**  
+Developed by **Nepomuk Kindermann**.  
+Powered by [ROS](https://www.ros.org/), [OpenCLIP](https://github.com/mlfoundations/open_clip), [FAISS](https://github.com/facebookresearch/faiss), Flask, and React.  
+Developed with support from the **Smart Farming Lab** at the **University of Leipzig**.  
 
 ## 📄 License
 
