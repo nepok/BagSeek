@@ -1,7 +1,5 @@
 node_modules
 flask-backend/src/
 .vscode
-test.py
-exporttest.py
 docker-compose.yml
 
