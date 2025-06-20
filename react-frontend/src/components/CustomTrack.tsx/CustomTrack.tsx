@@ -38,7 +38,7 @@ export const CustomTrack: React.FC<CustomTrackProps> = ({
   className,
   searchMarks,
   timestampCount,
-  bins = 1000,
+  bins = 1000, 
   windowSize = 50,
   timestampDensity,
 }) => {

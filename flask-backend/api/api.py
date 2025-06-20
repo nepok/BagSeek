@@ -42,6 +42,8 @@ EXPORT_PROGRESS = {"status": "idle", "progress": 0.0, "message": ""}
 # Define default model for semantic search
 SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
 
+MAX_K = 100  # Number of results to return for semantic search
+
  # Load and register message types for ROS2 Humble, including custom Novatel messages
 typestore = get_typestore(Stores.ROS2_HUMBLE)
 novatel_msg_folder = Path('/opt/ros/humble/share/novatel_oem7_msgs/msg')
@@ -432,14 +434,20 @@ def search():
             index = index_cpu
 
         embedding_paths = np.load(embedding_paths_file)
-        distances, indices = index.search(query_embedding.reshape(1, -1), 10)
+        similarityScores, indices = index.search(query_embedding.reshape(1, -1), MAX_K)
 
-        if len(indices) == 0 or len(distances) == 0:
+        if len(indices) == 0 or len(similarityScores) == 0:
             del model
             torch.cuda.empty_cache()
             return jsonify({'error': 'No results found for the query'}), 200
 
-        for i, idx in enumerate(indices[0][:10]):
+        for i, idx in enumerate(indices[0][:MAX_K]):
+
+            similarityScore = float(similarityScores[0][i])
+
+            if math.isnan(similarityScore) or math.isinf(similarityScore):
+                continue
+
             embedding_path = str(embedding_paths[idx])
             path_of_interest = str(os.path.basename(embedding_path))
             result_timestamp = path_of_interest[-32:-13]
@@ -447,7 +455,7 @@ def search():
             results.append({
                 'rank': i + 1,
                 'embedding_path': embedding_path,
-                'distance': float(distances[0][i]),
+                'similarityScore': similarityScore,
                 'topic': result_topic,
                 'timestamp': result_timestamp,
                 'model': SELECTED_MODEL
@@ -457,8 +465,6 @@ def search():
                 ALIGNED_DATA.isin([result_timestamp]).any(axis=1),
                 'Reference Timestamp'
             ].tolist()
-
-            logging.warning(matching_reference_timestamps)
 
             match_indices = []
             for ref_ts in matching_reference_timestamps:
@@ -478,7 +484,7 @@ def search():
         torch.cuda.empty_cache()
         return jsonify({'error': str(e)}), 500
 
-    return jsonify({'query': query_text, 'results': results[:10], 'marks': marks})
+    return jsonify({'query': query_text, 'results': results, 'marks': marks})
 
 
  # Export portion of a ROSbag containing selected topics and time range

@@ -95,22 +95,6 @@ def process_rosbag(rosbag_path, csv_path):
 
     print(f"CSV file generated: {csv_path}")
 
-    # Generate image reference map
-    image_reference_map = {}
-    for topic in aligned_data.keys():
-        image_reference_map[topic] = {}
-        for i, ref_time in enumerate(ref_ts):
-            msg_time = aligned_data[topic][i]
-            if msg_time is not None:
-                image_reference_map[topic][str(int(ref_time))] = str(msg_time)
-
-    image_map_dir = os.path.join(BASE_DIR, "image_reference_maps")
-    os.makedirs(image_map_dir, exist_ok=True)
-    image_map_path = os.path.join(image_map_dir, f"{os.path.basename(rosbag_path)}.json")
-    with open(image_map_path, "w") as f:
-        json.dump(image_reference_map, f, indent=2)
-    print(f"Image reference map saved: {image_map_path}")
-
 def create_topics_json_from_csv(csv_path):
     try:
         with open(csv_path, 'r') as csvfile:

@@ -42,8 +42,18 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
     }
   }, [isVisible]);
 
-  const handleChange = (event: SelectChangeEvent<string>) => {
-    const path = event.target.value;
+  const handleRosbagSelection = (event: SelectChangeEvent<string>) => {
+    setSelectedRosbagPath(event.target.value);
+  };
+
+  const handleApply = () => {
+    if (selectedRosbagPath) {
+      handleChange(selectedRosbagPath);  // Only apply when user clicks
+    }
+    onClose(); // Close the dialog after applying
+  };
+
+  const handleChange = (path: string) => {
     setSelectedRosbagPath(path);
 
     // Post the selected path to the API immediately
@@ -88,7 +98,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
               labelId="rosbag-select-label"
               id="rosbag-select"
               value={selectedRosbagPath}
-              onChange={handleChange}
+              onChange={handleRosbagSelection}
               sx={{
                 width: '100%',
                 minWidth: 0,
@@ -178,7 +188,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       <Button onClick={onClose} color="primary">
           Cancel
         </Button>
-        <Button onClick={onClose} color="primary">
+        <Button onClick={handleApply} color="primary">
           Apply
         </Button>
       </DialogActions>

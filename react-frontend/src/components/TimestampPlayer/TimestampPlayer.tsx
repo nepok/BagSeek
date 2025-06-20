@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import './TimestampSlider.css'; // Import the CSS file
+import './TimestampPlayer.css'; // Import the CSS file
 import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton, LinearProgress, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
@@ -11,7 +11,7 @@ import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 import { useError } from '../ErrorContext/ErrorContext'; // adjust path as needed
 import { set } from 'lodash';
 
-interface TimestampSliderProps {
+interface TimestampPlayerProps {
   availableTimestamps: number[];
   timestampDensity: number[];
   selectedTimestamp: number | null;
@@ -21,7 +21,7 @@ interface TimestampSliderProps {
   setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; label: string }[]>>;
 }
 
-const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
+const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   const {
     availableTimestamps,
     timestampDensity,
@@ -63,7 +63,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   const [showFilter, setShowFilter] = useState(false); // State to control the visibility of the filter
   const [showModelSelection, setShowModelSelection] = useState(false); // State to control the visibility of the model selection
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; distance: number; timestamp: string; topic: string; model?: string }[]>([]); // Initialize as an empty array of SearchResult objects  
+  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; similarityScore: number; timestamp: string; topic: string; model?: string }[]>([]); // Initialize as an empty array of SearchResult objects  
   //const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
   const [models, setModels] = useState<string[]>([]); // State to store the list of models
@@ -192,10 +192,10 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   };
 
   // Fetch all images for the search results
-  const fetchAllImages = async () => {
+  const fetchAllImages = async (maxResults = 5) => {
     try {
       // Generate the image URLs directly without making fetch requests
-      const imageUrls = searchResults.map((result) => {
+      const imageUrls = searchResults.slice(0, maxResults).map((result) => {
         const imageUrl =
           result.topic && result.timestamp && selectedRosbag
             ? `http://localhost:5000/images/${selectedRosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
@@ -278,7 +278,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   
   useEffect(() => {
     if (searchResults.length > 0) {
-      fetchAllImages();
+      fetchAllImages(5);
     }
   }, [searchResults]);
 
@@ -352,7 +352,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   };
 
   return (
-    <div className="timestamp-slider-container">
+    <div className="timestamp-player-container">
       
       {/* Select for playback speed */}
       <FormControl sx={{ m: 1, minWidth: 86 }} size="small">
@@ -596,7 +596,7 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
           overflowY: 'auto',
         }}>
           {imageGallery && imageGallery.length > 0 ? (
-            imageGallery.slice(0, 5).map((imgUrl, index) => (
+            imageGallery.map((imgUrl, index) => (
               <div key={index} style={{ textAlign: 'left', width: '100%' }}>
                 <img
                   src={imgUrl}
@@ -645,4 +645,4 @@ const TimestampSlider: React.FC<TimestampSliderProps> = (props) => {
   );
 };
 
-export default TimestampSlider;
+export default TimestampPlayer;

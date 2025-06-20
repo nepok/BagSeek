@@ -1,14 +1,11 @@
 import { useState, useEffect } from 'react';
 import Header from './components/Header/Header';
-import TimestampSlider from './components/TimestampSlider/TimestampSlider';
+import TimestampPlayer from './components/TimestampPlayer/TimestampPlayer';
 import './App.css';
 import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import FileInput from './components/FileInput/FileInput';
-import { ThemeProvider } from '@mui/material/styles';
-import darkTheme from './theme';
 import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
-import { set } from 'lodash';
 
 interface Node {
   id: number;
@@ -252,7 +249,7 @@ function App() {
           currentRoot={currentRoot} // Pass currentRoot here
           currentMetadata={currentMetadata} // Pass currentMetadata here
         />
-        <TimestampSlider
+        <TimestampPlayer
           availableTimestamps={availableTimestamps}
           timestampDensity={timestampDensity}
           selectedTimestamp={selectedTimestamp}
