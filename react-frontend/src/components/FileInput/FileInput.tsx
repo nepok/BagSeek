@@ -87,7 +87,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       onClose={onClose} 
       aria-labelledby="form-dialog-title"
       fullWidth
-      maxWidth="lg" // Adjust the maxWidth as needed
+      maxWidth="md" // Adjust the maxWidth as needed
     >
       <DialogTitle id="form-dialog-title">Select RosBag File</DialogTitle>
       <DialogContent>
