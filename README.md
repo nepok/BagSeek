@@ -37,15 +37,9 @@ A user analyzing agricultural robotics data can:
 git clone https://github.com/nepok/BagSeek.git
 cd bagseek/flask-backend/api
 
-# Create and activate Conda environment
-conda create -n bagseek-gpu python=3.10
+# Create and activate Conda environment with all dependencies
+conda env create -f environment.yaml
 conda activate bagseek-gpu
-
-# First use conda to install the "heavy" dependencies if available
-conda install numpy pandas flask faiss-gpu -c conda-forge
-
-# Then use pip for the rest
-pip install open_clip_torch torchvision matplotlib
 
 # Start the backend server
 flask run --debug
