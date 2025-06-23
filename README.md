@@ -24,11 +24,11 @@ A user analyzing agricultural robotics data can:
 
 ### Prerequisites
 
--	Anaconda / Miniconda
-- Python 3.10+
-- Node.js (v18+ recommended)
-- ROS 2 (tested with Humble)
-- (Optional) GPU with CUDA for faster inference
+-	[Anaconda / Miniconda](https://www.anaconda.com/docs/getting-started/anaconda/install)
+- [Python 3.10+](https://www.python.org/downloads/)
+- [Node.js](https://nodejs.org/en/download) (v18+ recommended)
+- [ROS 2](https://docs.ros.org/en/humble/Installation.html) (tested with Humble)
+- (Optional) GPU with [CUDA](https://developer.nvidia.com/cuda-toolkit) for faster inference
 
 ### Backend Setup (Flask + Python Environment)
 
