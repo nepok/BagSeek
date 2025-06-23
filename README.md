@@ -30,7 +30,7 @@ A user analyzing agricultural robotics data can:
 - ROS 2 (tested with Humble)
 - (Optional) GPU with CUDA for faster inference
 
-### Backend Setup (Flask + FAISS)
+### Backend Setup (Flask + Python Environment)
 
 ```bash
 # Clone the repo
