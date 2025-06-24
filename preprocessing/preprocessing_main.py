@@ -9,7 +9,7 @@ WORKING_DIR = "/mnt/data/bagseek/preprocessing"
 
 # Liste deiner Preprocessing-Skripte
 scripts = [
-    "01_generate_alignment_and_metadata.py.py",
+    "01_generate_alignment_and_metadata.py",
     "02_extract_images.py",
     "03_preprocess_images.py",
     "04_create_clip_embeddings.py",

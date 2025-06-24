@@ -1,5 +1,11 @@
-node_modules
+# Backend 
 flask-backend/src/
-.vscode
-docker-compose.yml
+!flask-backend/src/rosbags
+flask-backend/Dockerfile
 
+# Frontend
+react-frontend/node_modules
+react-frontend/Dockerfile
+
+# Other
+docker-compose.yml
