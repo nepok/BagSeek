@@ -1,9 +1,6 @@
 name: bagseek-cpu
 channels:
-  - rapidsai
   - pytorch
-  - nvidia
-  - conda-forge
   - defaults
 dependencies:
   - anaconda::pip
