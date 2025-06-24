@@ -1,5 +1,5 @@
 # Backend 
-flask-backend/src/
+flask-backend/src/*
 !flask-backend/src/rosbags
 flask-backend/Dockerfile
 
