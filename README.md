@@ -24,7 +24,7 @@ A user analyzing agricultural robotics data can:
 
 ### Prerequisites
 
-⚠️**Disclaimer**: This install couldn't be tested properly before release, as it only works on linux.
+⚠️ **Disclaimer**: This install couldn't be tested properly before release, as it only works on linux.
 
 -	[Anaconda / Miniconda](https://www.anaconda.com/docs/getting-started/anaconda/install)
 - [Python 3.10+](https://www.python.org/downloads/)
