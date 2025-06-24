@@ -17,58 +17,74 @@ interface ExportProps {
 
 const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, isVisible, onClose, searchMarks, topicTypes }) => {
 
+  // State for selected rosbag name
   const [selectedRosbag, setSelectedRosbag] = useState('');
+  // State for new rosbag export name input
   const [newRosbagName, setNewRosbagName] = useState('');
+  // State for selected topics when filtering by topic
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  // Mode to select by 'topic' or by 'type'
   const [selectionMode, setSelectionMode] = useState<'topic' | 'type'>('topic');
+  // State for selected types when filtering by type
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  // Range of timestamps selected for export (indices)
   const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
+  // Export progress and status information
   const [exportStatus, setExportStatus] = useState<{progress: number, status: string} | null>(null);
+  // Ref for Leaflet map instance
   const mapRef = useRef<L.Map | null>(null);
+  // Ref for map container DOM element
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Initialize Leaflet map when dialog becomes visible
+  /*
   useEffect(() => {
     if (!isVisible) return;
   
     const initializeMap = () => {
       if (!mapContainerRef.current) return;
   
+      // Clean up existing map instance if any
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
   
+      // Create new map centered on given coordinates
       mapRef.current = L.map(mapContainerRef.current).setView(
         [51.25757432197879, 12.51589660271899], 16
       );
   
+      // Add OpenStreetMap tile layer
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(mapRef.current);
   
+      // Variables to store polygon points and markers
       let points: L.LatLng[] = [];
       let circles: L.CircleMarker[] = [];
       let polygon: L.Polygon | null = null;
   
+      // Handler for map clicks to add points or close polygon
       const onMapClick = (e: L.LeafletMouseEvent) => {
         const clickedLatLng = e.latlng;
   
-        // If user clicks near the first point, close the polygon
+        // Close polygon if clicked near the first point and enough points exist
         if (points.length > 2 && clickedLatLng.distanceTo(points[0]) < 10) {
           if (polygon) {
             polygon.remove();
           }
           polygon = L.polygon(points, { color: 'blue', fillOpacity: 0.5 }).addTo(mapRef.current!);
           
-          // Reset points and circles
+          // Clear points and markers after closing polygon
           circles.forEach(circle => circle.remove());
           points = [];
           circles = [];
           return;
         }
   
-        // Add small circle instead of default marker
+        // Add small circle marker instead of default marker for each click
         const circle = L.circleMarker(clickedLatLng, {
           radius: 5,
           color: 'blue',
@@ -80,21 +96,22 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
         points.push(clickedLatLng);
       };
   
+      // Handler for right-click to clear polygon and points
       const onRightClick = (e: L.LeafletMouseEvent) => {
-        // Remove polygon if it exists
         if (polygon) {
           polygon.remove();
           polygon = null;
         }
-        // Remove all circles
         circles.forEach(circle => circle.remove());
         circles = [];
         points = [];
       };
   
+      // Attach event listeners for clicks and right-clicks
       mapRef.current.on('click', onMapClick);
       mapRef.current.on('contextmenu', onRightClick); // Right-click event
   
+      // Cleanup event listeners on unmount
       return () => {
         if (mapRef.current) {
           mapRef.current.off('click', onMapClick);
@@ -103,8 +120,10 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
       };
     };
   
+    // Delay map initialization slightly to ensure container is ready
     setTimeout(initializeMap, 100);
   
+    // Cleanup map on dialog close
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -112,7 +131,9 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
       }
     };
   }, [isVisible]);
+  */
 
+  // Fetch currently selected rosbag on component mount
   useEffect(() => {
     const fetchSelectedRosbag = async () => {
       try {
@@ -131,6 +152,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     fetchSelectedRosbag();
   }, []);
 
+  // Reset export status message after completion delay
   useEffect(() => {
   if (exportStatus?.status === 'done') {
     const timer = setTimeout(() => {
@@ -140,6 +162,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
   }
 }, [exportStatus]);
 
+  // Handle export button click: send export request and poll for status
   const handleExport = async () => {
     if (timestamps.length === 0) return;
 
@@ -163,7 +186,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
 
       const result = await response.json();
       if (response.ok) {
-        // Begin polling once export starts successfully
+        // Start polling export status every second after successful request
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch("/api/export-status");
@@ -188,21 +211,24 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     onClose();
   };
 
+  // Handle slider value changes for export range
   const handleSliderChange = (event: Event, newValue: number | number[]) => {
     setExportRange(newValue as number[]);
   };
 
+  // Handle topic selection changes and synchronize types if in type mode
   const handleTopicChange = (event: SelectChangeEvent<string[]>) => {
     const topicsSelected = event.target.value as string[];
     setSelectedTopics(topicsSelected);
-    // Falls im Type-Modus: synchronisiere selectedTypes
+    // If in type selection mode, update selected types based on selected topics
     if (selectionMode === 'type') {
-      // Finde alle Typen, die in den neuen Topics enthalten sind
+      // Find unique types for selected topics
       const types = Array.from(new Set(topicsSelected.map(t => topicTypes[t])));
       setSelectedTypes(types);
     }
   };
 
+  // Handle type selection changes and filter topics accordingly
   const handleTypeChange = (event: SelectChangeEvent<string[]>) => {
     const types = event.target.value as string[];
     setSelectedTypes(types);
@@ -210,6 +236,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     setSelectedTopics(filteredTopics);
   };
 
+  // Format timestamp to German locale date string with milliseconds
   const formatDate = (timestamp: number): string => {
     if (!timestamp || isNaN(timestamp)) {
       return 'Invalid Timestamp';
@@ -227,11 +254,13 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     }).format(date);
   };
 
+  // Format slider value label with date and raw timestamp
   const valueLabelFormat = (value: number) => {
     if (value < 0 || value >= timestamps.length) return 'Invalid';
     return `${formatDate(timestamps[value])} (${timestamps[value]})`;
   };
 
+  // Render only export status popup when dialog is not visible
   if (!isVisible) {
     return (
       <>
@@ -267,10 +296,12 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     );
   }
 
+  // Main export dialog UI
   return (
     <Dialog open={true} onClose={onClose} aria-labelledby="form-dialog-title" fullWidth maxWidth="md">
       <DialogTitle id="form-dialog-title">Export Content of {selectedRosbag}</DialogTitle>
       <DialogContent style={{ overflow: 'hidden' }}>
+        {/* Input for new rosbag name */}
         <TextField
           autoFocus
           margin="dense"
@@ -281,6 +312,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
           value={newRosbagName}
           onChange={(e) => setNewRosbagName(e.target.value)}
         />
+        {/* Toggle button group for selecting filter mode */}
         <ButtonGroup
           sx={{ my: 2, display: 'flex', width: '100%' }}
           variant="outlined"
@@ -300,6 +332,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             Types
           </Button>
         </ButtonGroup>
+        {/* Topic selection UI */}
         {selectionMode === 'topic' && (
           <FormControl fullWidth margin="dense">
             <InputLabel id="topics-label">Topics</InputLabel>
@@ -320,6 +353,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             </Select>
           </FormControl>
         )}
+        {/* Type selection UI */}
         {selectionMode === 'type' && (
           <FormControl fullWidth margin="dense">
             <InputLabel id="types-label">Types</InputLabel>
@@ -340,6 +374,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             </Select>
           </FormControl>
         )}
+        {/* Slider to select export timestamp range */}
         <Box sx={{ mt: 2, position: 'relative' }}>
           <Slider
             value={exportRange}
@@ -367,6 +402,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
               }
             }}
           />
+          {/* Highlight box showing selected export range */}
           <Box
             sx={{
               position: 'absolute',
@@ -381,14 +417,17 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             }}
           />
         </Box>
+        {/* Leaflet map container (currently commented out) */}
         {/* <Box sx={{ mt: 2, height: 400 }}>
           <div ref={mapContainerRef} style={{ height: '400px', width: '100%' }}></div>
         </Box>*/} 
       </DialogContent>
       <DialogActions>
+        {/* Cancel button closes dialog */}
         <Button onClick={onClose} color="primary">
           Cancel
         </Button>
+        {/* Export button triggers export logic */}
         <Button onClick={handleExport} color="primary">
           Export
         </Button>

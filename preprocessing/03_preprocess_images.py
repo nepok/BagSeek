@@ -26,6 +26,7 @@ Path(PREPROCESSED_DIR).mkdir(parents=True, exist_ok=True)
 
 preprocess_dict = {}
 
+# Collect unique preprocessing transforms and associate them with model identifiers
 def collect_preprocess_data(model_name, pretrained_name):
     model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained_name, cache_dir="/mnt/data/openclip_cache")
     preprocess_str = str(preprocess)
@@ -36,6 +37,7 @@ def collect_preprocess_data(model_name, pretrained_name):
     if model_id not in preprocess_dict[preprocess_str]:
         preprocess_dict[preprocess_str].append(model_id)
 
+# Generate a concise identifier string summarizing the preprocessing steps
 def get_preprocess_id(preprocess_str: str) -> str:
     summary_parts = []
 
@@ -62,6 +64,7 @@ def get_preprocess_id(preprocess_str: str) -> str:
   
     return f"{summary}"
 
+# Process and save preprocessed images for a given model and pretrained configuration
 def preprocess_images(input_dir, output_dir, model_name, pretrained_name):
     model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained_name, cache_dir="/mnt/data/openclip_cache")
     print(f"Using model: {model} with preprocess: {preprocess}")
@@ -92,11 +95,12 @@ def preprocess_images(input_dir, output_dir, model_name, pretrained_name):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             list(tqdm(executor.map(process_single_image, files), total=len(files), desc=f"Processing images for {root[(len(IMAGES_DIR) + 1):]}"))
 
+# Main function to coordinate preprocessing across all model configurations
 def main():
     for model_name, pretrained_name in model_configs:
         collect_preprocess_data(model_name, pretrained_name)
 
-    # Nur einen gemeinsamen Preprocessing-Hash verwenden
+    # Only proceed if all models share the same preprocessing function
     if len(preprocess_dict) == 1:
         preprocess_str, models = next(iter(preprocess_dict.items()))
         shared_model_name, shared_pretrained_name = models[0].split(" (")

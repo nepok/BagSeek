@@ -4,6 +4,9 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import './SplittableCanvas.css';
 import NodeContent from '../NodeContent/NodeContent';
 
+// React component for rendering a resizable and splittable canvas layout
+// Each pane can display ROS topic content via NodeContent
+
 interface Node {
   id: number;
   direction?: 'horizontal' | 'vertical';
@@ -29,13 +32,14 @@ interface SplittableCanvasProps {
 
 const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, availableTopicTypes, mappedTimestamps, selectedRosbag, onCanvasChange, currentRoot, currentMetadata }) => {
 
-  const [root, setRoot] = useState<Node>({ id: 1 });
-  const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({});
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [currentNode, setCurrentNode] = useState<Node | null>(null);
-  const [topicMenuAnchorEl, setTopicMenuAnchorEl] = useState<null | HTMLElement>(null);
-  const resizingNode = useRef<Node | null>(null);
+  const [root, setRoot] = useState<Node>({ id: 1 }); // root node of canvas layout tree
+  const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({}); // metadata for each panel
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null); // anchor for the panel menu
+  const [currentNode, setCurrentNode] = useState<Node | null>(null); // currently active node
+  const [topicMenuAnchorEl, setTopicMenuAnchorEl] = useState<null | HTMLElement>(null); // anchor for topic selection menu
+  const resizingNode = useRef<Node | null>(null); // node currently being resized
 
+  // Clear previous metadata references when mappedTimestamps change
   useEffect(() => {
     setNodeMetadata((prev) =>
       Object.fromEntries(
@@ -47,6 +51,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     );
   }, [mappedTimestamps]);
 
+  // Reset all nodeTopic entries when rosbag changes
   useEffect(() => {
     setNodeMetadata((prev) => {
       const updatedMetadata = { ...prev };
@@ -57,6 +62,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     });
   }, [selectedRosbag]);
 
+  // Sync internal state with props
   useEffect(() => {
     if (!currentRoot || !currentMetadata) return;
   
@@ -69,10 +75,12 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     });
   }, [currentRoot, currentMetadata]);
 
+  // Inform parent component about canvas and metadata state changes
   useEffect(() => {
     onCanvasChange(root, nodeMetadata);
   }, [root, nodeMetadata]);
 
+  // Replace a node in the tree by matching ID
   const updateNodeInTree = (currentNode: Node, updatedNode: Node): Node => {
     if (!currentNode) return updatedNode;
     if (currentNode.id === updatedNode.id) return updatedNode;
@@ -84,6 +92,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     };
   };
 
+  // Split a node horizontally or vertically into two child panels
   const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
     if (!node.left && !node.right) {
       const newLeft = { id: node.id * 2 };
@@ -115,6 +124,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     }
   };
 
+  // Recursively delete a node and clean up metadata
   const deleteNode = (nodeToDelete: Node): Node | null => {
     const traverseAndDelete = (node: Node | null): Node | undefined => {
       if (!node) return undefined;
@@ -138,6 +148,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     return traverseAndDelete(root as Node) || root;
   };
 
+  // Handle deleting the currently active panel and update state accordingly
   const handleDeletePanel = () => {
     if (currentNode) {
       const newRoot = deleteNode(currentNode);
@@ -162,6 +173,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     }
   };
 
+  // Start resizing a node by setting event listeners and disabling text selection
   const startResizing = (e: React.MouseEvent, node: Node) => {
     document.body.style.userSelect = 'none';
     resizingNode.current = node;
@@ -169,6 +181,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     document.addEventListener('mouseup', stopResizing);
   };
 
+  // Stop resizing and cleanup event listeners
   const stopResizing = () => {
     document.body.style.userSelect = '';
     resizingNode.current = null;
@@ -178,6 +191,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     document.removeEventListener('mouseup', stopResizing);
   };
 
+  // Handle mouse move events during resizing to adjust node sizes
   const handleMouseMove = (e: MouseEvent) => {
     if (!resizingNode.current || !resizingNode.current.direction || resizingNode.current.size == null) return;
 
@@ -196,6 +210,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     setRoot({ ...root });
   };
 
+  // Handle click on the menu icon to open or close the panel menu
   const handleClickMenu = (event: React.MouseEvent<HTMLElement>, node: Node) => {
     if (currentNode?.id === node.id) {
       // If the same node is clicked again, close the menu
@@ -206,12 +221,14 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     }
   };
 
+  // Close all menus and reset current node selection
   const handleCloseMenu = () => {
     setAnchorEl(null);
     setCurrentNode(null);
     setTopicMenuAnchorEl(null); // Close the topic menu as well
   };
 
+  // Trigger splitting of the current node in the chosen direction
   const handleSplitAction = (direction: 'horizontal' | 'vertical') => {
     if (currentNode) {
       splitNode(currentNode, direction);
@@ -225,10 +242,12 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     handleCloseMenu();
   };
 
+  // Open the topic selection menu
   const handleChooseTopic = (event: React.MouseEvent<HTMLElement>) => {
     setTopicMenuAnchorEl(event.currentTarget);
   };
 
+  // Update node metadata with selected topic and close menus
   const handleTopicSelection = (topic: string) => {
     if (currentNode) {
       setNodeMetadata((prev) => ({
@@ -243,7 +262,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
   const renderNode = (node: Node) => {
     const metadata = nodeMetadata[node.id] || { nodeTopic: null, nodeTopicType: null };
 
-    if (!node.left && !node.right) {
+    if (!node.left && !node.right) { // render leaf node with NodeContent and menu
       return (
         <div className="canvas-node" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
           <NodeContent 
@@ -392,7 +411,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
       );
     }
 
-    return (
+    return ( // render internal node and recursively its children
       <div
         key={node.id}
         className="canvas-container"
@@ -442,6 +461,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     );
   };
 
+  // Render the root node inside a full-page canvas container
   return (
     <Box className="splittable-canvas" sx={{ backgroundColor: 'background.default', height: '100vh' }}>
       {renderNode(root)}

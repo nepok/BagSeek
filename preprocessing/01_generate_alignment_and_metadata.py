@@ -6,9 +6,12 @@ from rosbags.rosbag2 import Reader  # type: ignore
 from collections import defaultdict
 from tqdm import tqdm
 
+# Determine the topic with the most messages to use as the reference timeline
 def determine_reference_topic(topic_timestamps):
     return max(topic_timestamps.items(), key=lambda x: len(x[1]))[0]
 
+# Create a refined reference timeline with smaller intervals to improve alignment accuracy
+# The factor reduces the mean interval to create a denser timeline for better matching
 def create_reference_timestamps(timestamps, factor=2):
     timestamps = sorted(set(timestamps))
     diffs = np.diff(timestamps)
@@ -18,6 +21,8 @@ def create_reference_timestamps(timestamps, factor=2):
     ref_end = timestamps[-1]
     return np.arange(ref_start, ref_end, refined_interval).astype(np.int64)
 
+# Align timestamps of a topic to the closest reference timestamps within max_diff
+# For each reference timestamp, find the closest topic timestamp to align messages across topics
 def align_topic_to_reference(topic_ts, ref_ts, max_diff=int(1e8)):
     aligned = []
     topic_idx = 0
@@ -53,7 +58,7 @@ def process_rosbag(rosbag_path, csv_path):
         print(f"No topics found in {rosbag_path}")
         return
     
-    # Save topics to a JSON file
+    # Save topics to a JSON file without indentation
     topics = sorted(topic_data.keys())
     os.makedirs(TOPICS_DIR, exist_ok=True)
     topics_json_path = os.path.join(TOPICS_DIR, f"{os.path.basename(rosbag_path)}.json")
@@ -65,12 +70,13 @@ def process_rosbag(rosbag_path, csv_path):
     ref_topic = determine_reference_topic(topic_data)
     ref_ts = create_reference_timestamps(topic_data[ref_topic])
 
-    # Align each topic to the reference timeline
+    # Align each topic to the reference timeline to synchronize timestamps across topics
     aligned_data = {}
     for topic, timestamps in tqdm(topic_data.items(), desc="Aligning topics"):
         aligned_data[topic] = align_topic_to_reference(sorted(timestamps), ref_ts)
 
     # Prepare CSV data
+    # The CSV rows contain the reference timestamp, aligned timestamps for each topic, and the max timestamp distance across topics
     csv_data = []
     header = ['Reference Timestamp'] + list(aligned_data.keys()) + ['Max Distance']
     for i, ref_time in enumerate(ref_ts):
@@ -122,6 +128,8 @@ def create_topics_json_from_csv(csv_path):
         print(f"Skipping already existing topics JSON: {topics_json_path}")
 
 
+# Main function walks through rosbags directory and processes each rosbag only if it hasn't been processed before
+# This avoids redundant computation by checking for existing CSV and JSON files before processing
 def main():
 
     for root, dirs, files in os.walk(ROSBAGS_DIR):

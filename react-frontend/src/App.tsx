@@ -22,23 +22,24 @@ interface NodeMetadata {
 
 function App() {
 
-  const { setError } = useError();
+  const { setError } = useError(); // Hook to set global error messages for user feedback
+  
+  const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);  // List of all available timestamps fetched from backend
+  const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);  // Currently selected timestamp for playback or display
+  const [timestampDensity, setTimestampDensity] = useState<number[]>([]);  // Density information of timestamps, used for UI visualization like heatmaps
+  const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});  // Mapping from topic names to their respective timestamps at the selected reference
+  const [availableTopics, setAvailableTopics] = useState<string[]>([]);  // List of all available topics fetched from backend
+  const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});  // Mapping from topic names to their types, e.g., sensor_msgs/Image
+  const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);  // Currently selected rosbag file identifier or name
+  const [isFileInputVisible, setIsFileInputVisible] = useState(false);  // Controls visibility of the file input dialog component
+  const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);  // Controls visibility of the export dialog component
 
-  const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);
-  const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);
-  const [timestampDensity, setTimestampDensity] = useState<number[]>([]);
-  const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});
-  const [availableTopics, setAvailableTopics] = useState<string[]>([]);
-  const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});
-  const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);
-  const [isFileInputVisible, setIsFileInputVisible] = useState(false);
-  const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);
+  const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
+  const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
+  const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
+  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
 
-  const [currentRoot, setCurrentRoot] = useState<Node | null>(null); 
-  const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});
-  const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});
-  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);
-
+  // Fetch list of available topics from backend API
   const fetchAvailableTopics = async () => {
     try {
       const response = await fetch('/api/get-available-topics');
@@ -53,6 +54,7 @@ function App() {
     }
   };
 
+  // Fetch mapping of topics to their types from backend API
   const fetchAvailableTopicTypes = async () => {
     try {
       const response = await fetch('/api/get-available-topic-types');
@@ -67,6 +69,7 @@ function App() {
     }
   };
 
+  // Fetch both available timestamps and their density information from backend
   const fetchAvailableTimestampsAndDensity = async () => {
     try {
       const response = await fetch('/api/get-available-timestamps');
@@ -93,6 +96,7 @@ function App() {
     }
   };
 
+  // Fetch the currently selected rosbag identifier from backend
   const fetchSelectedRosbag = async () => {
     try {
       const response = await fetch('/api/get-selected-rosbag');
@@ -107,21 +111,24 @@ function App() {
     }
   };
 
+  // Update current canvas root node and metadata when user changes the canvas
   const handleCanvasChange = (root: Node, metadata: { [id: number]: NodeMetadata }) => {
     setCurrentRoot(root);
     setCurrentMetadata(metadata);
   };
   
-  // Update selectedTimestamp when availableTimestamps change
+  // Effect to update selected timestamp when available timestamps change
   useEffect(() => {
+    // If timestamps are available, select the first one by default
     if (availableTimestamps.length > 0) {
-      setSelectedTimestamp(availableTimestamps[0]); // Default to the first timestamp
-      handleSliderChange(availableTimestamps[0]); // Call handleSliderChange with the new timestamp
+      setSelectedTimestamp(availableTimestamps[0]); // Use first timestamp
+      handleSliderChange(availableTimestamps[0]); // Sync mapped timestamps on change
     } else {
-      setSelectedTimestamp(null); // Clear the selection if no timestamps
+      setSelectedTimestamp(null); // Clear selection if no timestamps
     }
-  }, [availableTimestamps]); // This effect runs whenever `availableTimestamps` changes
+  }, [availableTimestamps]);
 
+  // Effect to load all saved canvases once on component mount
   useEffect(() => {
     const loadAllCanvases = async () => {
       try {
@@ -130,7 +137,7 @@ function App() {
         if (!response.ok) {
           throw new Error(data.error || 'Failed to load canvases');
         }
-        setCanvasList(data);
+        setCanvasList(data); // Populate canvas list with saved canvases
       } catch (error) {
         setError('Error loading canvases');
         console.error('Error loading all canvases:', error);
@@ -140,10 +147,12 @@ function App() {
     loadAllCanvases();
   }, []);
 
+  // Handler for when user changes the timestamp slider
   const handleSliderChange = async (value: number) => {
-    setSelectedTimestamp(value);
+    setSelectedTimestamp(value); // Update selected timestamp in state
     
     try {
+      // Notify backend of new reference timestamp to get mapped timestamps
       const response = await fetch('/api/set-reference-timestamp', {
         method: 'POST',
         headers: {
@@ -156,15 +165,16 @@ function App() {
       if (!response.ok) {
         throw new Error(data.error || 'Failed to set reference timestamp');
       }
-      setMappedTimestamps(data.mappedTimestamps);
+      setMappedTimestamps(data.mappedTimestamps); // Update mapped timestamps for topics
     } catch (error) {
       setError('Error sending reference timestamp');
       console.error('Error sending reference timestamp:', error);
     }
   };
 
+  // Handler to save the current canvas layout under a given name
   const handleAddCanvas = async (name: string) => {
-    if (!currentRoot || !selectedRosbag) return;
+    if (!currentRoot || !selectedRosbag) return; // Require current canvas and rosbag
   
     const newCanvas = {
       root: currentRoot,
@@ -173,6 +183,7 @@ function App() {
     };
 
     try {
+      // Send new canvas data to backend to save
       const response = await fetch('/api/save-canvas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -185,7 +196,7 @@ function App() {
       if (!response.ok) {
         throw new Error(data.error || 'Failed to save canvas');
       }
-      // Update local state
+      // Update local canvas list with newly saved canvas
       setCanvasList(prev => ({
         ...prev,
         [name]: newCanvas
@@ -196,6 +207,7 @@ function App() {
     }
   };
   
+  // Handler to load a saved canvas by name and update current canvas state
   const handleLoadCanvas = async (name: string) => {
     try {
       const response = await fetch('/api/load-canvases');
@@ -204,8 +216,8 @@ function App() {
         throw new Error(data.error || 'Failed to load canvases');
       }
       if (data[name]) {
-        setCurrentRoot(data[name].root);
-        setCurrentMetadata(data[name].metadata);
+        setCurrentRoot(data[name].root); // Set root node of loaded canvas
+        setCurrentMetadata(data[name].metadata); // Set metadata of loaded canvas
       }
     } catch (error) {
       setError('Error loading canvases');
@@ -215,6 +227,7 @@ function App() {
 
   return (
     <>
+      {/* File input dialog for uploading rosbag files and fetching initial data */}
       <FileInput
         isVisible={isFileInputVisible}
         onClose={() => setIsFileInputVisible(false)}
@@ -223,6 +236,7 @@ function App() {
         onAvailableTimestampsUpdate={fetchAvailableTimestampsAndDensity}
         onSelectedRosbagUpdate={fetchSelectedRosbag}
       />
+      {/* Export dialog to export data based on timestamps, topics, and search marks */}
       <Export
         timestamps={availableTimestamps}
         timestampDensity={timestampDensity}
@@ -232,7 +246,9 @@ function App() {
         onClose={() => setIsExportDialogVisible(false)}
         searchMarks={searchMarks}
       />
+      {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        {/* Header bar with controls to open dialogs and load/save canvases */}
         <Header 
           setIsFileInputVisible={setIsFileInputVisible} 
           setIsExportDialogVisible={setIsExportDialogVisible} 
@@ -240,15 +256,17 @@ function App() {
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}
         />
+        {/* Canvas component that shows split views and topic data */}
         <SplittableCanvas 
           availableTopics={availableTopics} 
           availableTopicTypes={availableTopicTypes}
           mappedTimestamps={mappedTimestamps}
           selectedRosbag={selectedRosbag}
           onCanvasChange={handleCanvasChange}
-          currentRoot={currentRoot} // Pass currentRoot here
-          currentMetadata={currentMetadata} // Pass currentMetadata here
+          currentRoot={currentRoot} // current root node
+          currentMetadata={currentMetadata} // current node metadata
         />
+        {/* Timestamp player component with slider and search marks */}
         <TimestampPlayer
           availableTimestamps={availableTimestamps}
           timestampDensity={timestampDensity}

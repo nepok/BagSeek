@@ -1,15 +1,15 @@
+// React component for interacting with and controlling timestamp-based playback, search, and model filtering
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import './TimestampPlayer.css'; // Import the CSS file
 import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton, LinearProgress, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
 import SearchIcon from '@mui/icons-material/Search';
-import FilterAltIcon from '@mui/icons-material/FilterAlt';
-import L from 'leaflet';
+//import FilterAltIcon from '@mui/icons-material/FilterAlt';
+//import L from 'leaflet';
 import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 import { useError } from '../ErrorContext/ErrorContext'; // adjust path as needed
-import { set } from 'lodash';
 
 interface TimestampPlayerProps {
   availableTimestamps: number[];
@@ -54,32 +54,32 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
 
   const [sliderValue, setSliderValue] = useState(
     selectedTimestamp ? availableTimestamps.indexOf(selectedTimestamp) : 0
-  );
-
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS');
-  const [showSearchInput, setShowSearchInput] = useState(false); // State to control the visibility of the input
-  const [showFilter, setShowFilter] = useState(false); // State to control the visibility of the filter
-  const [showModelSelection, setShowModelSelection] = useState(false); // State to control the visibility of the model selection
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; similarityScore: number; timestamp: string; topic: string; model?: string }[]>([]); // Initialize as an empty array of SearchResult objects  
+  ); // current index in timestamp list
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1); // playback multiplier (e.g., 0.5x, 1x, 2x)
+  const [isPlaying, setIsPlaying] = useState(false); // whether playback is running
+  const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS'); // display mode: ROS or formatted time
+  const [showSearchInput, setShowSearchInput] = useState(false); // toggle search input box
+  const [showFilter, setShowFilter] = useState(false); // toggle polygon filter view
+  const [showModelSelection, setShowModelSelection] = useState(false); // toggle model dropdown
+  const [searchQuery, setSearchQuery] = useState(''); // input text for search query
+  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; similarityScore: number; timestamp: string; topic: string; model?: string }[]>([]); // list of returned search results
   //const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
-  const [imageGallery, setImageGallery] = useState<string[]>([]); // Store multiple images
-  const [models, setModels] = useState<string[]>([]); // State to store the list of models
-  const [selectedModel, setSelectedModel] = useState<string>('ViT-B-16-quickgelu__openai');
-  const [isSearching, setIsSearching] = useState(false);
+  const [imageGallery, setImageGallery] = useState<string[]>([]); // image previews for search results
+  const [models, setModels] = useState<string[]>([]); // list of available model names
+  const [selectedModel, setSelectedModel] = useState<string>('ViT-B-16-quickgelu__openai'); // current selected model
+  const [isSearching, setIsSearching] = useState(false); // status of async search
 
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const searchIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the search icon
-  const filterIconRef = useRef<HTMLButtonElement | null>(null); // Reference to the filter icon
+  const intervalRef = useRef<NodeJS.Timeout | null>(null); // interval reference for playback
+  const searchIconRef = useRef<HTMLButtonElement | null>(null); // anchor for search input
+  //const filterIconRef = useRef<HTMLButtonElement | null>(null); // anchor for filter input
 
-  const mapRef = useRef<L.Map | null>(null);
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  //const mapRef = useRef<L.Map | null>(null); // Leaflet map instance
+  //const mapContainerRef = useRef<HTMLDivElement | null>(null); // container for Leaflet map
 
   const { setError } = useError();
 
-  useEffect(() => {
+  // Initialize Leaflet map with click-to-polygon and right-click reset functionality
+  /*useEffect(() => {
       if (!showFilter) return;
     
       const initializeMap = () => {
@@ -163,10 +163,10 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           mapRef.current = null;
         }
       };
-    }, [showFilter]);
+    }, [showFilter]);*/
 
 
-  // update selected timestamp if slider or available timestamps change
+  // Keep slider position in sync with selected timestamp
   useEffect(() => {
     if (selectedTimestamp !== null) {
       const index = availableTimestamps.indexOf(selectedTimestamp);
@@ -174,7 +174,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   }, [selectedTimestamp, availableTimestamps]);
 
-  // Method for fetching the API search results
+  // Fetch semantic search results from backend API
   const fetchSearchResults = async (query: string) => {
     if (!query.trim()) return;
 
@@ -191,7 +191,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
-  // Fetch all images for the search results
+  // Build list of preview image URLs for current search results
   const fetchAllImages = async (maxResults = 5) => {
     try {
       // Generate the image URLs directly without making fetch requests
@@ -211,22 +211,26 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  // Handle slider movement: update index and propagate to parent
   const handleSliderChange = (event: Event, value: number | number[]) => {
     const newValue = Array.isArray(value) ? value[0] : value;
     setSliderValue(newValue);
     onSliderChange(availableTimestamps[newValue]);
   };
 
+  // Update playback speed and restart playback timer if running
   const handlePlaybackSpeedChange = (event: SelectChangeEvent<number>) => {
     const newSpeed = event.target.value as number;
     setPlaybackSpeed(newSpeed);
 
     if (isPlaying) {
       clearInterval(intervalRef.current!);
-      const intervalTime = 83.33 / newSpeed;
+      // Updated logic for intervalTime and step
+      const step = newSpeed <= 0.5 ? 1 : newSpeed === 1 ? 2 : newSpeed === 1.5 ? 3 : 4;
+      const intervalTime = newSpeed <= 0.5 ? 150 / newSpeed : 300;
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + 1) % availableTimestamps.length;
+          const nextIndex = (prevSliderValue + step) % availableTimestamps.length;
           onSliderChange(availableTimestamps[nextIndex]);
           return nextIndex;
         });
@@ -234,22 +238,27 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  // Change displayed timestamp unit (ROS or formatted time)
   const handleTimestampUnitChange = (event: SelectChangeEvent<string>) => {
     setTimestampUnit(event.target.value as 'ROS' | 'TOD');
   };
 
+  // Start or pause playback timer
   const togglePlayback = () => {
     if (isPlaying) {
       clearInterval(intervalRef.current!);
       setIsPlaying(false);
     } else {
-      const intervalTime = 83.33 / playbackSpeed;
+      // Updated logic for intervalTime and step
+      const step = playbackSpeed <= 0.5 ? 1 : playbackSpeed === 1 ? 2 : playbackSpeed === 1.5 ? 3 : 4;
+      const intervalTime = playbackSpeed <= 0.5 ? 150 / playbackSpeed : 300;
+      console.log(`Starting playback at speed ${playbackSpeed} with step ${step} and interval time ${intervalTime}ms`);
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + 1) % availableTimestamps.length;
+          const nextIndex = (prevSliderValue + step) % availableTimestamps.length;
           onSliderChange(availableTimestamps[nextIndex]);
           return nextIndex;
         });
@@ -259,6 +268,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  // Clean up playback timer on component unmount
   useEffect(() => {
     return () => {
       if (intervalRef.current) {
@@ -268,20 +278,24 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   }, []);
 
   // Toggle the input box visibility
+  // Toggle search input box open/close
   const toggleSearchInput = () => {
     setShowSearchInput(!showSearchInput);
   };
 
-  const toggleFilter = () => {
+  // Toggle polygon filter map open/close
+  /*const toggleFilter = () => {
     setShowFilter(!showFilter);
-  };
+  };*/
   
+  // Update preview image gallery when search results change
   useEffect(() => {
     if (searchResults.length > 0) {
       fetchAllImages(5);
     }
   }, [searchResults]);
 
+  // Reset UI state on rosbag change
   useEffect(() => {
     // Clear search results and images when rosbag changes
     setSearchResults([]);
@@ -289,6 +303,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     setSearchMarks([]);
   }, [selectedRosbag]);
   
+  // Run search when user presses Enter in search box
   const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       setIsSearching(true); // Start searching
@@ -299,18 +314,19 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  // Toggle model selection dropdown open/close
   const toggleModelSelection = () => {
     setShowModelSelection(!showModelSelection);
   };
 
-  // Fetch models from the API when the dropdown is opened
+  // Fetch model list when model selector is opened
   useEffect(() => {
     if (showModelSelection) {
       fetchModels();
     }
   }, [showModelSelection]);
 
-  // Function to fetch models from the API
+  // Fetch available models from backend API
   const fetchModels = async () => {
     try {
       const response = await fetch('/api/get-models');
@@ -325,7 +341,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
-  // Function to handle model selection
+  // Handle selection of a model from dropdown
   const handleModelSelect = async (event: SelectChangeEvent<string>) => {
     const selectedValue = event.target.value;
     setSelectedModel(selectedValue); // Update the selected model state
@@ -351,6 +367,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  // Render player controls, timestamp slider, search/model selection and result preview
   return (
     <div className="timestamp-player-container">
       
@@ -455,7 +472,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       </IconButton>
       
       {/* Popper for Filter */}
-      <Popper
+      {/*<Popper
         open={showFilter}
         anchorEl={filterIconRef.current} // Position relative to the search icon
         placement="top-end" // Places the popper above the icon
@@ -475,7 +492,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
         <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
             <div ref={mapContainerRef} style={{ height: '400px', width: '600px' }}></div>
         </Paper>
-      </Popper>
+      </Popper> */}
 
       {/* Popper for Search Input */}
       <Popper

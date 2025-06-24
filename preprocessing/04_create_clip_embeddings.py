@@ -28,6 +28,8 @@ Path(EMBEDDINGS_DIR).mkdir(parents=True, exist_ok=True)
 # Load Hugging Face CLIP model and processor
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Generate embeddings for all .pt image tensors in input_dir, saving normalized embeddings to output_dir
+# Loops over all files in input_dir recursively, skipping if embedding already exists
 def generate_embeddings(input_dir, output_dir, model, model_name, preprocess, device):
     for root, _, files in os.walk(input_dir):
         for file in tqdm(files, desc=f"Generating embeddings for {root[(len(PREPROCESSED_DIR) + 1):]} with Model {model_name}"):
@@ -57,6 +59,8 @@ def generate_embeddings(input_dir, output_dir, model, model_name, preprocess, de
                 except Exception as e:
                     print(f"Error processing {input_file_path}: {e}")
 
+# Worker function for per-GPU parallel embedding generation
+# Loads model on specific GPU and processes all preprocessed images to generate embeddings
 def worker(model_name, pretrained, device_id):
     print(f"Loading model: {model_name} ({pretrained}) on cuda:{device_id}")
     try:
@@ -85,6 +89,7 @@ def worker(model_name, pretrained, device_id):
     except Exception as e:
         print(f"Failed to load model {model_name} ({pretrained}): {e}")
 
+# Main function assigns models across available GPUs using multiprocessing for parallel embedding generation
 def main():
     num_gpus = torch.cuda.device_count()
     print(f"Number of GPUs available: {num_gpus}")

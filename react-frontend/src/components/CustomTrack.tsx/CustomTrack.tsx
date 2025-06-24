@@ -12,10 +12,10 @@ interface CustomTrackProps {
     windowSize?: number;
 }
 
+// Generate color from intensity and density factor
 function getHeatColor(value: number, densityFactor: number) {
-  const hue = (1 - value) * 268; // 209 = Blau, 0 = Rot
-  const sat = densityFactor * 30 + value * 70; // dynamic saturation based on data availability
-  //const sat = densityFactor * 100;
+  const hue = (1 - value) * 268; // violet to red
+  const sat = densityFactor * 30 + value * 70; // saturation based on density and intensity
   return `hsl(${hue}, ${sat}%, 50%)`;
 }
 
@@ -42,6 +42,7 @@ export const CustomTrack: React.FC<CustomTrackProps> = ({
   windowSize = 50,
   timestampDensity,
 }) => {
+  // Calculate normalized heat intensity per bin based on proximity to search marks
   const densityData = useMemo(() => {
     const counts = new Array(bins).fill(0);
     const total = timestampCount;
@@ -63,6 +64,7 @@ export const CustomTrack: React.FC<CustomTrackProps> = ({
     return counts.map((c) => c / (max || 1));
   }, [searchMarks, timestampCount, timestampDensity, bins, windowSize]);
 
+  // Normalize and resize timestamp density data to match bins count
   const normalizedDensity = useMemo(() => {
     const max = Math.max(...timestampDensity);
     const normalized = timestampDensity.map((v) => v / (max || 1));

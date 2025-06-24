@@ -1,56 +1,49 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./NodeContent.css"; // Import the CSS file
 import { Box, Typography } from "@mui/material";
-import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
-import { ArrowHelper } from "three";
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 
 interface NodeContentProps {
-  nodeTopic: string | null;
+  nodeTopic: string | null; 
   nodeTopicType: string | null; // Type of the topic, e.g., "sensor_msgs/Image"
   selectedRosbag: string | null;
   mappedTimestamp: number | null; // Optional timestamp for image reference
 }
 
 const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp }) => {
-  //const [image, setImage] = useState<string | null>(null); // Store the fetched image
-  const [referenceMap, setReferenceMap] = useState<Record<string, Record<string, string>>>({});
-  const [text, setText] = useState<string | null>(null);   // Store the fetched text
-  const [pointCloud, setPointCloud] = useState<number[] | null>(null); // Store fetched point cloud
-  const [realTimestamp, setRealTimestamp] = useState<string | null>(null);
-  const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null);
-  const [gpsPath, setGpsPath] = useState<[number, number][]>([]);
-  const [dataType, setDataType] = useState<string | null>(null); // Store the type of data fetched
+  
+  const [text, setText] = useState<string | null>(null);   // fetched textual message (e.g. string payloads)
+  const [pointCloud, setPointCloud] = useState<number[] | null>(null); // 3D point cloud data from sensor
+  const [realTimestamp, setRealTimestamp] = useState<string | null>(null); // human-readable timestamp string
+  const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null); // GPS position (lat, lon, alt)
+  const [gpsPath, setGpsPath] = useState<[number, number][]>([]); // array of previous GPS coordinates for path drawing
   const [imuData, setImuData] = useState<{
     orientation: { x: number; y: number; z: number; w: number };
     angular_velocity: { x: number; y: number; z: number };
     linear_acceleration: { x: number; y: number; z: number };
-  } | null>(null);
+  } | null>(null); // orientation, angular velocity, and acceleration from IMU
   
   const imageUrl =
     nodeTopic && mappedTimestamp && selectedRosbag
       ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}-${mappedTimestamp}.webp`
-      : undefined;
+      : undefined; // resolved URL to load image from local server
 
-  const mapRef = useRef<L.Map | null>(null);
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
+  const mapContainerRef = useRef<HTMLDivElement | null>(null); // reference to the div container holding the map
   
-  // Function to fetch data based on the topic and timestamp
+  // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
     try {
       const response = await fetch(`/api/content?timestamp=${mappedTimestamp}&topic=${nodeTopic}`);
       const data = await response.json();
 
-      setText(null);
-      setPointCloud(null);
-      setPosition(null);
-
-      if(data.type) {
-        setDataType(data.type);
-      }
+      setText(null); // clear previous text
+      setPointCloud(null); // clear previous point cloud
+      setPosition(null); // clear previous position
 
       switch (data.type) {
         case 'text':
@@ -126,6 +119,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       ) {
         fetchData();
       } else {
+        // Clear data for image topics (no fetch needed)
         setText(null);
         setPointCloud(null);
         setPosition(null);
@@ -135,14 +129,14 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
 
   useEffect(() => {
     if (position) {
-      setGpsPath(prevPath => [...prevPath, [position.latitude, position.longitude]]);
+      setGpsPath(prevPath => [...prevPath, [position.latitude, position.longitude]]); // extend GPS path with current position
     }
   }, [position]);
 
   useEffect(() => {
     // Clear the map if switching away from GPS
     if ((nodeTopicType !== "sensor_msgs/msg/NavSatFix" && nodeTopicType !== "novatel_oem7_msgs/msg/BESTPOS") && mapRef.current) {
-      mapRef.current.remove();
+      mapRef.current.remove(); // remove old map if topic is not GPS
       mapRef.current = null;
     }
 
@@ -152,7 +146,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       if (!mapRef.current && mapContainerRef.current) {
         mapRef.current = L.map(mapContainerRef.current).setView(
           [position.latitude, position.longitude], 16
-        );
+        ); // create new map instance
 
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
@@ -163,7 +157,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       // Update the view to the new position but preserve current zoom level
       if (mapRef.current) {
         const currentZoom = mapRef.current.getZoom();
-        mapRef.current.setView([position.latitude, position.longitude], currentZoom);
+        mapRef.current.setView([position.latitude, position.longitude], currentZoom); // pan to new GPS position
         mapRef.current.invalidateSize();
 
         // Clear existing markers and polylines
@@ -180,7 +174,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
             color: 'blue',
             fillColor: 'blue',
             fillOpacity: 0.8
-          }).addTo(mapRef.current);
+          }).addTo(mapRef.current); // draw current position marker
         }
 
         // Draw the path as a polyline
@@ -194,7 +188,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     }
   }, [nodeTopicType, position, gpsPath]);
 
-  // Point cloud rendering component
+  // Render 3D point cloud using Three.js
   const PointCloud: React.FC<{ pointCloud: number[] }> = ({ pointCloud }) => {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(pointCloud);
@@ -208,7 +202,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     return <primitive object={new THREE.Points(geometry, material)} />;
   };
 
-  // Rotate the scene 90 degrees on the Y-axis
+  // Rotate Three.js scene for better viewing angle
   const RotateScene = () => {
     const { scene } = useThree();
     useEffect(() => {
@@ -219,7 +213,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     return null; // No need to render anything here
   };
 
-  // ImuVisualizer component
+  // Render IMU visualization with orientation and vector arrows
   const ImuVisualizer: React.FC<{ imu: NonNullable<typeof imuData> }> = ({ imu }) => {
     const groupRef = useRef<THREE.Group>(null);
 
@@ -302,7 +296,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           <Typography variant="body2">{realTimestamp}</Typography>
         </div>
       </div>
-    );
+    ); // image rendering block
   } else if (pointCloud) {
     renderedContent = (
       <div className="canvas-container">
@@ -317,7 +311,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           <Typography variant="body2">{realTimestamp}</Typography>
         </div>
       </div>
-    );
+    ); // point cloud rendering block
   } else if (text) {
     renderedContent = (
       <Box>
@@ -329,13 +323,13 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           <Typography variant="body2">{realTimestamp}</Typography>
         </div>
       </Box>
-    );
+    ); // text rendering block
   } else if (position) {
     renderedContent = (
       <div className="gps-container">
         <div ref={mapContainerRef} className="map-container"></div>
       </div>
-    );
+    ); // map rendering block
   } else if (imuData) {
     renderedContent = (
       <div className="canvas-container">
@@ -344,7 +338,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           <ImuVisualizer imu={imuData} />
         </Canvas>
       </div>
-    );
+    ); // IMU visualization block
   } else {
     renderedContent = (
       <div className="centered-text">
@@ -352,11 +346,11 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           {nodeTopic ? "No content found for this topic and timestamp." : "Select a topic"}
         </p>
       </div>
-    );
+    ); // fallback for empty/no content
   }
 
   return (
-    <div className="node-content">
+    <div className="node-content"> {/* container for rendered content */}
       {renderedContent}
     </div>
   );

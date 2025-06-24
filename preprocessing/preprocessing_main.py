@@ -7,7 +7,7 @@ import os
 
 WORKING_DIR = "/mnt/data/bagseek/preprocessing"
 
-# Liste deiner Preprocessing-Skripte
+# Lists preprocessing scripts to run in order
 scripts = [
     "01_generate_alignment_and_metadata.py",
     "02_extract_images.py",
@@ -16,6 +16,7 @@ scripts = [
     "05_create_faiss_indices.py"
 ]
 
+# Runs each script and prints output, aborts on error
 def run_scripts():
     for script in scripts:
         print(f"Running: {script}")
@@ -26,5 +27,6 @@ def run_scripts():
             print(result.stderr)
             break
 
+# Entry point for executing the full preprocessing pipeline
 if __name__ == "__main__":
     run_scripts()
