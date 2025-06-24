@@ -8,12 +8,18 @@ channels:
 dependencies:
   - python=3.10
   - pip
+  - numpy
+  - pandas
+  - flask
+  - flask-cors
+  - tqdm
+  - openpyxl
+  - matplotlib
+  - opencv
+  - pytorch
+  - torchvision
   - libnvjitlink
   - faiss-gpu-cuvs=1.11.0
-  - pillow
-  - pandas
-  - psutil
-  - matplotlib 
   - pip:
       - blinker==1.9.0
       - certifi==2025.4.26

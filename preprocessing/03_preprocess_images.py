@@ -4,7 +4,6 @@ from PIL import Image
 import torch
 from tqdm import tqdm
 import open_clip
-import csv
 import re
 
 # Define constants for paths
