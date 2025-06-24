@@ -5,6 +5,7 @@ import torch
 from tqdm import tqdm
 import open_clip
 import re
+import concurrent.futures
 
 # Define constants for paths
 BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
@@ -64,48 +65,34 @@ def get_preprocess_id(preprocess_str: str) -> str:
 def preprocess_images(input_dir, output_dir, model_name, pretrained_name):
     model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained_name, cache_dir="/mnt/data/openclip_cache")
     print(f"Using model: {model} with preprocess: {preprocess}")
+
+    def process_single_image(file):
+        if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
+            input_file_dir = os.path.join(root, file)
+            relative_dir = os.path.relpath(root, input_dir)
+            output_file_dir = os.path.join(output_dir, relative_dir)
+
+            # Change the extension to .pt
+            base_name = os.path.splitext(file)[0]
+            output_file_path = os.path.join(output_file_dir, f"{base_name}.pt")
+
+            if os.path.exists(output_file_path):
+                return
+
+            Path(output_file_dir).mkdir(parents=True, exist_ok=True)
+
+            try:
+                image = Image.open(input_file_dir).convert("RGB")
+                image_tensor = preprocess(image)
+                torch.save(image_tensor, output_file_path)
+            except Exception as e:
+                print(f"Error processing {input_file_dir}: {e}")
+
     for root, _, files in os.walk(input_dir):
-        for file in tqdm(files, desc=f"Processing images for {root[(len(IMAGES_DIR) + 1):]}"):
-            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
-                input_file_dir = os.path.join(root, file)
-                relative_dir = os.path.relpath(root, input_dir)
-                output_file_dir = os.path.join(output_dir, relative_dir)
-                
-                # Change the extension to .pt
-                base_name = os.path.splitext(file)[0]
-                output_file_path = os.path.join(output_file_dir, f"{base_name}.pt")
-
-                # Skip processing if the output file already exists
-                if os.path.exists(output_file_path):
-                    continue
-
-                # Create output subdirectory if it doesn't exist
-                Path(output_file_dir).mkdir(parents=True, exist_ok=True)
-
-                try:
-                    image = Image.open(input_file_dir).convert("RGB")
-                    image_tensor = preprocess(image)
-                    torch.save(image_tensor, output_file_path)
-                except Exception as e:
-                    print(f"Error processing {input_file_dir}: {e}")
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            list(tqdm(executor.map(process_single_image, files), total=len(files), desc=f"Processing images for {root[(len(IMAGES_DIR) + 1):]}"))
 
 def main():
-    """Main function to iterate over all image folders and process them."""
-
-    """
-    for model_name, pretrained_name in model_configs:
-        for image_folder in tqdm(os.listdir(IMAGES_DIR), desc=f"Processing image folders for {model_name}_{pretrained_name}"):
-            image_folder_path = os.path.join(IMAGES_DIR, image_folder)
-            if os.path.isdir(image_folder_path):
-                output_folder_path = os.path.join(PREPROCESSED_DIR, f"{model_name}_{pretrained_name}", image_folder)
-                if not os.path.exists(output_folder_path):
-                    #print(f"Processing image folder: {image_folder} for model {model_name} pretrained on {pretrained_name}")
-                    #preprocess_images(image_folder_path, output_folder_path, model_name, pretrained_name)
-                    print_preprocess_data(image_folder_path, output_folder_path, model_name, pretrained_name)
-                else:
-                    print(f"Skipping already processed folder: {image_folder} for model {model_name} pretrained on {pretrained_name}")
-
-                    """
     for model_name, pretrained_name in model_configs:
         collect_preprocess_data(model_name, pretrained_name)
 

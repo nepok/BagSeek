@@ -1,3 +1,4 @@
+from csv import reader
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 from rosbags.interfaces import ConnectionExtRosbag2  # type: ignore
 import open_clip
 import math
+from threading import Thread
 
 # Flask API for BagSeek: A tool for exploring Rosbag data and using semantic search via CLIP and FAISS to locate safety critical and relevant scenes.
 # This API provides endpoints for loading data, searching via CLIP embeddings, exporting segments, and more.
@@ -37,7 +39,7 @@ SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'output_bag')
 ALIGNED_DATA = pd.read_csv(os.path.join(LOOKUP_TABLES_DIR, os.path.basename(SELECTED_ROSBAG) + '.csv'), dtype=str)
 
  # Define constants for Export progress tracking
-EXPORT_PROGRESS = {"status": "idle", "progress": 0.0, "message": ""}
+EXPORT_PROGRESS = {"status": "idle", "progress": -1}
 
 # Define default model for semantic search
 SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
@@ -116,8 +118,12 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     with Reader(src) as reader, Writer(dst, version=9) as writer:
         conn_map = {}
-        total_msgs = sum(1 for _ in reader.messages())  # Count total messages
+        all_msgs = list(reader.messages())
+        total_msgs = len(all_msgs)
         msg_counter = 0
+
+        EXPORT_PROGRESS["status"] = "starting"
+        EXPORT_PROGRESS["progress"] = -1
 
         for conn in reader.connections:
             ext = cast(ConnectionExtRosbag2, conn.ext)
@@ -130,17 +136,15 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
                     offered_qos_profiles=ext.offered_qos_profiles,
                 )
 
-        #from api import EXPORT_PROGRESS
         EXPORT_PROGRESS["status"] = "running"
-        EXPORT_PROGRESS["progress"] = 0.0
-        EXPORT_PROGRESS["message"] = "Export started"
+        EXPORT_PROGRESS["progress"] = 0.00
 
         for conn, timestamp, data in reader.messages():
+            msg_counter += 1
+            current_progress = (msg_counter / total_msgs)
+            EXPORT_PROGRESS["progress"] = round(current_progress, 2)
             if conn.id not in conn_map:
                 continue
-            msg_counter += 1
-            EXPORT_PROGRESS["progress"] = round(msg_counter / total_msgs, 3)
-            EXPORT_PROGRESS["message"] = f"Exporting message {msg_counter} of {total_msgs}"
 
             if not (timestamp >= start_timestamp and timestamp <= end_timestamp):
                 continue
@@ -157,7 +161,6 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
             writer.write(conn_map[conn.id], timestamp, outdata)
 
         EXPORT_PROGRESS["status"] = "done"
-        EXPORT_PROGRESS["message"] = "Export completed"
         EXPORT_PROGRESS["progress"] = 1.0
 
 @app.route('/api/export-status', methods=['GET'])
@@ -506,8 +509,14 @@ def export_rosbag():
 
         EXPORT_PATH = os.path.join(EXPORT_DIR, new_rosbag_name)
 
-        export_rosbag_with_topics(SELECTED_ROSBAG, EXPORT_PATH, topics, start_timestamp, end_timestamp)
-        return jsonify({"message": "Export successful", "exported_path": str(EXPORT_PATH)})
+        EXPORT_PROGRESS["status"] = "starting"
+        EXPORT_PROGRESS["progress"] = -1
+
+        def run_export():
+            export_rosbag_with_topics(SELECTED_ROSBAG, EXPORT_PATH, topics, start_timestamp, end_timestamp)
+
+        Thread(target=run_export).start()
+        return jsonify({"message": "Export started", "exported_path": str(EXPORT_PATH)})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

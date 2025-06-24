@@ -23,23 +23,9 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
   const [selectionMode, setSelectionMode] = useState<'topic' | 'type'>('topic');
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
-  const [exportStatus, setExportStatus] = useState<{progress: number, message: string, status: string} | null>(null);
+  const [exportStatus, setExportStatus] = useState<{progress: number, status: string} | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!exportStatus || exportStatus.status !== "running") return;
-  
-    const interval = setInterval(async () => {
-      const res = await fetch("/api/export-status");
-      const data = await res.json();
-      setExportStatus(data);
-  
-      if (data.status === "done") clearInterval(interval);
-    }, 100);
-  
-    return () => clearInterval(interval);
-  }, [exportStatus]);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -145,10 +131,19 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     fetchSelectedRosbag();
   }, []);
 
+  useEffect(() => {
+  if (exportStatus?.status === 'done') {
+    const timer = setTimeout(() => {
+      setExportStatus(null);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }
+}, [exportStatus]);
+
   const handleExport = async () => {
     if (timestamps.length === 0) return;
 
-    setExportStatus({ status: "running", progress: 0, message: "Export started..." });
+    setExportStatus({status: 'starting', progress: -1});
 
     const exportData = {
       new_rosbag_name: newRosbagName,
@@ -168,7 +163,21 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
 
       const result = await response.json();
       if (response.ok) {
-        console.log('Export successful:', result);
+        // Begin polling once export starts successfully
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch("/api/export-status");
+            const statusData = await statusRes.json();
+            setExportStatus(statusData);
+
+            if (statusData.status === "done" || statusData.status === "idle") {
+              clearInterval(pollInterval);
+            }
+          } catch (err) {
+            console.error("Polling error:", err);
+            clearInterval(pollInterval);
+          }
+        }, 1000);
       } else {
         console.error('Export failed:', result.error);
       }
@@ -226,7 +235,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
   if (!isVisible) {
     return (
       <>
-        {exportStatus && exportStatus.status === "running" && (
+        {exportStatus && (
           <Box sx={{
             position: 'fixed',
             bottom: 80,
@@ -238,9 +247,19 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             zIndex: 9999,
             boxShadow: '0px 0px 10px rgba(0,0,0,0.5)'
           }}>
-            <Typography variant="body2">{exportStatus.message}</Typography>
+            <Typography variant="body2">
+              {exportStatus.progress === -1
+                ? "Loading Rosbag..."
+                : exportStatus.progress === 1
+                  ? "Finished exporting!"
+                  : `Export progress: ${(exportStatus.progress * 100).toFixed(0)}%`}
+            </Typography>
             <Box sx={{ width: 200, mt: 1 }}>
-              <LinearProgress variant="determinate" value={exportStatus.progress * 100} />
+              {exportStatus.progress === -1 ? (
+                <LinearProgress />
+              ) : (
+                <LinearProgress variant="determinate" value={exportStatus.progress * 100} />
+              )}
             </Box>
           </Box>
         )}

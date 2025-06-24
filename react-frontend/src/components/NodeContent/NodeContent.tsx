@@ -160,9 +160,10 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
         }).addTo(mapRef.current!);
       }
 
-      // Always update the view and layers when GPS data changes
+      // Update the view to the new position but preserve current zoom level
       if (mapRef.current) {
-        mapRef.current.setView([position.latitude, position.longitude], 16);
+        const currentZoom = mapRef.current.getZoom();
+        mapRef.current.setView([position.latitude, position.longitude], currentZoom);
         mapRef.current.invalidateSize();
 
         // Clear existing markers and polylines
