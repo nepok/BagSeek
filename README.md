@@ -62,14 +62,14 @@ bagseek/
 ├── flask-backend/                # Python backend (Flask API, CLIP, indexing, etc.)
 │   ├── api/                      # Contains api.py and route definitions
 │   │   └── api.py
-│   ├── src/                      # necessary preprocessing data: extracted images, embeddings, indices, ...
-│   │   ├── extracted_images/
-│   │   ├── embeddings/
-│   │   ├── faiss_indices/
-│   │   └── ...
-│   └── preprocessing/            # Standalone preprocessing scripts
-│       ├── ...
-│
+│   └── src/                      # necessary preprocessing data: extracted images, embeddings, indices, ...
+│       ├── extracted_images/
+│       ├── embeddings/
+│       ├── faiss_indices/
+│       └── ...
+├── preprocessing/                # Standalone preprocessing scripts and master preprocessing script 
+│   ├── preprocessing_main.py
+│   └── ...
 ├── react-frontend/               # React frontend (TypeScript, React)
 │   ├── node_modules/
 │   ├── public/
@@ -82,6 +82,8 @@ bagseek/
 ├── rosbags/                      # Local or mounted ROS 2 bag files
 └── README.md
 ```
+
+⚠️ **Note**: You have to create your own rosbags folder and update all corresponding paths in api.py and the preprocessing scripts.
 
 ## 🧪 Evaluation Summary
 
