@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, FormControl, InputLabel, Select, MenuItem, Box, Slider, Checkbox, ListItemText, SelectChangeEvent, Typography, LinearProgress, ButtonGroup, alpha } from '@mui/material';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
-import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
+import { CustomTrack } from '../CustomTrack/CustomTrack';
 import { times } from 'lodash';
 
 interface ExportProps {

@@ -56,6 +56,7 @@ EXPORT_PROGRESS = {"status": "idle", "progress": -1}
 
 # SELECTED_MODEL: Default CLIP model for semantic search (format: <model_name>__<pretrained_name>)
 SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
+SEARCHED_ROSBAGS = []
 
 # MAX_K: Number of top results to return for semantic search
 MAX_K = 100
@@ -269,6 +270,27 @@ def get_selected_rosbag():
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/set-searched-rosbags', methods=['POST'])
+def set_searched_rosbags():
+    """
+    Set the currently searched Rosbag file name.
+    This is used to filter available topics and images based on the selected Rosbag.
+    """
+    try:
+        data = request.get_json()  # Get the JSON payload
+        searchedRosbags = data.get('searchedRosbags')  # The list of searched Rosbags
+
+        if not isinstance(searchedRosbags, list):
+            return jsonify({"error": "searchedRosbags must be a list"}), 400
+
+        global SEARCHED_ROSBAGS
+        SEARCHED_ROSBAGS = searchedRosbags
+
+        return jsonify({"message": "Searched Rosbags updated successfully."}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500 
     
 # Get available topics from pre-generated JSON file for the current Rosbag
 @app.route('/api/get-available-topics', methods=['GET'])
@@ -434,6 +456,7 @@ def search():
       - Loads the selected CLIP model and tokenizer.
       - Computes query embedding for the input query text.
       - Loads the FAISS index and embedding paths for the selected model and Rosbag.
+      - If multiple searched rosbags are provided, creates a temporary FAISS index from sampled embeddings.
       - Searches the index for the top MAX_K results.
       - For each result:
           - Extracts the topic and timestamp from the embedding path.
@@ -444,7 +467,7 @@ def search():
     if query_text is None:
         return jsonify({'error': 'No query text provided'}), 400
 
-    rosbag_name = os.path.basename(SELECTED_ROSBAG).replace('.db3', '')
+    # Insert logic for multi-rosbag search using sampled embeddings
     results = []
     marks = []
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -455,29 +478,57 @@ def search():
         model, _, preprocess = open_clip.create_model_and_transforms(name, pretrained, device=device, cache_dir="/mnt/data/openclip_cache")
         tokenizer = open_clip.get_tokenizer(name)
         query_embedding = get_text_embedding(query_text, model, tokenizer, device)
-        subdir = f"{name}__{pretrained}"
-        index_path = os.path.join(INDICES_DIR, subdir, rosbag_name, "faiss_index.index")
-        embedding_paths_file = os.path.join(INDICES_DIR, subdir, rosbag_name, "embedding_paths.npy")
 
-        # Load the FAISS index and embedding paths
-        if not Path(index_path).exists() or not Path(embedding_paths_file).exists():
-            del model
-            torch.cuda.empty_cache()
-            return jsonify({'error': 'Missing index or embeddings for selected model'}), 500
+        # --- Refactored searchedRosbags logic ---
+        searched_rosbags = SEARCHED_ROSBAGS
+        if not searched_rosbags:
+            return jsonify({"error": "No rosbags selected"}), 400
 
-        index_cpu = faiss.read_index(index_path)
-        if device == "cuda" and faiss.get_num_gpus() > 0:
-            # Move index to GPU(s) for faster search if available
-            num_gpus = faiss.get_num_gpus()
-            gpu_resources = [faiss.StandardGpuResources() for _ in range(num_gpus)]
-            co = faiss.GpuMultipleClonerOptions()
-            co.shard = True  # Enable sharding across GPUs
-            index = faiss.index_cpu_to_gpu_multiple_py(gpu_resources, index_cpu, co)
-            total_vectors = index.ntotal
+        if len(searched_rosbags) == 1:
+            rosbag_name = os.path.basename(searched_rosbags[0]).replace('.db3', '')
+            subdir = f"{name}__{pretrained}"
+            index_path = os.path.join(INDICES_DIR, subdir, rosbag_name, "faiss_index.index")
+            embedding_paths_file = os.path.join(INDICES_DIR, subdir, rosbag_name, "embedding_paths.npy")
+
+            if not os.path.exists(index_path) or not os.path.exists(embedding_paths_file):
+                del model
+                torch.cuda.empty_cache()
+                return jsonify({"error": "Index or embedding paths not found"}), 404
+
+            index = faiss.read_index(index_path)
+            embedding_paths = np.load(embedding_paths_file)
+
         else:
-            index = index_cpu
+            all_embeddings = []
+            all_paths = []
 
-        embedding_paths = np.load(embedding_paths_file)
+            for rosbag_path in searched_rosbags:
+                rosbag = os.path.basename(rosbag_path)
+                subdir = f"{name}__{pretrained}"
+                embedding_folder_path = os.path.join(EMBEDDINGS_DIR, subdir, rosbag)
+
+                for root, _, files in os.walk(embedding_folder_path):
+                    for file in files:
+                        if file.lower().endswith('_embedding.pt'):
+                            input_file_path = os.path.join(root, file)
+                            try:
+                                embedding = torch.load(input_file_path, weights_only=True)
+                                all_embeddings.append(embedding.cpu().numpy())
+                                all_paths.append(input_file_path)
+                            except Exception as e:
+                                print(f"Error loading {input_file_path}: {e}")
+
+            if not all_embeddings:
+                del model
+                torch.cuda.empty_cache()
+                return jsonify({"error": "No embeddings found for selected rosbags"}), 404
+
+            stacked_embeddings = np.vstack(all_embeddings[::10]).astype('float32')
+            index = faiss.IndexFlatL2(stacked_embeddings.shape[1])
+            index.add(stacked_embeddings)
+            embedding_paths = np.array(all_paths[::10])
+
+        # (Removed obsolete loading of FAISS index and embedding paths here)
 
         # Perform nearest neighbor search in the embedding space
         similarityScores, indices = index.search(query_embedding.reshape(1, -1), MAX_K)
@@ -493,16 +544,23 @@ def search():
                 continue
             embedding_path = str(embedding_paths[idx])
             path_of_interest = str(os.path.basename(embedding_path))
+            relative_path = os.path.relpath(embedding_path, EMBEDDINGS_DIR)
+            rosbag_name = os.path.basename(os.path.dirname(relative_path))
             result_timestamp = path_of_interest[-32:-13]
             result_topic = path_of_interest[:-33].replace("__", "/")
             results.append({
                 'rank': i + 1,
+                'rosbag': rosbag_name,
                 'embedding_path': embedding_path,
                 'similarityScore': similarityScore,
                 'topic': result_topic,
                 'timestamp': result_timestamp,
                 'model': SELECTED_MODEL
             })
+
+            if rosbag_name != os.path.basename(SELECTED_ROSBAG):
+                # If the result is from a different Rosbag, skip alignment
+                continue
             # For each result, find all reference timestamps that align to this result timestamp (for UI marks)
             matching_reference_timestamps = ALIGNED_DATA.loc[
                 ALIGNED_DATA.isin([result_timestamp]).any(axis=1),

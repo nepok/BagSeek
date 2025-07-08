@@ -1,13 +1,14 @@
 // React component for interacting with and controlling timestamp-based playback, search, and model filtering
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import './TimestampPlayer.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton, LinearProgress, CircularProgress } from '@mui/material';
+import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography, TextField, Popper, Skeleton, Paper, Box, List, ListItem, ListItemText, ListItemButton, LinearProgress, CircularProgress, Icon, Checkbox } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
 import SearchIcon from '@mui/icons-material/Search';
+import ListIcon from '@mui/icons-material/List';
 //import FilterAltIcon from '@mui/icons-material/FilterAlt';
 //import L from 'leaflet';
-import { CustomTrack } from '../CustomTrack.tsx/CustomTrack';
+import { CustomTrack } from '../CustomTrack/CustomTrack';
 import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 import { useError } from '../ErrorContext/ErrorContext'; // adjust path as needed
 
@@ -59,14 +60,17 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   const [isPlaying, setIsPlaying] = useState(false); // whether playback is running
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS'); // display mode: ROS or formatted time
   const [showSearchInput, setShowSearchInput] = useState(false); // toggle search input box
-  const [showFilter, setShowFilter] = useState(false); // toggle polygon filter view
+  //const [showFilter, setShowFilter] = useState(false); // toggle polygon filter view
   const [showModelSelection, setShowModelSelection] = useState(false); // toggle model dropdown
+  const [showRosbagSelection, setShowRosbagSelection] = useState(false); // toggle folder selection
   const [searchQuery, setSearchQuery] = useState(''); // input text for search query
-  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; similarityScore: number; timestamp: string; topic: string; model?: string }[]>([]); // list of returned search results
+  const [searchResults, setSearchResults] = useState<{ rank : number; embedding_path: string; similarityScore: number; timestamp: string; topic: string; model?: string, rosbag?: string}[]>([]); // list of returned search results
   //const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  
   const [imageGallery, setImageGallery] = useState<string[]>([]); // image previews for search results
-  const [models, setModels] = useState<string[]>([]); // list of available model names
+  const [models, setModels] = useState<string[]>([]); // list of available model names 
+  const [availableRosbags, setAvailableRosbags] = useState<string[]>([]); // list of available rosbag files
   const [selectedModel, setSelectedModel] = useState<string>('ViT-B-16-quickgelu__openai'); // current selected model
+  const [selectedRosbags, setSelectedRosbags] = useState<string[]>([]); // list of selected rosbag files
   const [isSearching, setIsSearching] = useState(false); // status of async search
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null); // interval reference for playback
@@ -197,8 +201,8 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       // Generate the image URLs directly without making fetch requests
       const imageUrls = searchResults.slice(0, maxResults).map((result) => {
         const imageUrl =
-          result.topic && result.timestamp && selectedRosbag
-            ? `http://localhost:5000/images/${selectedRosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
+          result.topic && result.timestamp && result.rosbag
+            ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
             : undefined;
         return imageUrl;
       });
@@ -314,6 +318,24 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   };
 
+  const toggleRosbagSelection = () => {
+    setShowRosbagSelection(!showRosbagSelection);
+  }
+
+  useEffect(() => {
+    if (showRosbagSelection) {
+      fetchRosbags();
+    }
+  }, [showRosbagSelection]);
+
+  useEffect(() => {
+    if (selectedRosbags.length > 0) {
+      // Reset search results and image gallery when rosbags are selected
+      setSearchResults([]);
+    }
+  }, [selectedRosbags]);
+
+
   // Toggle model selection dropdown open/close
   const toggleModelSelection = () => {
     setShowModelSelection(!showModelSelection);
@@ -338,6 +360,64 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     } catch (error) {
       setError('Error fetching models.');
       console.error('Error fetching models:', error);
+    }
+  };
+
+  const fetchRosbags = async () => {
+    try {
+      const response = await fetch('/api/get-file-paths');
+      if (!response.ok) {
+        throw new Error('Failed to fetch folders');
+      }
+      const data = await response.json();
+      setAvailableRosbags(data.paths || []); // Update the state with the fetched folders
+      console.log('Fetched folders:', data.paths); // Log the fetched folders
+    } catch (error) {
+      setError('Error fetching folders.');
+      console.error('Error fetching folders:', error);
+    }
+  };
+
+  // Handle selection of rosbags from dropdown
+  const handleRosbagsSelection = async (event: SelectChangeEvent<string[]>) => {
+    const value = event.target.value as string[];
+
+    let newSelection: string[] = [];
+
+    if (value.includes("ALL")) {
+      newSelection =
+        selectedRosbags.length === availableRosbags.length ? [] : availableRosbags;
+    } else if (value.includes("currently selected")) {
+      const matched = availableRosbags.find(
+        (bag) => selectedRosbag && bag.split("/").pop() === selectedRosbag
+      );
+      if (matched) {
+        newSelection = [matched];
+      }
+    } else {
+      newSelection = value;
+    }
+
+    setSelectedRosbags(newSelection); // Update state
+
+    try {
+      const response = await fetch("/api/set-searched-rosbags", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ searchedRosbags: newSelection }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to set searched rosbags");
+      }
+
+      const data = await response.json();
+      console.log(data.message);
+    } catch (error) {
+      setError("Error setting searched rosbags.");
+      console.error("Error setting searched rosbags:", error);
     }
   };
 
@@ -461,6 +541,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       >
         <FilterAltIcon />
       </IconButton>*/} 
+      {/* Folder icon button */}
       {/* Search icon button to toggle the search input */}
       <IconButton 
         ref={searchIconRef} 
@@ -512,6 +593,87 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           },
         ]}
       >
+        {/* New Folder Button positioned above model + search input */}
+        <Box sx={{ display: 'flex', gap: '8px'}}>
+          <Box sx={{ width: '40px' }}>
+            <IconButton
+              aria-label="folder"
+              onClick={toggleRosbagSelection}
+              sx={{ fontSize: '1.2rem', background: "#202020" }}
+            >
+              <ListIcon />
+            </IconButton>
+          </Box>
+        </Box>
+
+                {/* Nested Popper for Rosbag Selection */}
+        <Popper
+          open={showRosbagSelection}
+          anchorEl={searchIconRef.current}
+          placement="top-end"
+          sx={{
+            zIndex: 1300,
+            width: "250px",
+            background: "#202020",
+            borderRadius: '8px',
+            marginTop: '8px',
+          }}
+          modifiers={[
+            {
+              name: 'offset',
+              options: {
+                offset: [-213, 130],
+              },
+            },
+          ]}
+        >
+          <Box sx={{ padding: '8px' }}>
+            <Typography variant="body2" sx={{ color: "#e8eaed", marginBottom: '8px' }}>
+              Select Rosbags
+            </Typography>
+            <FormControl fullWidth margin="dense">
+              <InputLabel id="rosbag-select-label" sx={{ color: '#e8eaed' }}>Rosbags</InputLabel>
+              {
+                // Find the availableRosbags entry that matches the selectedRosbag substring
+              }
+              {(() => {
+                const matchedRosbag = availableRosbags.find(bag =>
+                  selectedRosbag && bag.split('/').pop() === selectedRosbag
+                ) || '';
+                return (
+                  <Select
+                    labelId="rosbag-select-label"
+                    id="rosbag-select"
+                    multiple
+                    value={selectedRosbags}
+                    onChange={handleRosbagsSelection}
+                    renderValue={(selected) => (selected as string[]).join(', ')}
+                    sx={{ background: "#404040", color: "#e8eaed" }}
+                  >
+                    {/* ALL Option */}
+                    <MenuItem value="ALL">
+                      <Checkbox checked={selectedRosbags.length === availableRosbags.length && availableRosbags.length > 0} />
+                      <ListItemText primary="SELECT ALL" />
+                    </MenuItem>
+                    <MenuItem value="currently selected">
+                      <Checkbox checked={selectedRosbags.includes(matchedRosbag)} />
+                      <ListItemText primary="CURRENTLY SELECTED" />
+                    </MenuItem>
+                    {/* Map through available rosbags */}
+                    {(Array.isArray(availableRosbags) ? availableRosbags : []).map((bag) => (
+                      <MenuItem key={bag} value={bag}>
+                        <Checkbox checked={selectedRosbags.includes(bag)} />
+                        <ListItemText primary={bag} />
+                      </MenuItem>
+                    ))}
+                  </Select>
+                );
+              })()}
+            </FormControl>
+          </Box>
+        </Popper>
+
+        {/* Model Button + Search Input Row */}
         <Box sx={{ display: 'flex', flexDirection: 'row', gap: '8px', paddingBlock: '8px'}}>
           <IconButton
             aria-label="model"
@@ -520,6 +682,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           >
             <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M720-140 560-300l160-160 56 56-63 64h167v80H713l63 64-56 56Zm-560-20q-33 0-56.5-23.5T80-240v-120q0-33 23.5-56.5T160-440h240q33 0 56.5 23.5T480-360v120q0 33-23.5 56.5T400-160H160Zm0-80h240v-120H160v120Zm80-260-56-56 63-64H80v-80h167l-63-64 56-56 160 160-160 160Zm320-20q-33 0-56.5-23.5T480-600v-120q0-33 23.5-56.5T560-800h240q33 0 56.5 23.5T880-720v120q0 33-23.5 56.5T800-520H560Zm0-80h240v-120H560v120ZM400-240v-120 120Zm160-360v-120 120Z"/></svg>
           </IconButton>
+
           <TextField
             variant="outlined"
             label="Search"
@@ -580,82 +743,84 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   
       {/* Popper for Search Results */}
       <Popper
-        open={showSearchInput} // Show the Popper only when there are results
-        anchorEl={searchIconRef.current} // Position relative to the search icon
-        placement="top" // Display results above the icon
+        open={showSearchInput}
+        anchorEl={searchIconRef.current}
+        placement="top"
         sx={{
           zIndex: 1200,
           width: '210px',
-          left: '50%', // Center the Popper horizontally
-          transform: 'translateX(-50%)', // Center the Popper horizontally
+          left: '50%',
+          transform: 'translateX(-50%)',
           padding: '8px',
-          background: '#202020', // Dark background color
+          background: '#202020',
           borderRadius: '8px',
-          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.3)', // Optional: shadow for better visibility
+          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.3)',
         }}
         modifiers={[
           {
             name: 'offset',
             options: {
-              offset: [0, 70], // Move the popper 10px higher above the search icon (increase value for higher)
+              offset: [0, 70],
             },
           },
         ]}
       >
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          width: '100%',
-          gap: '8px',
-          padding: '8px',
-          maxHeight: 'calc(100vh - 100px)', // if you want to leave room for header/footer
-          overflowY: 'auto',
-        }}>
-          {imageGallery && imageGallery.length > 0 ? (
-            imageGallery.map((imgUrl, index) => (
-              <div key={index} style={{ textAlign: 'left', width: '100%' }}>
-                <img
-                  src={imgUrl}
-                  alt={"No result available"}
-                  style={{
-                    width: '100%',
-                    height: 'auto',
-                    objectFit: 'contain',
-                  }}
-                />
-                <Typography
-                  variant="body2"
-                  sx={{
-                    color: 'white',
-                    wordBreak: 'break-word',
-                    marginTop: '4px',
-                    fontSize: '0.7rem',
-                  }}
-                >
-                  {searchResults[index] && (
-                    <>
-                      <div>{searchResults[index].topic}</div>
-                      <div>{searchResults[index].timestamp}</div>
-                      {/*<div>Distance: {searchResults[index].distance.toFixed(5)}</div>*/}
-                      {/*<div>Model: {searchResults[index].model}</div>*/}
-                    </>
-                  )}
-                </Typography>
-              </div>
-            ))
-          ) : (
-            <>
-              {isSearching && (
-                <LinearProgress
-                  sx={{
-                    width: '100%',
-                  }}
-                />
-              )}
-            </>
-          )}
-        </div>
+        <Box sx={{ display: 'flex', flexDirection: 'row', gap: '8px' }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            width: '100%',
+            minHeight: '24px',
+            gap: '8px',
+            padding: '8px',
+            maxHeight: 'calc(100vh - 100px)',
+            overflowY: 'auto',
+          }}>
+            {imageGallery && imageGallery.length > 0 ? (
+              imageGallery.map((imgUrl, index) => (
+                <div key={index} style={{ textAlign: 'left', width: '100%' }}>
+                  <img
+                    src={imgUrl}
+                    alt={"No result available"}
+                    style={{
+                      width: '100%',
+                      height: 'auto',
+                      objectFit: 'contain',
+                    }}
+                  />
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'white',
+                      wordBreak: 'break-word',
+                      marginTop: '4px',
+                      fontSize: '0.7rem',
+                    }}
+                  >
+                    {searchResults[index] && (
+                      <>
+                        <div>{searchResults[index].topic}</div>
+                        <div>{searchResults[index].timestamp}</div>
+                        <div>{searchResults[index].rosbag}</div>
+                      </>
+                    )}
+                  </Typography>
+                </div>
+              ))
+            ) : (
+              <>
+                {isSearching && (
+                  <LinearProgress
+                    sx={{
+                      width: '100%',
+                    }}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </Box>
       </Popper>
 
     </div>
