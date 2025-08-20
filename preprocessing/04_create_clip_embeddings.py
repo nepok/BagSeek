@@ -6,11 +6,15 @@ from torchvision.transforms.functional import to_pil_image
 from tqdm import tqdm
 import open_clip
 import gc
+from dotenv import load_dotenv
+
+PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=PARENT_ENV)
 
 # Define constants for paths
-BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
-PREPROCESSED_DIR = os.path.join(BASE_DIR, "preprocessed_images")
-EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
+BASE_DIR = os.getenv("BASE_DIR")
+PREPROCESSED_DIR = os.getenv("PREPROCESSED_DIR")
+EMBEDDINGS_DIR = os.getenv("EMBEDDINGS_DIR")
 
 model_configs = [
     ('ViT-B-32-quickgelu', 'openai'),

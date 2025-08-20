@@ -1,10 +1,22 @@
 import os
 import csv
+from pathlib import Path
+from flask import config
 import numpy as np
 import json
 from rosbags.rosbag2 import Reader  # type: ignore
 from collections import defaultdict
 from tqdm import tqdm
+from dotenv import load_dotenv
+
+PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=PARENT_ENV)
+
+# Define constants for paths
+ROSBAGS_DIR_OLD = os.getenv("ROSBAGS_DIR_OLD")
+ROSBAGS_DIR = os.getenv("ROSBAGS_DIR")
+LOOKUP_TABLES_DIR = os.getenv("LOOKUP_TABLES_DIR")
+TOPICS_DIR = os.getenv("TOPICS_DIR")
 
 # Determine the topic with the most messages to use as the reference timeline
 def determine_reference_topic(topic_timestamps):
@@ -35,12 +47,6 @@ def align_topic_to_reference(topic_ts, ref_ts, max_diff=int(1e8)):
         else:
             aligned.append(None)
     return aligned
-
-# Define constants for paths
-BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
-ROSBAGS_DIR = "/mnt/data/rosbags"
-LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, "lookup_tables")
-TOPICS_DIR = os.path.join(BASE_DIR, "topics")
 
 def process_rosbag(rosbag_path, csv_path):
     topic_data = defaultdict(list)
@@ -127,12 +133,8 @@ def create_topics_json_from_csv(csv_path):
     else:
         print(f"Skipping already existing topics JSON: {topics_json_path}")
 
-
-# Main function walks through rosbags directory and processes each rosbag only if it hasn't been processed before
-# This avoids redundant computation by checking for existing CSV and JSON files before processing
-def main():
-
-    for root, dirs, files in os.walk(ROSBAGS_DIR):
+def walk(rosbag_dir):
+    for root, dirs, files in os.walk(rosbag_dir):
         if "metadata.yaml" in files:
             rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
             
@@ -155,6 +157,13 @@ def main():
                 create_topics_json_from_csv(csv_path)
             else:
                 print(f"Skipping already existing topics JSON: {rosbag_name}")
+
+
+# Main function walks through rosbags directory and processes each rosbag only if it hasn't been processed before
+# This avoids redundant computation by checking for existing CSV and JSON files before processing
+def main():
+    for dir in [ROSBAGS_DIR_OLD, ROSBAGS_DIR]:
+        walk(dir)
 
 if __name__ == "__main__":
     main()

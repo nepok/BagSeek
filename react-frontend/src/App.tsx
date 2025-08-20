@@ -6,6 +6,9 @@ import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import FileInput from './components/FileInput/FileInput';
 import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
+import { set } from 'lodash';
+import { Global } from '@emotion/react';
+import GlobalSearch from './components/GlobalSearch/GlobalSearch';
 
 interface Node {
   id: number;
@@ -38,6 +41,9 @@ function App() {
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
+
+  // View mode state: 'explore' or 'search'
+  const [viewMode, setViewMode] = useState<'explore' | 'search'>('explore');
 
   // Fetch list of available topics from backend API
   const fetchAvailableTopics = async () => {
@@ -255,27 +261,37 @@ function App() {
           selectedRosbag={selectedRosbag}
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}
+          onViewModeChange={setViewMode}
         />
-        {/* Canvas component that shows split views and topic data */}
-        <SplittableCanvas 
-          availableTopics={availableTopics} 
-          availableTopicTypes={availableTopicTypes}
-          mappedTimestamps={mappedTimestamps}
-          selectedRosbag={selectedRosbag}
-          onCanvasChange={handleCanvasChange}
-          currentRoot={currentRoot} // current root node
-          currentMetadata={currentMetadata} // current node metadata
-        />
-        {/* Timestamp player component with slider and search marks */}
-        <TimestampPlayer
-          availableTimestamps={availableTimestamps}
-          timestampDensity={timestampDensity}
-          selectedTimestamp={selectedTimestamp}
-          onSliderChange={handleSliderChange}
-          selectedRosbag={selectedRosbag}
-          searchMarks={searchMarks}
-          setSearchMarks={setSearchMarks}
-        />
+        {viewMode === 'explore' ? (
+          <>
+            <SplittableCanvas 
+              availableTopics={availableTopics} 
+              availableTopicTypes={availableTopicTypes}
+              mappedTimestamps={mappedTimestamps}
+              selectedRosbag={selectedRosbag}
+              onCanvasChange={handleCanvasChange}
+              currentRoot={currentRoot}
+              currentMetadata={currentMetadata}
+            />
+            <TimestampPlayer
+              availableTimestamps={availableTimestamps}
+              timestampDensity={timestampDensity}
+              selectedTimestamp={selectedTimestamp}
+              onSliderChange={handleSliderChange}
+              selectedRosbag={selectedRosbag}
+              searchMarks={searchMarks}
+              setSearchMarks={setSearchMarks}
+            />
+          </>
+        ) : (
+          <GlobalSearch />
+          //<div style={{ padding: '2rem' }}>
+          // {/* Placeholder for search view */}
+          //  <h2>Search Mode</h2>
+          //  <p>Coming soon: global semantic search across all rosbags</p>
+          //</></div>
+        )}
       </div>
     </>
   );

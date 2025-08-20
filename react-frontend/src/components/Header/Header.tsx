@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField } from '@mui/material';
+import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button, ButtonGroup } from '@mui/material';
 import './Header.css';
 import FolderIcon from '@mui/icons-material/Folder';
 import IosShareIcon from '@mui/icons-material/IosShare';
@@ -13,6 +13,7 @@ interface HeaderProps {
   selectedRosbag: string | null; // Currently selected ROS bag name
   handleLoadCanvas: (name: string) => void; // Callback to load a canvas by name
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
+  onViewModeChange: (mode: 'explore' | 'search') => void; // Callback for view mode change
 }
 
 // Generates a consistent color based on rosbag name hash for UI elements
@@ -30,7 +31,9 @@ const generateColor = (rosbagName: string) => {
 };
 
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, onViewModeChange }) => {
+  // Local state to track the selected view mode
+  const [viewMode, setViewMode] = useState<'explore' | 'search'>('explore');
   // State to show/hide the canvas selection popper menu
   const [showCanvasPopper, setShowCanvasPopper] = useState(false);
   // List of canvases loaded from backend, each with name, associated rosbag, and color
@@ -163,32 +166,57 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           </Paper>
         </Popper>
 
-        {/* Button to toggle file input dialog */}
-        <Tooltip title="Open Rosbag" arrow>
-          <IconButton 
-            className="header-icon" 
+        {viewMode === 'explore' && (
+          <>
+            {/* Button to toggle file input dialog */}
+            <Tooltip title="Open Rosbag" arrow>
+              <IconButton 
+                className="header-icon" 
+                onClick={() => {
+                  setShowCanvasPopper(false); // Close canvas popper if open
+                  setIsFileInputVisible((prev) => !prev); // Toggle file input visibility
+                }}
+              >
+                <FolderIcon />
+              </IconButton>
+            </Tooltip>
+
+            {/* Button to toggle canvas popper menu */}
+            <Tooltip title="Load/Save Canvas" arrow>
+              <IconButton className="header-icon" ref={canvasIconRef} onClick={toggleCanvasOptions}>
+                <ViewQuiltRoundedIcon />
+              </IconButton>
+            </Tooltip>
+
+            {/* Button to toggle export dialog visibility */}
+            <Tooltip title="Export Rosbag" arrow>
+              <IconButton className="header-icon" onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}>
+                <IosShareIcon />
+              </IconButton>
+            </Tooltip>
+          </>
+        )}
+        {/* Mode selection button group */}
+        <ButtonGroup variant="outlined" sx={{ marginLeft: 2 }}>
+          <Button
+            variant={viewMode === 'search' ? 'contained' : 'outlined'}
             onClick={() => {
-              setShowCanvasPopper(false); // Close canvas popper if open
-              setIsFileInputVisible((prev) => !prev); // Toggle file input visibility
+              setViewMode('search');
+              onViewModeChange('search');
             }}
           >
-            <FolderIcon />
-          </IconButton>
-        </Tooltip>
-
-        {/* Button to toggle canvas popper menu */}
-        <Tooltip title="Load/Save Canvas" arrow>
-          <IconButton className="header-icon" ref={canvasIconRef} onClick={toggleCanvasOptions}>
-            <ViewQuiltRoundedIcon />
-          </IconButton>
-        </Tooltip>
-
-        {/* Button to toggle export dialog visibility */}
-        <Tooltip title="Export Rosbag" arrow>
-          <IconButton className="header-icon" onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}>
-            <IosShareIcon />
-          </IconButton>
-        </Tooltip>
+            Search
+          </Button>
+          <Button
+            variant={viewMode === 'explore' ? 'contained' : 'outlined'}
+            onClick={() => {
+              setViewMode('explore');
+              onViewModeChange('explore');
+            }}
+          >
+            Explore
+          </Button>
+        </ButtonGroup>
       </Box>
     </Box>
   );

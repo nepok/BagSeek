@@ -17,6 +17,14 @@ from rosbags.interfaces import ConnectionExtRosbag2  # type: ignore
 import open_clip
 import math
 from threading import Thread
+from datetime import datetime
+import gc
+from collections import defaultdict
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=PARENT_ENV)
 
 # Flask API for BagSeek: A tool for exploring Rosbag data and using semantic search via CLIP and FAISS to locate safety critical and relevant scenes.
 # This API provides endpoints for loading data, searching via CLIP embeddings, exporting segments, and more.
@@ -37,22 +45,29 @@ CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 # INDICES_DIR: Directory for FAISS indices for semantic search
 # EXPORT_DIR: Directory where exported Rosbags are saved
 # SELECTED_ROSBAG: Currently selected Rosbag file path
-ROSBAGS_DIR = '/mnt/data/rosbags'
-BASE_DIR = '/mnt/data/bagseek/flask-backend/src'
-TOPICS_DIR = os.path.join(BASE_DIR, "topics")
-IMAGES_DIR = os.path.join(BASE_DIR, 'extracted_images')
-LOOKUP_TABLES_DIR = os.path.join(BASE_DIR, 'lookup_tables')
-EMBEDDINGS_DIR = os.path.join(BASE_DIR, 'embeddings')
-CANVASES_FILE = os.path.join(BASE_DIR, 'canvases.json')
-INDICES_DIR = os.path.join(BASE_DIR, 'faiss_indices')
-EXPORT_DIR = os.path.join(ROSBAGS_DIR, 'EXPORTED')
-SELECTED_ROSBAG = os.path.join(ROSBAGS_DIR, 'output_bag')
+
+ROSBAGS_DIR = os.getenv("ROSBAGS_DIR")
+ROSBAGS_DIR_NAS = os.getenv("ROSBAGS_DIR_NAS")
+BASE_DIR = os.getenv("BASE_DIR")
+TOPICS_DIR = os.getenv("TOPICS_DIR")
+IMAGES_DIR = os.getenv("IMAGES_DIR")
+LOOKUP_TABLES_DIR = os.getenv("LOOKUP_TABLES_DIR")
+EMBEDDINGS_DIR = os.getenv("EMBEDDINGS_DIR")
+EMBEDDINGS_PER_TOPIC_DIR = os.getenv("EMBEDDINGS_PER_TOPIC_DIR")
+CANVASES_FILE = os.getenv("CANVASES_FILE")
+INDICES_DIR = os.getenv("INDICES_DIR")
+EXPORT_DIR = os.getenv("EXPORT_DIR")
+ADJACENT_SIMILARITIES_DIR = os.getenv("ADJACENT_SIMILARITIES_DIR")
+REPRESENTATIVE_IMAGES_DIR = os.getenv("REPRESENTATIVE_IMAGES_DIR")
+
+SELECTED_ROSBAG = 'mnt/data/rosbags/output_bag'
 
 # ALIGNED_DATA: DataFrame mapping reference timestamps to per-topic timestamps for alignment
 ALIGNED_DATA = pd.read_csv(os.path.join(LOOKUP_TABLES_DIR, os.path.basename(SELECTED_ROSBAG) + '.csv'), dtype=str)
 
 # EXPORT_PROGRESS: Dictionary to track progress and status of export jobs
 EXPORT_PROGRESS = {"status": "idle", "progress": -1}
+SEARCH_PROGRESS = {"status": "idle", "progress": -1, "message": "idle"}
 
 # SELECTED_MODEL: Default CLIP model for semantic search (format: <model_name>__<pretrained_name>)
 SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
@@ -211,7 +226,7 @@ def get_models():
     """
     try:
         models = []
-        for model in os.listdir(EMBEDDINGS_DIR):
+        for model in os.listdir(EMBEDDINGS_PER_TOPIC_DIR):
             if not model in ['.DS_Store', 'README.md']:
                 models.append(model)
         return jsonify({"models": models}), 200
@@ -235,6 +250,10 @@ def post_file_paths():
         global ALIGNED_DATA
         csv_path = LOOKUP_TABLES_DIR + "/" + os.path.basename(SELECTED_ROSBAG) + ".csv"
         ALIGNED_DATA = pd.read_csv(csv_path, dtype=str)
+
+        global SEARCHED_ROSBAGS
+        SEARCHED_ROSBAGS = [path_value]  # Reset searched rosbags to the selected one
+        logging.warning(SEARCHED_ROSBAGS)
         return jsonify({"message": f"File path updated successfully to {path_value}."}), 200
 
     except Exception as e:
@@ -311,6 +330,45 @@ def get_available_rosbag_topics():
     except Exception as e:
         logging.error(f"Error reading topics JSON: {e}")
         return jsonify({'availableTopics': []}), 200
+    
+
+@app.route('/api/get-available-image-topics', methods=['GET'])
+def get_available_image_topics():
+    try:
+        model_params = request.args.getlist("models")
+        rosbag_params = request.args.getlist("rosbags")
+
+        if not model_params or not rosbag_params:
+            return jsonify({'availableTopics': {}}), 200
+
+        results = {}
+
+        for model_param in model_params:
+            model_path = os.path.join(ADJACENT_SIMILARITIES_DIR, model_param)
+            if not os.path.isdir(model_path):
+                continue
+
+            model_entry = {}
+            for rosbag_param in rosbag_params:
+                rosbag_name = os.path.basename(rosbag_param)
+                rosbag_path = os.path.join(model_path, rosbag_name)
+                if not os.path.isdir(rosbag_path):
+                    continue
+
+                topics = []
+                for topic in os.listdir(rosbag_path):
+                    topics.append(topic.replace("__", "/"))
+
+                model_entry[rosbag_name] = sorted(topics)
+
+            if model_entry:
+                results[model_param] = model_entry
+
+        return jsonify({'availableTopics': results}), 200
+
+    except Exception as e:
+        logging.error(f"Error scanning adjacent similarities: {e}")
+        return jsonify({'availableTopics': {}}), 200
 
 # Read list of topic types from generated JSON for current Rosbag
 @app.route('/api/get-available-topic-types', methods=['GET'])
@@ -338,6 +396,22 @@ def get_available_timestamps():
     availableTimestamps = ALIGNED_DATA['Reference Timestamp'].astype(str).tolist()
     return jsonify({'availableTimestamps': availableTimestamps}), 200
 
+@app.route('/api/get-timestamp-lengths', methods=['GET'])
+def get_timestamp_lengths():
+    rosbags = request.args.getlist("rosbags")
+    timestampLengths = {}
+
+    for rosbag in rosbags:
+        csv_path = os.path.join(LOOKUP_TABLES_DIR, os.path.basename(rosbag) + '.csv')
+        try:
+            df = pd.read_csv(csv_path, dtype=str)
+            count = df['Reference Timestamp'].notnull().sum()
+            timestampLengths[rosbag] = int(count)
+        except Exception as e:
+            timestampLengths[rosbag] = f"Error: {str(e)}"
+
+    return jsonify({'timestampLengths': timestampLengths})
+
 # Returns density of valid data fields per timestamp (used for heatmap intensity visualization)
 @app.route('/api/get-timestamp-density', methods=['GET'])
 def get_timestamp_density():
@@ -350,6 +424,24 @@ def serve_image(filename):
     Serve an extracted image file from the backend image directory.
     """
     response = send_from_directory(IMAGES_DIR, filename)
+    response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
+    return response
+
+@app.route('/adjacency-image/<path:filename>')
+def serve_adjacency_image(filename):
+    """
+    Serve an extracted image file from the backend image directory.
+    """
+    response = send_from_directory(ADJACENT_SIMILARITIES_DIR, filename)
+    response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
+    return response
+
+@app.route('/representative-image/<path:filename>')
+def serve_representative_image(filename):
+    """
+    Serve an extracted image file from the backend image directory.
+    """
+    response = send_from_directory(REPRESENTATIVE_IMAGES_DIR, filename)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
 
@@ -446,6 +538,242 @@ def get_ros():
 
     return jsonify({'error': 'No message found for the provided timestamp and topic'})
 
+@app.route('/api/search-status', methods=['GET'])
+def get_search_status():
+    return jsonify(SEARCH_PROGRESS)
+
+@app.route('/api/search-new', methods=['GET'])
+def search_new():
+    SEARCH_PROGRESS["status"] = "running"
+    SEARCH_PROGRESS["progress"] = 0.00
+
+    query_text = request.args.get('query', default=None, type=str)
+    models = request.args.get('models', default=None, type=str)
+    rosbags = request.args.get('rosbags', default=None, type=str)
+    timeRange = request.args.get('timeRange', default=None, type=str)
+    accuracy = request.args.get('accuracy', default=None, type=int)
+
+    SEARCH_PROGRESS["message"] = f"Starting search...\n\n(sampling every {accuracy}th embedding)"
+
+    if query_text is None:
+        return jsonify({'error': 'No query text provided'}), 400
+    if models is None:
+        return jsonify({'error': 'No models provided'}), 400
+    if rosbags is None:
+        return jsonify({'error': 'No rosbags provided'}), 400
+    if timeRange is None:
+        return jsonify({'error': 'No time range provided'}), 400
+    if accuracy is None:
+        return jsonify({'error': 'No accuracy provided'}), 400
+
+    logging.warning(f"\n\n\n accuracy: {accuracy} \n\n\n")
+    models = models.split(",")
+    rosbags = rosbags.split(",")
+    rosbags = [os.path.basename(r) for r in rosbags]
+    time_start, time_end = map(int, timeRange.split(","))
+
+    # marks is now a dict: {(model, rosbag, topic): set(indices)}
+    marks = {}
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    all_results = []
+
+    try:
+
+        total_steps = 0
+        for model in models:
+            model_path = os.path.join(EMBEDDINGS_PER_TOPIC_DIR, model)
+            if not os.path.isdir(model_path):
+                continue
+            for rosbag in rosbags:
+                rosbag_path = os.path.join(model_path, rosbag)
+                if not os.path.isdir(rosbag_path):
+                    continue
+                for topic in os.listdir(rosbag_path):
+                    topic_path = os.path.join(rosbag_path, topic)
+                    if os.path.isdir(topic_path):
+                        total_steps += 1
+
+        #total_steps = len(models) * len(rosbags)
+        logging.warning(f"Total steps to process: {total_steps}")
+        step_count = 0
+
+        for model_idx, model_name in enumerate(models):
+            name, pretrained = model_name.split('__')
+            model, _, preprocess = open_clip.create_model_and_transforms(name, pretrained, device=device, cache_dir="/mnt/data/openclip_cache")
+            tokenizer = open_clip.get_tokenizer(name)
+            query_embedding = get_text_embedding(query_text, model, tokenizer, device)
+            #logging.warning(np.linalg.norm(query_embedding))
+
+            model_dir = os.path.join(EMBEDDINGS_PER_TOPIC_DIR, model_name)
+            if not os.path.isdir(model_dir):
+                del model
+                torch.cuda.empty_cache()
+                continue
+
+            # For each rosbag, iterate over topic folders
+            for rosbag_name in rosbags:
+                rosbag_dir = os.path.join(model_dir, rosbag_name)
+                if not os.path.isdir(rosbag_dir):
+                    step_count += 1
+                    continue
+
+                # --- Load aligned CSV for this rosbag_name ---
+                aligned_path = os.path.join(LOOKUP_TABLES_DIR, rosbag_name + ".csv")
+                aligned_data = pd.read_csv(aligned_path, dtype=str)
+
+                # List all topic folders in this rosbag_dir
+                topic_folders = [t for t in os.listdir(rosbag_dir) if os.path.isdir(os.path.join(rosbag_dir, t))]
+                for topic_folder in topic_folders:
+                    topic_name = topic_folder.replace("__", "/")
+                    topic_dir = os.path.join(rosbag_dir, topic_folder)
+                    SEARCH_PROGRESS["status"] = "running"
+                    SEARCH_PROGRESS["progress"] = round((step_count / total_steps) * 0.95, 2)
+                    SEARCH_PROGRESS["message"] = (
+                        f"Loading embeddings...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}\n"
+                        f"Topic: {topic_name}\n\n"
+                        f"(Searching every {accuracy}th embedding)"
+                    )
+                    step_count += 1
+                    embedding_files = []
+                    for file in os.listdir(topic_dir):
+                        if file.endswith("_embedding.pt"):
+                            try:
+                                ts_part = file.rsplit("-", 1)[-1].replace("_embedding.pt", "")
+                                timestamp = int(ts_part)
+                                dt = datetime.utcfromtimestamp(timestamp / 1e9)
+                                minute_of_day = dt.hour * 60 + dt.minute
+                                if time_start <= minute_of_day <= time_end:
+                                    emb_path = os.path.join(topic_dir, file)
+                                    embedding_files.append(emb_path)
+                            except Exception as e:
+                                continue
+                    selected_paths = embedding_files[::accuracy]
+                    model_embeddings = []
+                    model_paths = []
+                    for emb_path in selected_paths:
+                        try:
+                            embedding = torch.load(emb_path, map_location='cpu')
+                            if isinstance(embedding, torch.Tensor):
+                                embedding = embedding.cpu().numpy()
+                            model_embeddings.append(embedding)
+                            model_paths.append(emb_path)
+                        except Exception as e:
+                            continue
+                    if not model_embeddings:
+                        continue
+                    embeddings = np.vstack(model_embeddings).astype('float32')
+                    n, d = embeddings.shape
+                    index = faiss.IndexFlatL2(d)
+                    SEARCH_PROGRESS["status"] = "running"
+                    SEARCH_PROGRESS["progress"] = round((step_count / total_steps) * 0.95, 2)
+                    SEARCH_PROGRESS["message"] = (
+                        f"Creating FAISS index using {index.__class__.__name__}) "
+                        f"from {len(model_embeddings)} sampled embeddings (every {accuracy}th)."
+                    )
+                    index.add(embeddings)
+                    embedding_paths = np.array(model_paths)
+                    SEARCH_PROGRESS["status"] = "running"
+                    SEARCH_PROGRESS["progress"] = round((step_count / total_steps) * 0.95, 2)
+                    SEARCH_PROGRESS["message"] = (
+                        f"Searching {len(model_embeddings)} sampled embeddings...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}\n"
+                        f"Topic: {topic_folder}\n"
+                        f"Index: {index.__class__.__name__}\n\n"
+                        f"(Searching every {accuracy}th embedding)"
+                    )
+                    similarityScores, indices = index.search(query_embedding.reshape(1, -1), MAX_K)
+                    if len(indices) == 0 or len(similarityScores) == 0:
+                        continue
+                    model_results = []
+                    topic_name = topic_folder.replace("__", "/")
+                    for i, idx in enumerate(indices[0][:MAX_K]):
+                        similarityScore = float(similarityScores[0][i])
+                        if math.isnan(similarityScore) or math.isinf(similarityScore):
+                            continue
+                        embedding_path = str(embedding_paths[idx])
+                        path_of_interest = str(os.path.basename(embedding_path))
+                        # result_timestamp from filename
+                        result_timestamp = path_of_interest[-32:-13]
+                        dt_result = datetime.utcfromtimestamp(int(result_timestamp) / 1e9)
+                        minute_of_day = dt_result.strftime("%H:%M")
+                        model_results.append({
+                            'rank': i + 1,
+                            'rosbag': rosbag_name,
+                            'embedding_path': embedding_path,
+                            'similarityScore': similarityScore,
+                            'topic': topic_name,
+                            'timestamp': result_timestamp,
+                            'minuteOfDay': minute_of_day,
+                            'model': model_name
+                        })
+
+                        matching_reference_timestamps = aligned_data.loc[
+                            aligned_data.isin([result_timestamp]).any(axis=1),
+                            'Reference Timestamp'
+                        ].tolist()
+                        match_indices = []
+                        for ref_ts in matching_reference_timestamps:
+                            indices_ = aligned_data.index[aligned_data['Reference Timestamp'] == ref_ts].tolist()
+                            match_indices.extend(indices_)
+                        key = (model_name, rosbag_name, topic_name)
+                        if key not in marks:
+                            marks[key] = set()
+                        for index_val in match_indices:
+                            marks[key].add(index_val)
+                    all_results.extend(model_results)
+            del model
+            torch.cuda.empty_cache()
+    except Exception as e:
+        try:
+            del model
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
+        SEARCH_PROGRESS["status"] = "error"
+        SEARCH_PROGRESS["progress"] = 0.0
+        SEARCH_PROGRESS["message"] = f"Error: {e}"
+        return jsonify({'error': str(e)}), 500
+
+    # Flatten and sort all results
+    all_results = sorted([r for r in all_results if isinstance(r, dict)], key=lambda x: x['similarityScore'])
+    for rank, result in enumerate(all_results, 1):
+        result['rank'] = rank
+    filtered_results = all_results
+
+    # --- Construct categorizedSearchResults ---
+    categorizedSearchResults = {}
+    for result in all_results:
+        model = result['model']
+        rosbag = result['rosbag']
+        topic = result['topic']
+        minute_of_day = result['minuteOfDay']
+        rank = result['rank']
+        similarity_score = result['similarityScore']
+        timestamp = result['timestamp']
+        categorizedSearchResults.setdefault(model, {}).setdefault(rosbag, {}).setdefault(topic, {
+            'marks': [],
+            'results': []
+        })
+        categorizedSearchResults[model][rosbag][topic]['results'].append({
+            'minuteOfDay': minute_of_day,
+            'rank': rank,
+            'similarityScore': similarity_score
+        })
+
+    # Populate marks per topic only once per mark
+    for key, indices in marks.items():
+        model, rosbag, topic = key
+        if model in categorizedSearchResults and rosbag in categorizedSearchResults[model] and topic in categorizedSearchResults[model][rosbag]:
+            for index_val in indices:
+                categorizedSearchResults[model][rosbag][topic]['marks'].append({'value': index_val})
+    # Flatten marks for response (for compatibility)
+    flat_marks = [{'value': idx} for indices in marks.values() for idx in indices]
+    SEARCH_PROGRESS["status"] = "done"
+    return jsonify({'query': query_text, 'results': filtered_results, 'marks': flat_marks, 'categorizedSearchResults': categorizedSearchResults})
 
 # Perform semantic search using CLIP embedding against precomputed image features
 @app.route('/api/search', methods=['GET'])
@@ -464,8 +792,22 @@ def search():
           - For each result timestamp, finds all reference timestamps in ALIGNED_DATA that map to it (used for UI marks).
     """
     query_text = request.args.get('query', default=None, type=str)
+    models = request.args.get('models', default=None, type=str)
+    rosbags = request.args.get('rosbags', default=None, type=str)
+    timeRange = request.args.get('timeRange', default=None, type=str)
+    accuracy = request.args.get('accuracy', default=None, type=str)
+
     if query_text is None:
         return jsonify({'error': 'No query text provided'}), 400
+    """if models is None:
+        return jsonify({'error': 'No models provided'}), 400
+    if rosbags is None:
+        return jsonify({'error': 'No rosbags provided'}), 400
+    if timeRange is None:
+        return jsonify({'error': 'No time range provided'}), 400
+    if accuracy is None:
+        return jsonify({'error': 'No accuracy provided'}), 400
+"""
 
     # Insert logic for multi-rosbag search using sampled embeddings
     results = []

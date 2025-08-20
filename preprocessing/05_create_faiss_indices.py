@@ -4,11 +4,15 @@ import torch
 import faiss
 import numpy as np
 from tqdm import tqdm
+from dotenv import load_dotenv
+
+PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=PARENT_ENV)
 
 # Define constants for paths
-BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
-EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
-INDICES_DIR = os.path.join(BASE_DIR, "faiss_indices")
+BASE_DIR = os.getenv("BASE_DIR")
+EMBEDDINGS_DIR = os.getenv("EMBEDDINGS_DIR")
+INDICES_DIR = os.getenv("INDICES_DIR")
 
 # Create output directory if it doesn't exist
 Path(INDICES_DIR).mkdir(parents=True, exist_ok=True)

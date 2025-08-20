@@ -6,11 +6,15 @@ from tqdm import tqdm
 import open_clip
 import re
 import concurrent.futures
+from dotenv import load_dotenv
+
+PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=PARENT_ENV)
 
 # Define constants for paths
-BASE_DIR = "/mnt/data/bagseek/flask-backend/src"
-IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
-PREPROCESSED_DIR = os.path.join(BASE_DIR, "preprocessed_images")
+BASE_DIR = os.getenv("BASE_DIR")
+IMAGES_DIR = os.getenv("IMAGES_DIR")
+PREPROCESSED_DIR = os.getenv("PREPROCESSED_DIR")
 
 model_configs = [
     ('ViT-B-32-quickgelu', 'openai'),
