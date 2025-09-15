@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import Header from './components/Header/Header';
 import TimestampPlayer from './components/TimestampPlayer/TimestampPlayer';
 import './App.css';
@@ -24,6 +25,9 @@ interface NodeMetadata {
 function App() {
 
   const { setError } = useError(); // Hook to set global error messages for user feedback
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   
   const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);  // List of all available timestamps fetched from backend
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);  // Currently selected timestamp for playback or display
@@ -40,8 +44,39 @@ function App() {
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
   const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
 
-  // View mode state: 'explore' or 'search'
-  const [viewMode, setViewMode] = useState<'explore' | 'search'>('explore');
+  // Refs to apply URL-provided state once data is ready
+  const pendingTsRef = useRef<number | null>(null);
+  const pendingCanvasRef = useRef<{ root: Node; metadata: { [id: number]: NodeMetadata } } | null>(null);
+  const pendingRosbagParamRef = useRef<string | null>(null);
+
+  // Helpers to encode/decode canvas JSON into query param
+  const encodeCanvas = (canvas: { root: Node; metadata: { [id: number]: NodeMetadata } }) => {
+    try {
+      return encodeURIComponent(JSON.stringify(canvas));
+    } catch (e) {
+      console.error('Failed to encode canvas', e);
+      return '';
+    }
+  };
+
+  const decodeCanvas = (encoded: string) => {
+    try {
+      return JSON.parse(decodeURIComponent(encoded));
+    } catch (e) {
+      console.error('Failed to decode canvas', e);
+      return null;
+    }
+  };
+
+  // Update URL search params helper (merges provided keys)
+  const updateSearchParams = (updates: Record<string, string | null | undefined>) => {
+    const next = new URLSearchParams(searchParams as any);
+    Object.entries(updates).forEach(([k, v]) => {
+      if (v === null || v === undefined || v === '') next.delete(k);
+      else next.set(k, String(v));
+    });
+    setSearchParams(next, { replace: true });
+  };
 
   // Fetch list of available topics from backend API
   const fetchAvailableTopics = async () => {
@@ -119,14 +154,23 @@ function App() {
   const handleCanvasChange = (root: Node, metadata: { [id: number]: NodeMetadata }) => {
     setCurrentRoot(root);
     setCurrentMetadata(metadata);
+    // Persist canvas in URL when on /explore
+    if (location.pathname.startsWith('/explore')) {
+      const encoded = encodeCanvas({ root, metadata });
+      const current = searchParams.get('canvas') || '';
+      if (encoded && encoded !== current) updateSearchParams({ canvas: encoded });
+    }
   };
   
   // Effect to update selected timestamp when available timestamps change
   useEffect(() => {
     // If timestamps are available, select the first one by default
     if (availableTimestamps.length > 0) {
-      setSelectedTimestamp(availableTimestamps[0]); // Use first timestamp
-      handleSliderChange(availableTimestamps[0]); // Sync mapped timestamps on change
+      // If a timestamp is pending from URL, let that effect apply it
+      if (pendingTsRef.current === null) {
+        setSelectedTimestamp(availableTimestamps[0]); // Use first timestamp
+        handleSliderChange(availableTimestamps[0]); // Sync mapped timestamps on change
+      }
     } else {
       setSelectedTimestamp(null); // Clear selection if no timestamps
     }
@@ -154,6 +198,12 @@ function App() {
   // Handler for when user changes the timestamp slider
   const handleSliderChange = async (value: number) => {
     setSelectedTimestamp(value); // Update selected timestamp in state
+    // Sync to URL if on /explore
+    if (location.pathname.startsWith('/explore')) {
+      const curr = searchParams.get('ts');
+      const next = String(value);
+      if (curr !== next) updateSearchParams({ ts: next });
+    }
     
     try {
       // Notify backend of new reference timestamp to get mapped timestamps
@@ -222,12 +272,126 @@ function App() {
       if (data[name]) {
         setCurrentRoot(data[name].root); // Set root node of loaded canvas
         setCurrentMetadata(data[name].metadata); // Set metadata of loaded canvas
+        // Also push into URL
+        if (location.pathname.startsWith('/explore')) {
+          const encoded = encodeCanvas({ root: data[name].root, metadata: data[name].metadata });
+          if (encoded) updateSearchParams({ canvas: encoded });
+        }
       }
     } catch (error) {
       setError('Error loading canvases');
       console.error('Error loading canvases:', error);
     }
   };
+
+  // Keep selected rosbag in URL on change
+  useEffect(() => {
+    if (location.pathname.startsWith('/explore')) {
+      if (selectedRosbag) {
+        const curr = searchParams.get('rosbag');
+        if (curr !== selectedRosbag) updateSearchParams({ rosbag: selectedRosbag });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRosbag]);
+
+  // Apply URL query params when entering /explore
+  useEffect(() => {
+    if (!location.pathname.startsWith('/explore')) return;
+
+    const rosbagParam = searchParams.get('rosbag');
+    const tsParam = searchParams.get('ts');
+    const canvasParam = searchParams.get('canvas');
+
+    // 1) Ensure selected rosbag matches URL
+    const ensureRosbag = async () => {
+      if (!rosbagParam) return;
+      if (selectedRosbag === rosbagParam) return;
+      try {
+        const res = await fetch('/api/get-file-paths');
+        const data = await res.json();
+        const match = (data.paths as string[]).find((p) => p.split('/').pop() === rosbagParam);
+        if (match) {
+          await fetch('/api/set-file-paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: match }),
+          });
+          // Refresh dependent data
+          await Promise.all([
+            fetchAvailableTopics(),
+            fetchAvailableTopicTypes(),
+            fetchAvailableTimestampsAndDensity(),
+            fetchSelectedRosbag(),
+          ]);
+        }
+      } catch (e) {
+        console.error('Failed to set rosbag from URL', e);
+      }
+    };
+
+    ensureRosbag();
+
+    // 2) Stash ts/canvas to apply when data is ready
+    if (tsParam) {
+      const tsNum = Number(tsParam);
+      if (!Number.isNaN(tsNum) && tsNum !== selectedTimestamp) pendingTsRef.current = tsNum;
+    }
+    if (canvasParam) {
+      const parsed = decodeCanvas(canvasParam);
+      if (parsed && parsed.root && parsed.metadata) {
+        const currentEncoded = currentRoot && currentMetadata ? encodeCanvas({ root: currentRoot, metadata: currentMetadata }) : '';
+        if (canvasParam !== currentEncoded) {
+          // Apply after rosbag is ensured to avoid topic reset flicker
+          pendingCanvasRef.current = parsed as { root: Node; metadata: { [id: number]: NodeMetadata } };
+          pendingRosbagParamRef.current = rosbagParam;
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.search]);
+
+  // Apply pending canvas once rosbag is ready/matching
+  useEffect(() => {
+    if (!location.pathname.startsWith('/explore')) return;
+    if (!pendingCanvasRef.current) return;
+    const needRosbag = pendingRosbagParamRef.current;
+    if (needRosbag && selectedRosbag !== needRosbag) return;
+    const { root, metadata } = pendingCanvasRef.current;
+    pendingCanvasRef.current = null;
+    pendingRosbagParamRef.current = null;
+    setCurrentRoot(root);
+    setCurrentMetadata(metadata);
+    // ensure URL reflects exactly what's applied
+    const encoded = encodeCanvas({ root, metadata });
+    if (encoded) updateSearchParams({ canvas: encoded });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRosbag]);
+
+  // Apply pending timestamp once timestamps are loaded
+  useEffect(() => {
+    if (!availableTimestamps || availableTimestamps.length === 0) return;
+    if (pendingTsRef.current !== null) {
+      // If exact match not found, pick nearest
+      const target = pendingTsRef.current;
+      let chosen = target;
+      if (!availableTimestamps.includes(target)) {
+        let best = availableTimestamps[0];
+        let bestDiff = Math.abs(best - target);
+        for (const t of availableTimestamps) {
+          const diff = Math.abs(t - target);
+          if (diff < bestDiff) {
+            best = t;
+            bestDiff = diff;
+          }
+        }
+        chosen = best;
+      }
+      pendingTsRef.current = null;
+      handleSliderChange(chosen);
+    }
+  }, [availableTimestamps]);
+
 
   return (
     <>
@@ -259,37 +423,37 @@ function App() {
           selectedRosbag={selectedRosbag}
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}
-          onViewModeChange={setViewMode}
         />
-        {viewMode === 'explore' ? (
-          <>
-            <SplittableCanvas 
-              availableTopics={availableTopics} 
-              availableTopicTypes={availableTopicTypes}
-              mappedTimestamps={mappedTimestamps}
-              selectedRosbag={selectedRosbag}
-              onCanvasChange={handleCanvasChange}
-              currentRoot={currentRoot}
-              currentMetadata={currentMetadata}
-            />
-            <TimestampPlayer
-              availableTimestamps={availableTimestamps}
-              timestampDensity={timestampDensity}
-              selectedTimestamp={selectedTimestamp}
-              onSliderChange={handleSliderChange}
-              selectedRosbag={selectedRosbag}
-              searchMarks={searchMarks}
-              setSearchMarks={setSearchMarks}
-            />
-          </>
-        ) : (
-          <GlobalSearch />
-          //<div style={{ padding: '2rem' }}>
-          // {/* Placeholder for search view */}
-          //  <h2>Search Mode</h2>
-          //  <p>Coming soon: global semantic search across all rosbags</p>
-          //</></div>
-        )}
+        <Routes>
+          <Route path="/" element={<Navigate to="/explore" replace />} />
+          <Route
+            path="/explore"
+            element={
+              <>
+                <SplittableCanvas
+                  availableTopics={availableTopics}
+                  availableTopicTypes={availableTopicTypes}
+                  mappedTimestamps={mappedTimestamps}
+                  selectedRosbag={selectedRosbag}
+                  onCanvasChange={handleCanvasChange}
+                  currentRoot={currentRoot}
+                  currentMetadata={currentMetadata}
+                />
+                <TimestampPlayer
+                  availableTimestamps={availableTimestamps}
+                  timestampDensity={timestampDensity}
+                  selectedTimestamp={selectedTimestamp}
+                  onSliderChange={handleSliderChange}
+                  selectedRosbag={selectedRosbag}
+                  searchMarks={searchMarks}
+                  setSearchMarks={setSearchMarks}
+                />
+              </>
+            }
+          />
+          <Route path="/search" element={<GlobalSearch />} />
+          <Route path="*" element={<Navigate to="/explore" replace />} />
+        </Routes>
       </div>
     </>
   );

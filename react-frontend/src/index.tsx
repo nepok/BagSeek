@@ -5,22 +5,22 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { ErrorProvider } from './components/ErrorContext/ErrorContext';
 import { ThemeProvider } from '@mui/material/styles';
-import darkTheme from './theme'; // ✅ your existing theme
+import darkTheme from './theme';
+import { BrowserRouter } from 'react-router-dom'; // ⬅️ neu
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 root.render(
   <React.StrictMode>
-    <ThemeProvider theme={darkTheme}> {/* ✅ Moved here */}
-      <ErrorProvider>
-        <App />
-      </ErrorProvider>
-    </ThemeProvider>
+    <BrowserRouter /* basename optional, siehe Hinweis unten */>
+      <ThemeProvider theme={darkTheme}>
+        <ErrorProvider>
+          <App />
+        </ErrorProvider>
+      </ThemeProvider>
+    </BrowserRouter>
   </React.StrictMode>
 );
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
 reportWebVitals();

@@ -6,6 +6,7 @@ import IosShareIcon from '@mui/icons-material/IosShare';
 import ViewQuiltRoundedIcon from '@mui/icons-material/ViewQuiltRounded';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 interface HeaderProps {
   setIsFileInputVisible: (visible: boolean | ((prev: boolean) => boolean)) => void; // Controls visibility of file input dialog
@@ -13,7 +14,6 @@ interface HeaderProps {
   selectedRosbag: string | null; // Currently selected ROS bag name
   handleLoadCanvas: (name: string) => void; // Callback to load a canvas by name
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
-  onViewModeChange: (mode: 'explore' | 'search') => void; // Callback for view mode change
 }
 
 // Generates a consistent color based on rosbag name hash for UI elements
@@ -31,9 +31,10 @@ const generateColor = (rosbagName: string) => {
 };
 
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, onViewModeChange }) => {
-  // Local state to track the selected view mode
-  const [viewMode, setViewMode] = useState<'explore' | 'search'>('explore');
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const viewMode: 'explore' | 'search' = location.pathname.startsWith('/search') ? 'search' : 'explore';
   // State to show/hide the canvas selection popper menu
   const [showCanvasPopper, setShowCanvasPopper] = useState(false);
   // List of canvases loaded from backend, each with name, associated rosbag, and color
@@ -200,19 +201,13 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         <ButtonGroup variant="outlined" sx={{ marginLeft: 2 }}>
           <Button
             variant={viewMode === 'search' ? 'contained' : 'outlined'}
-            onClick={() => {
-              setViewMode('search');
-              onViewModeChange('search');
-            }}
+            onClick={() => navigate('/search')}
           >
             Search
           </Button>
           <Button
             variant={viewMode === 'explore' ? 'contained' : 'outlined'}
-            onClick={() => {
-              setViewMode('explore');
-              onViewModeChange('explore');
-            }}
+            onClick={() => navigate('/explore')}
           >
             Explore
           </Button>

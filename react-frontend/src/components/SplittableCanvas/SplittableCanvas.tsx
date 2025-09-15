@@ -75,10 +75,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
     });
   }, [currentRoot, currentMetadata]);
 
-  // Inform parent component about canvas and metadata state changes
-  useEffect(() => {
-    onCanvasChange(root, nodeMetadata);
-  }, [root, nodeMetadata]);
+  // Intentionally do not auto-emit onCanvasChange for every change to avoid loops
 
   // Replace a node in the tree by matching ID
   const updateNodeInTree = (currentNode: Node, updatedNode: Node): Node => {
@@ -93,7 +90,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
   };
 
   // Split a node horizontally or vertically into two child panels
-  const splitNode = (node: Node, direction: 'horizontal' | 'vertical') => {
+  const splitNode = (node: Node, direction: 'horizontal' | 'vertical'): Node => {
     if (!node.left && !node.right) {
       const newLeft = { id: node.id * 2 };
       const newRight = { id: node.id * 2 + 1 };
@@ -121,7 +118,9 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
 
         return newMetadata;
       });
+      return updatedRoot;
     }
+    return root;
   };
 
   // Recursively delete a node and clean up metadata
@@ -152,11 +151,8 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
   const handleDeletePanel = () => {
     if (currentNode) {
       const newRoot = deleteNode(currentNode);
-      if (newRoot) {
-        setRoot(newRoot);
-      } else {
-        setRoot({ id: 1 }); // Reset to a new root if the entire tree is deleted
-      }
+      const nextRoot = newRoot ? newRoot : { id: 1 };
+      setRoot(nextRoot);
 
       setNodeMetadata((prev) => {
         const newMetadata = { ...prev };
@@ -166,6 +162,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
           if (node.right) removeMetadata(node.right);
         };
         removeMetadata(currentNode);
+        onCanvasChange(nextRoot, newMetadata);
         return newMetadata;
       });
 
@@ -231,13 +228,17 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
   // Trigger splitting of the current node in the chosen direction
   const handleSplitAction = (direction: 'horizontal' | 'vertical') => {
     if (currentNode) {
-      splitNode(currentNode, direction);
+      const nextRoot = splitNode(currentNode, direction);
       const currentNodeMetadata = nodeMetadata[currentNode.id] || { nodeTopic: null, nodeTopicType: null };
-      setNodeMetadata((prev) => ({
-        ...prev,
-        [currentNode.id * 2]: { ...currentNodeMetadata },
-        [currentNode.id * 2 + 1]: { nodeTopic: null, nodeTopicType: null },
-      }));
+      setNodeMetadata((prev) => {
+        const nextMeta = {
+          ...prev,
+          [currentNode.id * 2]: { ...currentNodeMetadata },
+          [currentNode.id * 2 + 1]: { nodeTopic: null, nodeTopicType: null },
+        };
+        onCanvasChange(nextRoot, nextMeta);
+        return nextMeta;
+      });
     }
     handleCloseMenu();
   };
@@ -250,10 +251,14 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
   // Update node metadata with selected topic and close menus
   const handleTopicSelection = (topic: string) => {
     if (currentNode) {
-      setNodeMetadata((prev) => ({
-        ...prev,
-        [currentNode.id]: { nodeTopic: topic, nodeTopicType: availableTopicTypes[topic] },
-      }));
+      setNodeMetadata((prev) => {
+        const nextMeta = {
+          ...prev,
+          [currentNode.id]: { nodeTopic: topic, nodeTopicType: availableTopicTypes[topic] },
+        };
+        onCanvasChange(root, nextMeta);
+        return nextMeta;
+      });
     }
     setTopicMenuAnchorEl(null);
     handleCloseMenu();

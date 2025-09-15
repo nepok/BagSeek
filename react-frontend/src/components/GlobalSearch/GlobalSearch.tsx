@@ -1,12 +1,14 @@
 import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemText, OutlinedInput, IconButton, SelectChangeEvent, Box, Typography, Popper, Paper, TextField, LinearProgress, ButtonGroup, Button, Chip, Tabs, Tab } from '@mui/material';
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
 import { Center } from '@react-three/drei';
-import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
 
 const GlobalSearch: React.FC = () => {
 
+    const navigate = useNavigate();
     const [search, setSearch] = useState('');
     const [searchDone, setSearchDone] = useState(false);
     // View mode state: 'images' or 'rosbags'
@@ -152,8 +154,22 @@ const GlobalSearch: React.FC = () => {
         setRosbags(newSelection);
     };
 
-    const openExplorePage = () => {
-        
+    const openExplorePage = (result: { rosbag: string; topic: string; timestamp: string }) => {
+        if (!result || !result.rosbag || !result.topic || !result.timestamp) return;
+        // Build a single-panel canvas JSON containing only the selected topic
+        const canvas = {
+          root: { id: 1 },
+          metadata: {
+            1: { nodeTimestamp: result.timestamp, nodeTopic: result.topic, nodeTopicType: "sensor_msgs/msg/CompressedImage" },
+          },
+        };
+        const encodedCanvas = encodeURIComponent(JSON.stringify(canvas));
+        // Navigate to explore with parsed params
+        const params = new URLSearchParams();
+        params.set('rosbag', result.rosbag);
+        params.set('ts', String(result.timestamp));
+        params.set('canvas', encodedCanvas);
+        navigate(`/explore?${params.toString()}`);
     }
 
     interface TabPanelProps {
@@ -512,9 +528,9 @@ const GlobalSearch: React.FC = () => {
                               }}
                             />
                             <IconButton
-                              size="small"
+                              
                               color="primary"
-                              onClick={openExplorePage}
+                              onClick={() => openExplorePage(result)}
                               sx={{
                                 position: 'absolute',
                                 top: '45%',
@@ -531,7 +547,7 @@ const GlobalSearch: React.FC = () => {
                                 },
                               }}
                             >
-                              <ArrowForwardIosIcon />
+                              <KeyboardArrowRightIcon />
                             </IconButton>
                             <IconButton
                               size="small"
