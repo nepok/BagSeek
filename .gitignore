@@ -1,3 +1,5 @@
+.gitignore
+
 # Backend 
 flask-backend/src/*
 !flask-backend/src/rosbags
@@ -6,6 +8,9 @@ flask-backend/Dockerfile
 # Frontend
 react-frontend/node_modules
 react-frontend/Dockerfile
+
+# Preprocessing
+preprocessing/model_cache
 
 # Other
 docker-compose.yml
