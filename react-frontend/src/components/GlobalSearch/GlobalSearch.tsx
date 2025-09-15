@@ -2,6 +2,8 @@ import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemTe
 import React, { useState, useRef, useEffect } from 'react';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
 import { Center } from '@react-three/drei';
+import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
+import DownloadIcon from '@mui/icons-material/Download';
 
 const GlobalSearch: React.FC = () => {
 
@@ -150,26 +152,14 @@ const GlobalSearch: React.FC = () => {
         setRosbags(newSelection);
     };
 
+    const openExplorePage = () => {
+        
+    }
+
     interface TabPanelProps {
       children?: React.ReactNode;
       index: number;
       value: number;
-    }
-
-    function CustomTabPanel(props: TabPanelProps) {
-      const { children, value, index, ...other } = props;
-
-      return (
-        <div
-          role="tabpanel"
-          hidden={value !== index}
-          id={`simple-tabpanel-${index}`}
-          aria-labelledby={`simple-tab-${index}`}
-          {...other}
-        >
-          {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
-        </div>
-      );
     }
 
     function a11yProps(index: number) {
@@ -275,11 +265,13 @@ const GlobalSearch: React.FC = () => {
 
                 {/* Time Range */}
                 <FormControl size="small" sx={{ flex: 1, minWidth: 0 }}>
-                    <InputLabel>Time Range</InputLabel>
+                    <InputLabel id="time-range-label">Time Range</InputLabel>
                     <Select
+                        labelId="time-range-label"
                         value="timeRange"
                         displayEmpty
                         renderValue={() => `${valueLabelFormat(timeRange[0])} – ${valueLabelFormat(timeRange[1])}`}
+                        input={<OutlinedInput label="Time Range" />}
                         MenuProps={{
                           anchorOrigin: { vertical: 'bottom', horizontal: 'center' },
                           transformOrigin: { vertical: 'top', horizontal: 'center' },
@@ -331,11 +323,13 @@ const GlobalSearch: React.FC = () => {
 
                 {/* Tradeoff */}
                 <FormControl size="small" sx={{ flex: 1, minWidth: 0 }}>
-                    <InputLabel>Sampling</InputLabel>
+                    <InputLabel id="sampling-label">Sampling</InputLabel>
                     <Select
+                        labelId="sampling-label"
                         value="sampling"
                         displayEmpty
                         renderValue={() => `${sampling}`}
+                        input={<OutlinedInput label="Sampling" />}
                         MenuProps={{
                           anchorOrigin: { vertical: 'bottom', horizontal: 'right' },
                           transformOrigin: { vertical: 'top', horizontal: 'right' },
@@ -444,6 +438,7 @@ const GlobalSearch: React.FC = () => {
                     const url = result.topic && result.timestamp && result.rosbag
                       ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
                       : undefined;
+
                     return (
                       <Box
                         key={index}
@@ -516,6 +511,50 @@ const GlobalSearch: React.FC = () => {
                                 //textOverflow: 'ellipsis',
                               }}
                             />
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              onClick={openExplorePage}
+                              sx={{
+                                position: 'absolute',
+                                top: '45%',
+                                right: 6,
+                                transform: 'translateY(-50%)',
+                                bgcolor: 'rgba(120, 170, 200, 0.6)',
+                                color: 'white',
+                                p: 0.5, // less padding -> smaller button
+                                '& svg': {
+                                  fontSize: 18, // smaller arrow icon
+                                },
+                                '&:hover': {
+                                  bgcolor: 'rgba(120, 170, 200, 0.8)',
+                                },
+                              }}
+                            >
+                              <ArrowForwardIosIcon />
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              onClick={() => window.open(url, '_blank')}
+                              sx={{
+                                position: 'absolute',
+                                top: '55%',
+                                right: 6,
+                                transform: 'translateY(-50%)',
+                                bgcolor: 'rgba(120, 170, 200, 0.6)',
+                                color: 'white',
+                                p: 0.5, // less padding -> smaller button
+                                '& svg': {
+                                  fontSize: 18, // smaller arrow icon
+                                },
+                                '&:hover': {
+                                  bgcolor: 'rgba(120, 170, 200, 0.8)',
+                                },
+                              }}
+                            >
+                              <DownloadIcon />
+                            </IconButton>
                           </Box>
                         )}
                       </Box>

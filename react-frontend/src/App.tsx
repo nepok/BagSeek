@@ -6,8 +6,6 @@ import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import FileInput from './components/FileInput/FileInput';
 import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
-import { set } from 'lodash';
-import { Global } from '@emotion/react';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
 
 interface Node {

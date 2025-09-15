@@ -16,11 +16,12 @@ load_dotenv(dotenv_path=PARENT_ENV)
 AUTO_ANNOTATION_DIR = os.getenv("AUTO_ANNOTATION_DIR")
 IMAGES_PER_TOPIC_DIR = os.getenv("IMAGES_PER_TOPIC_DIR")
 
-SELECTED_ROSBAG = "2011_09_29_drive_0071_sync_bag"
+SELECTED_ROSBAG = "output_bag"
 SELECTED_ROSBAG_IMAGE_PATH = os.path.join(IMAGES_PER_TOPIC_DIR, SELECTED_ROSBAG)
 
 CSV_OUTPUT_PATH = os.path.join(AUTO_ANNOTATION_DIR, f"{SELECTED_ROSBAG}.csv")
 
+print("CSV will be written to:", CSV_OUTPUT_PATH)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -58,7 +59,6 @@ def process_image(img_path, writer):
 
 
 def main():
-
     # open CSV once (append mode) and load already processed image paths
     file_exists = os.path.exists(CSV_OUTPUT_PATH)
     csvfile = open(CSV_OUTPUT_PATH, "a", newline="")
