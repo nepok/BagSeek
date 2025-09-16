@@ -6,6 +6,195 @@ import { Center } from '@react-three/drei';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
 
+// Hover-still helper: true after delay ms with no meaningful cursor movement
+function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
+  const [still, setStill] = useState(false);
+  const lastPos = useRef<{ x: number; y: number } | null>(null);
+  const timer = useRef<number | null>(null);
+
+  const clearTimer = () => {
+    if (timer.current) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+
+  const scheduleCheck = (anchor: { x: number; y: number }) => {
+    clearTimer();
+    timer.current = window.setTimeout(() => {
+      const end = lastPos.current || anchor;
+      const dx = Math.abs(end.x - anchor.x);
+      const dy = Math.abs(end.y - anchor.y);
+      if (dx <= tolerancePx && dy <= tolerancePx) {
+        setStill(true);
+      }
+    }, delay) as unknown as number;
+  };
+
+  const onPointerEnter = (e: React.PointerEvent) => {
+    const pos = { x: e.clientX, y: e.clientY };
+    lastPos.current = pos;
+    setStill(false);
+    scheduleCheck(pos);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const pos = { x: e.clientX, y: e.clientY };
+    lastPos.current = pos;
+    if (still) setStill(false);
+    scheduleCheck(pos);
+  };
+
+  const onPointerLeave = () => {
+    clearTimer();
+    setStill(false);
+  };
+
+  useEffect(() => {
+    return () => clearTimer();
+  }, []);
+
+  return { still, onPointerEnter, onPointerMove, onPointerLeave } as const;
+}
+
+type SearchResultItem = {
+  rank: number;
+  rosbag: string;
+  embedding_path: string;
+  similarityScore: number;
+  topic: string;
+  timestamp: string;
+  minuteOfDay: string;
+  model: string;
+};
+
+function ResultImageCard({
+  result,
+  url,
+  onOpenExplore,
+  onOpenDownload,
+}: {
+  result: SearchResultItem;
+  url: string;
+  onOpenExplore: () => void;
+  onOpenDownload: () => void;
+}) {
+  const { still, onPointerEnter, onPointerMove, onPointerLeave } = useHoverStill(500, 3);
+
+  return (
+    <Box
+      sx={{ position: 'relative', width: '100%' }}
+      onPointerEnter={onPointerEnter}
+      onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
+    >
+      <img
+        src={url}
+        alt="Result"
+        style={{
+          width: '100%',
+          borderRadius: '4px',
+          objectFit: 'cover',
+          aspectRatio: '16/9',
+          display: 'block',
+        }}
+      />
+
+      <Chip
+        label={`${result.rosbag}`}
+        size="small"
+        sx={{
+          position: 'absolute',
+          top: 4,
+          left: 4,
+          bgcolor: 'rgba(100, 85, 130, 0.6)',
+          color: 'white'
+        }}
+      />
+      <Chip
+        label={result.minuteOfDay || '—'}
+        size="small"
+        sx={{
+          position: 'absolute',
+          top: 4,
+          right: 4,
+          bgcolor: 'rgba(50,50,50,0.6)',
+          color: 'white'
+        }}
+      />
+      <Chip
+        label={`${result.topic || ''}`}
+        size="small"
+        sx={{
+          position: 'absolute',
+          bottom: 4,
+          left: 4,
+          bgcolor: 'rgba(204, 180, 159, 0.6)',
+          color: 'white',
+          maxWidth: '62%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      />
+      <Chip
+        label={result.model || ''}
+        size="small"
+        sx={{
+          position: 'absolute',
+          bottom: 4,
+          right: 4,
+          bgcolor: 'rgba(120, 170, 200, 0.6)',
+          color: 'white',
+          maxWidth: '35%',
+        }}
+      />
+      <IconButton
+        color="primary"
+        onClick={onOpenExplore}
+        sx={{
+          position: 'absolute',
+          top: '45%',
+          right: 6,
+          transform: 'translateY(-50%)',
+          bgcolor: 'rgba(120, 170, 200, 0.6)',
+          color: 'white',
+          p: 0.5,
+          '& svg': {
+            fontSize: 18,
+          },
+          '&:hover': {
+            bgcolor: 'rgba(120, 170, 200, 0.8)',
+          },
+        }}
+      >
+        <KeyboardArrowRightIcon />
+      </IconButton>
+      <IconButton
+        size="small"
+        color="primary"
+        onClick={onOpenDownload}
+        sx={{
+          position: 'absolute',
+          top: '55%',
+          right: 6,
+          transform: 'translateY(-50%)',
+          bgcolor: 'rgba(120, 170, 200, 0.6)',
+          color: 'white',
+          p: 0.5,
+          '& svg': {
+            fontSize: 18,
+          },
+          '&:hover': {
+            bgcolor: 'rgba(120, 170, 200, 0.8)',
+          },
+        }}
+      >
+        <DownloadIcon />
+      </IconButton>
+    </Box>
+  );
+}
+
 const GlobalSearch: React.FC = () => {
 
     const navigate = useNavigate();
@@ -21,6 +210,8 @@ const GlobalSearch: React.FC = () => {
 
     const [models, setModels] = useState<string[]>([]);
     const [rosbags, setRosbags] = useState<string[]>([]);
+    const DEFAULT_MODEL = 'ViT-B-16-quickgelu__openai';
+    const DEFAULT_ROSBAG_PATH = '/mnt/data/rosbags/output_bag';
     const [confirmedModels, setConfirmedModels] = useState<string[]>([]);
     const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>([]);
     const [timeRange, setTimeRange] = useState<number[]>([0, 1439]);
@@ -33,6 +224,23 @@ const GlobalSearch: React.FC = () => {
 
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
+
+    // In-memory cache shared across route switches in this tab
+    type Cache = {
+      search?: string;
+      models?: string[];
+      rosbags?: string[];
+      viewMode?: 'images' | 'rosbags';
+      searchResults?: { rank: number, rosbag: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[];
+      categorizedSearchResults?: { [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[], query: string, results: { minuteOfDay: string, rank: number, similarityScore: number }[] } } } };
+      searchDone?: boolean;
+      confirmedModels?: string[];
+      confirmedRosbags?: string[];
+      searchStatus?: {progress: number, status: string, message: string};
+    };
+    const GS_CACHE_KEY = '__BagSeekGlobalSearchCache';
+    const cacheRef: Cache = (globalThis as any)[GS_CACHE_KEY] || ((globalThis as any)[GS_CACHE_KEY] = {});
+    const GS_SESSION_KEY = '__BagSeekSearchNewCache';
 
     // Time slider: minutes of the day (0-1439)
     const timestamps: number[] = Array.from({ length: 1440 }, (_, i) => i); // minutes of the day
@@ -55,6 +263,75 @@ const GlobalSearch: React.FC = () => {
             .then(data => setAvailableRosbags(data.paths || []))
             .catch(err => console.error('Failed to fetch rosbags:', err));
     }, []);
+
+    // Restore cached state on mount
+    useEffect(() => {
+        // Restore from in-memory first
+        if (cacheRef.search !== undefined) setSearch(cacheRef.search);
+        if (cacheRef.models !== undefined) setModels(cacheRef.models);
+        if (cacheRef.rosbags !== undefined) setRosbags(cacheRef.rosbags);
+        if (cacheRef.viewMode !== undefined) setViewMode(cacheRef.viewMode);
+        if (cacheRef.searchResults !== undefined) setSearchResults(cacheRef.searchResults);
+        if (cacheRef.categorizedSearchResults !== undefined) setCategorizedSearchResults(cacheRef.categorizedSearchResults as any);
+        if (cacheRef.searchDone !== undefined) setSearchDone(cacheRef.searchDone);
+        if (cacheRef.confirmedModels !== undefined) setConfirmedModels(cacheRef.confirmedModels);
+        if (cacheRef.confirmedRosbags !== undefined) setConfirmedRosbags(cacheRef.confirmedRosbags);
+        if (cacheRef.searchStatus !== undefined) setSearchStatus(cacheRef.searchStatus);
+
+        // If no in-memory results, restore last successful results from session
+        const hasMem = Array.isArray(cacheRef.searchResults) && cacheRef.searchResults.length > 0;
+        if (!hasMem) {
+          try {
+            const raw = sessionStorage.getItem(GS_SESSION_KEY);
+            if (raw) {
+              const saved = JSON.parse(raw);
+              if (saved) {
+                if (saved.query) setSearch(saved.query);
+                if (Array.isArray(saved.results)) setSearchResults(saved.results);
+                if (saved.categorizedSearchResults) setCategorizedSearchResults(saved.categorizedSearchResults);
+                if (Array.isArray(saved.confirmedModels)) setConfirmedModels(saved.confirmedModels);
+                if (Array.isArray(saved.confirmedRosbags)) setConfirmedRosbags(saved.confirmedRosbags);
+                if (Array.isArray(saved.timeRange)) setTimeRange(saved.timeRange);
+                if (typeof saved.sampling === 'number') setSampling(saved.sampling);
+                setSearchDone(Boolean(saved.results));
+                setSearchStatus({ progress: 0, status: 'idle', message: '' });
+              }
+            }
+          } catch {}
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Persist to in-memory cache whenever state changes
+    useEffect(() => {
+        cacheRef.search = search;
+        cacheRef.models = models;
+        cacheRef.rosbags = rosbags;
+        cacheRef.viewMode = viewMode;
+        cacheRef.searchResults = searchResults;
+        cacheRef.categorizedSearchResults = categorizedSearchResults as any;
+        cacheRef.searchDone = searchDone;
+        cacheRef.confirmedModels = confirmedModels;
+        cacheRef.confirmedRosbags = confirmedRosbags;
+        cacheRef.searchStatus = searchStatus;
+    }, [search, models, rosbags, viewMode, searchResults, categorizedSearchResults, searchDone, confirmedModels, confirmedRosbags, searchStatus]);
+
+    // Preselect default model once models are loaded
+    useEffect(() => {
+        if (availableModels.length > 0 && models.length === 0) {
+            if (availableModels.includes(DEFAULT_MODEL)) {
+                setModels([DEFAULT_MODEL]);
+            }
+        }
+    }, [availableModels]);
+
+    // Preselect default rosbag path once rosbags are loaded
+    useEffect(() => {
+        if (availableRosbags.length > 0 && rosbags.length === 0) {
+            const match = availableRosbags.find(p => p === DEFAULT_ROSBAG_PATH);
+            if (match) setRosbags([match]);
+        }
+    }, [availableRosbags]);
 
     // Poll search status periodically when running, stop after 3 failed fetches
     useEffect(() => {
@@ -84,9 +361,14 @@ const GlobalSearch: React.FC = () => {
 
     const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
         if (event.key === 'Enter' && search.trim()) {
+            // Clear cache and UI before starting a new search
+            try { sessionStorage.removeItem(GS_SESSION_KEY); } catch {}
+            setSearchResults([]);
+            setCategorizedSearchResults({});
+            setConfirmedModels(models);
+            setConfirmedRosbags(rosbags);
             setSearchDone(false);
             setSearchStatus({ progress: 0, status: 'running', message: 'Starting search...' });
-            setSearchResults([]); // Clear previous results
             try {
                 const modelParams = models.join(',');
                 const rosbagParams = rosbags.join(',');
@@ -106,13 +388,23 @@ const GlobalSearch: React.FC = () => {
                 setSearchDone(true);
                 setConfirmedModels(models);
                 setConfirmedRosbags(rosbags);
+                // Persist successful response to session so results survive navigation
+                try {
+                  sessionStorage.setItem(GS_SESSION_KEY, JSON.stringify({
+                    query: search,
+                    results: data.results || [],
+                    marks: data.marks || [],
+                    categorizedSearchResults: data.categorizedSearchResults || {},
+                    confirmedModels: models,
+                    confirmedRosbags: rosbags,
+                    timeRange,
+                    sampling,
+                  }));
+                } catch {}
             } catch (error) {
                 console.error('Search failed', error);
-                setSearchResults([]);
-                setCategorizedSearchResults({});
+                // Leave UI empty on failure since we cleared before starting
                 setSearchDone(true);
-                setConfirmedModels(models);
-                setConfirmedRosbags(rosbags);
             }
         }
     };
@@ -465,113 +757,12 @@ const GlobalSearch: React.FC = () => {
                         }}
                       >
                         {url && (
-                          <Box sx={{ position: 'relative', width: '100%' }}>
-                            <img
-                              src={url}
-                              alt="Result"
-                              style={{
-                                width: '100%',
-                                borderRadius: '4px',
-                                objectFit: 'cover',
-                                aspectRatio: '16/9',
-                                display: 'block',
-                              }}
-                            />
-                            <Chip
-                              label={`${result.rosbag}`}
-                              size="small"
-                              sx={{
-                                position: 'absolute',
-                                top: 4,
-                                left: 4,
-                                bgcolor: 'rgba(100, 85, 130, 0.6)',
-                                color: 'white'
-                              }}
-                            />
-                            <Chip
-                              label={result.minuteOfDay || '—'}
-                              size="small"
-                              sx={{
-                                position: 'absolute',
-                                top: 4,
-                                right: 4,
-                                bgcolor: 'rgba(50,50,50,0.6)',
-                                color: 'white'
-                              }}
-                            />
-                            <Chip
-                              label={`${result.topic || ''}`}
-                              size="small"
-                              sx={{
-                                position: 'absolute',
-                                bottom: 4,
-                                left: 4,
-                                bgcolor: 'rgba(204, 180, 159, 0.6)',
-                                color: 'white',
-                                maxWidth: '62%',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                              }}
-                            />
-                            <Chip
-                              label={result.model || ''}
-                              size="small"
-                              sx={{
-                                position: 'absolute',
-                                bottom: 4,
-                                right: 4,
-                                bgcolor: 'rgba(120, 170, 200, 0.6)',
-                                color: 'white',
-                                maxWidth: '35%',
-                                //overflow: 'hidden',
-                                //textOverflow: 'ellipsis',
-                              }}
-                            />
-                            <IconButton
-                              
-                              color="primary"
-                              onClick={() => openExplorePage(result)}
-                              sx={{
-                                position: 'absolute',
-                                top: '45%',
-                                right: 6,
-                                transform: 'translateY(-50%)',
-                                bgcolor: 'rgba(120, 170, 200, 0.6)',
-                                color: 'white',
-                                p: 0.5, // less padding -> smaller button
-                                '& svg': {
-                                  fontSize: 18, // smaller arrow icon
-                                },
-                                '&:hover': {
-                                  bgcolor: 'rgba(120, 170, 200, 0.8)',
-                                },
-                              }}
-                            >
-                              <KeyboardArrowRightIcon />
-                            </IconButton>
-                            <IconButton
-                              size="small"
-                              color="primary"
-                              onClick={() => window.open(url, '_blank')}
-                              sx={{
-                                position: 'absolute',
-                                top: '55%',
-                                right: 6,
-                                transform: 'translateY(-50%)',
-                                bgcolor: 'rgba(120, 170, 200, 0.6)',
-                                color: 'white',
-                                p: 0.5, // less padding -> smaller button
-                                '& svg': {
-                                  fontSize: 18, // smaller arrow icon
-                                },
-                                '&:hover': {
-                                  bgcolor: 'rgba(120, 170, 200, 0.8)',
-                                },
-                              }}
-                            >
-                              <DownloadIcon />
-                            </IconButton>
-                          </Box>
+                          <ResultImageCard
+                            result={result as any}
+                            url={url}
+                            onOpenExplore={() => openExplorePage(result)}
+                            onOpenDownload={() => window.open(url, '_blank')}
+                          />
                         )}
                       </Box>
                     );

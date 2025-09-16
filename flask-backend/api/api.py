@@ -46,7 +46,7 @@ CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 # EXPORT_DIR: Directory where exported Rosbags are saved
 # SELECTED_ROSBAG: Currently selected Rosbag file path
 
-ROSBAGS_DIR = os.getenv("ROSBAGS_DIR")
+ROSBAGS_DIR = os.getenv("ROSBAGS_DIR_OLD")
 ROSBAGS_DIR_NAS = os.getenv("ROSBAGS_DIR_NAS")
 BASE_DIR = os.getenv("BASE_DIR")
 TOPICS_DIR = os.getenv("TOPICS_DIR")
@@ -444,6 +444,110 @@ def serve_representative_image(filename):
     response = send_from_directory(REPRESENTATIVE_IMAGES_DIR, filename)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
+
+# Return preview image URL for a topic at a given reference index or position within a rosbag
+@app.route('/api/get-topic-image-preview', methods=['GET'])
+def get_topic_image_preview():
+    try:
+        rosbag_name = request.args.get('rosbag', type=str)
+        topic = request.args.get('topic', type=str)
+        index = request.args.get('index', type=int)
+        pos = request.args.get('pos', type=float)
+
+        if not rosbag_name or not topic:
+            return jsonify({'error': 'Missing rosbag or topic'}), 400
+
+        csv_path = os.path.join(LOOKUP_TABLES_DIR, f"{rosbag_name}.csv")
+        if not os.path.exists(csv_path):
+            return jsonify({'error': 'Lookup table not found'}), 404
+
+        df = pd.read_csv(csv_path, dtype=str)
+        total = len(df)
+        if total == 0:
+            return jsonify({'error': 'No timestamps available'}), 404
+
+        # Determine reference index from pos or index
+        if index is None:
+            if pos is None:
+                index = 0
+            else:
+                index = int(max(0, min(total - 1, round(pos * (total - 1)))))
+        else:
+            index = int(max(0, min(total - 1, index)))
+
+        # Find the per-topic timestamp at or near the requested reference index
+        def non_nan(v):
+            if v is None:
+                return False
+            if isinstance(v, float):
+                return not math.isnan(v)
+            s = str(v)
+            return s.lower() != 'nan' and s != '' and s != 'None'
+
+        chosen_idx = index
+        topic_ts = None
+        if topic in df.columns:
+            val = df.iloc[index][topic]
+            if non_nan(val):
+                topic_ts = str(val)
+            else:
+                # search nearest non-empty within a window
+                radius = min(500, total - 1)
+                for off in range(1, radius + 1):
+                    left = index - off
+                    right = index + off
+                    if left >= 0:
+                        v = df.iloc[left][topic]
+                        if non_nan(v):
+                            chosen_idx = left
+                            topic_ts = str(v)
+                            break
+                    if right < total:
+                        v = df.iloc[right][topic]
+                        if non_nan(v):
+                            chosen_idx = right
+                            topic_ts = str(v)
+                            break
+        else:
+            return jsonify({'error': 'Topic column not found'}), 404
+
+        if not topic_ts:
+            return jsonify({'error': 'No valid topic timestamp found nearby'}), 404
+
+        topic_safe = topic.replace('/', '__')
+        filename = f"{topic_safe}-{topic_ts}.webp"
+        file_path = os.path.join(IMAGES_DIR, rosbag_name, filename)
+
+        # If file missing, search outward for a nearby timestamp with existing image
+        if not os.path.exists(file_path):
+            # try nearby indices on topic column
+            radius = min(500, total - 1)
+            best_path = None
+            best_idx = chosen_idx
+            for off in range(1, radius + 1):
+                for candidate in (chosen_idx - off, chosen_idx + off):
+                    if 0 <= candidate < total:
+                        v = df.iloc[candidate][topic]
+                        if non_nan(v):
+                            fp = os.path.join(IMAGES_DIR, rosbag_name, f"{topic_safe}-{str(v)}.webp")
+                            if os.path.exists(fp):
+                                best_path = fp
+                                best_idx = candidate
+                                topic_ts = str(v)
+                                break
+                if best_path:
+                    break
+            if best_path:
+                file_path = best_path
+                chosen_idx = best_idx
+            else:
+                return jsonify({'error': 'Image not found for nearby timestamps'}), 404
+
+        rel_url = f"/images/{rosbag_name}/{os.path.basename(file_path)}"
+        return jsonify({'imageUrl': rel_url, 'timestamp': topic_ts, 'index': chosen_idx, 'total': total}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # New endpoint to serve image reference map JSON file for a given rosbag
 @app.route('/image-reference-map/<rosbag_name>.json', methods=['GET'])

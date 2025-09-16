@@ -201,13 +201,23 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         <ButtonGroup variant="outlined" sx={{ marginLeft: 2 }}>
           <Button
             variant={viewMode === 'search' ? 'contained' : 'outlined'}
-            onClick={() => navigate('/search')}
+            onClick={() => {
+              // Save current explore query so we can restore it later
+              if (location.pathname.startsWith('/explore')) {
+                try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
+              }
+              navigate('/search');
+            }}
           >
             Search
           </Button>
           <Button
             variant={viewMode === 'explore' ? 'contained' : 'outlined'}
-            onClick={() => navigate('/explore')}
+            onClick={() => {
+              let qs = '';
+              try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
+              navigate(`/explore${qs}`);
+            }}
           >
             Explore
           </Button>

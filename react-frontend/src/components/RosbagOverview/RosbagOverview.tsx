@@ -1,7 +1,8 @@
 import Typography from '@mui/material/Typography/Typography';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { HeatBar } from '../HeatBar/HeatBar';
+// Preview is rendered inline above the bar, fixed to the mark position.
 import IconButton from '@mui/material/IconButton/IconButton';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 
@@ -26,8 +27,12 @@ interface RosbagOverviewProps {
 }
 
 const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, categorizedSearchResults }) => {
+    const PREVIEW_W = 240; // fixed preview width in px
+    const PREVIEW_HALF = PREVIEW_W / 2;
     const [topics, setTopics] = useState<{ [model: string]: { [rosbag: string]: string[] } }>({});
     const [timestampLengths, setTimestampLengths] = useState<{ [rosbag: string]: number }>({});
+    const [preview, setPreview] = useState<{ url: string; fraction: number; rowKey: string; leftPx?: number } | null>(null);
+    const lastKeyRef = useRef<string>('');
 
     useEffect(() => {
         const fetchTopics = async () => {
@@ -126,13 +131,72 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                             maxHeight: '20px' // ✅ this line reduces height
                                                         }}
                                                     />
-                                                    <HeatBar
-                                                        timestampCount={timestampLengths[rosbag] || 0}
-                                                        searchMarks={categorizedSearchResults[model]?.[rosbagName]?.[topic]?.marks || []}
-                                                        bins={1000}
-                                                        windowSize={50}
-                                                        height={20}
+                                                    <div style={{ position: 'relative', zIndex: 1 }}>
+                                                        <HeatBar
+                                                            timestampCount={timestampLengths[rosbag] || 0}
+                                                            searchMarks={categorizedSearchResults[model]?.[rosbagName]?.[topic]?.marks || []}
+                                                            bins={1000}
+                                                            windowSize={50}
+                                                            height={20}
+                                                            onHover={async (fraction, e) => {
+                                                                const count = timestampLengths[rosbag] || 0;
+                                                                if (!count) return;
+                                                                const idx = Math.max(0, Math.min(count - 1, Math.round(fraction * (count - 1))));
+                                                                const cacheKey = `${rosbagName}|${topic}|${idx}`;
+                                                                const rowKey = `${rosbagName}|${topic}`;
+                                                                // Compute clamped left position in pixels so the image
+                                                                // is fully visible and stops moving within the last PREVIEW_HALF px
+                                                                const targetEl = e.currentTarget as HTMLDivElement;
+                                                                const width = targetEl?.clientWidth || 0;
+                                                                let leftPx = fraction * width;
+                                                                leftPx = Math.max(PREVIEW_HALF, Math.min(width - PREVIEW_HALF, leftPx));
+                                                                if (lastKeyRef.current === cacheKey && preview?.url && preview.rowKey === rowKey) {
+                                                                    setPreview({ url: preview.url, fraction, rowKey });
+                                                                    return;
+                                                                }
+                                                                lastKeyRef.current = cacheKey;
+                                                            try {
+                                                                const params = new URLSearchParams({
+                                                                    rosbag: rosbagName,
+                                                                    topic: topic,
+                                                                    index: String(idx)
+                                                                }).toString();
+                                                                const res = await fetch(`/api/get-topic-image-preview?${params}`);
+                                                                const data = await res.json();
+                                                                    if (res.ok && data.imageUrl) {
+                                                                        // Preload image to avoid showing tiny placeholder/dot before it has size
+                                                                        const img = new Image();
+                                                                        img.onload = () => {
+                                                                            // Only set if still relevant for this row
+                                                                            setPreview({ url: data.imageUrl, fraction, rowKey, leftPx });
+                                                                        };
+                                                                        img.src = data.imageUrl;
+                                                                    }
+                                                                } catch (err) {
+                                                                    // ignore errors for hover
+                                                                }
+                                                            }}
+                                                        onLeave={() => { setPreview(null); lastKeyRef.current = ''; }}
                                                     />
+                                                        {preview && preview.rowKey === `${rosbagName}|${topic}` && (
+                                                            <div
+                                                                style={{
+                                                                    position: 'absolute',
+                                                                    bottom: '100%',
+                                                                    left: preview.leftPx !== undefined ? `${preview.leftPx}px` : `${preview.fraction * 100}%`,
+                                                                    transform: 'translate(-50%, -6px)',
+                                                                    background: '#202020',
+                                                                    padding: 4,
+                                                                    borderRadius: 4,
+                                                                    pointerEvents: 'none',
+                                                                    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                                                                    zIndex: 10
+                                                                }}
+                                                            >
+                                                                <img src={preview.url} alt="preview" style={{ width: PREVIEW_W, height: 'auto', maxHeight: 180, display: 'block', borderRadius: 4 }} />
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -153,6 +217,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                     })}
                 </div>
             ))}
+            {/* Inline poppers are rendered per-row above */}
         </div>
     );
 };

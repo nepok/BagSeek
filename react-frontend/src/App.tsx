@@ -78,6 +78,13 @@ function App() {
     setSearchParams(next, { replace: true });
   };
 
+  // Helper: get basename (last path segment) of a rosbag path/id
+  const getRosbagBasename = (value: string | null | undefined) => {
+    if (!value) return value as any;
+    const parts = value.split('/');
+    return parts[parts.length - 1];
+  };
+
   // Fetch list of available topics from backend API
   const fetchAvailableTopics = async () => {
     try {
@@ -289,7 +296,8 @@ function App() {
     if (location.pathname.startsWith('/explore')) {
       if (selectedRosbag) {
         const curr = searchParams.get('rosbag');
-        if (curr !== selectedRosbag) updateSearchParams({ rosbag: selectedRosbag });
+        const next = getRosbagBasename(selectedRosbag);
+        if (curr !== next) updateSearchParams({ rosbag: next as string });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -306,7 +314,8 @@ function App() {
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
       if (!rosbagParam) return;
-      if (selectedRosbag === rosbagParam) return;
+      // Compare basenames to avoid full-path vs basename mismatches
+      if (getRosbagBasename(selectedRosbag) === rosbagParam) return;
       try {
         const res = await fetch('/api/get-file-paths');
         const data = await res.json();
@@ -356,7 +365,8 @@ function App() {
     if (!location.pathname.startsWith('/explore')) return;
     if (!pendingCanvasRef.current) return;
     const needRosbag = pendingRosbagParamRef.current;
-    if (needRosbag && selectedRosbag !== needRosbag) return;
+    // Proceed when the selected rosbag basename matches the needed rosbag from URL
+    if (needRosbag && getRosbagBasename(selectedRosbag) !== needRosbag) return;
     const { root, metadata } = pendingCanvasRef.current;
     pendingCanvasRef.current = null;
     pendingRosbagParamRef.current = null;

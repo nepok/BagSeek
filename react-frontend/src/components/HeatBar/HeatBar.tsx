@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { styled } from '@mui/material/styles';
 
 interface HeatBarProps {
@@ -8,6 +8,8 @@ interface HeatBarProps {
   bins?: number;
   windowSize?: number;
   height?: number;
+  onHover?: (fraction: number, e: React.MouseEvent<HTMLDivElement>) => void;
+  onLeave?: () => void;
 }
 
 function getHeatColor(value: number, densityFactor: number) {
@@ -37,7 +39,12 @@ export const HeatBar: React.FC<HeatBarProps> = ({
   bins = 1000,
   windowSize = 50,
   height,
+  onHover,
+  onLeave,
 }) => {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [hoverPos, setHoverPos] = useState<number | null>(null); // 0..1 fraction
+
   const densityData = useMemo(() => {
     const counts = new Array(bins).fill(0);
     const total = timestampCount;
@@ -82,11 +89,36 @@ export const HeatBar: React.FC<HeatBarProps> = ({
   }, [timestampDensity, bins]);
 
   return (
-    <StyledTrack 
-        height={height}>
+    <StyledTrack
+      ref={trackRef}
+      height={height}
+      onMouseLeave={() => { setHoverPos(null); onLeave && onLeave(); }}
+      onMouseMove={(e) => {
+        if (!trackRef.current) return;
+        const rect = trackRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const frac = Math.max(0, Math.min(1, x / rect.width));
+        setHoverPos(frac);
+        onHover && onHover(frac, e);
+      }}
+    >
         {densityData.map((val, idx) => (
         <HeatBarSegment key={idx} intensity={val} densityFactor={normalizedDensity[idx]} />
         ))}
+        {hoverPos !== null && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `${hoverPos * 100}%`,
+              width: 2,
+              background: 'rgba(255,255,255,0.8)',
+              transform: 'translateX(-1px)',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
     </StyledTrack>
   );
 };
