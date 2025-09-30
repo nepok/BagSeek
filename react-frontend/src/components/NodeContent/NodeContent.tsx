@@ -29,7 +29,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   
   const imageUrl =
     nodeTopic && mappedTimestamp && selectedRosbag
-      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}-${mappedTimestamp}.webp`
+      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}/${mappedTimestamp}.webp`
       : undefined; // resolved URL to load image from local server
 
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance

@@ -299,6 +299,14 @@ const GlobalSearch: React.FC = () => {
             }
           } catch {}
         }
+
+        // Restore last selected tab from sessionStorage
+        try {
+          const lastTab = sessionStorage.getItem('lastSearchTab');
+          if (lastTab === 'images' || lastTab === 'rosbags') {
+            setViewMode(lastTab);
+          }
+        } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -448,6 +456,8 @@ const GlobalSearch: React.FC = () => {
 
     const openExplorePage = (result: { rosbag: string; topic: string; timestamp: string }) => {
         if (!result || !result.rosbag || !result.topic || !result.timestamp) return;
+        // Cache current tab before navigating
+        try { sessionStorage.setItem('lastSearchTab', viewMode); } catch {}
         // Build a single-panel canvas JSON containing only the selected topic
         const canvas = {
           root: { id: 1 },
@@ -744,7 +754,7 @@ const GlobalSearch: React.FC = () => {
                 >
                   {searchResults.map((result, index) => {
                     const url = result.topic && result.timestamp && result.rosbag
-                      ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
+                      ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}/${result.timestamp}.webp`
                       : undefined;
 
                     return (

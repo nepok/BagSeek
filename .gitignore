@@ -14,3 +14,9 @@ preprocessing/model_cache
 
 # Other
 docker-compose.yml
+
+# Environments
+.env
+.env_old
+
+preprocessing/mcap_*

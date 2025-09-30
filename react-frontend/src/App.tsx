@@ -310,6 +310,7 @@ function App() {
     const rosbagParam = searchParams.get('rosbag');
     const tsParam = searchParams.get('ts');
     const canvasParam = searchParams.get('canvas');
+    const marksParam = searchParams.get('marks');
 
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
@@ -341,7 +342,24 @@ function App() {
 
     ensureRosbag();
 
-    // 2) Stash ts/canvas to apply when data is ready
+    // 2) Apply marks (heatmap) immediately if provided
+    if (marksParam) {
+      try {
+        const decoded = JSON.parse(decodeURIComponent(marksParam));
+        if (Array.isArray(decoded)) {
+          const normalized = decoded.map((m: any) => {
+            if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
+            if (typeof m === 'number') return { value: m, label: '' };
+            return null;
+          }).filter(Boolean) as { value: number; label: string }[];
+          setSearchMarks(normalized);
+        }
+      } catch (e) {
+        // ignore invalid marks
+      }
+    }
+
+    // 3) Stash ts/canvas to apply when data is ready
     if (tsParam) {
       const tsNum = Number(tsParam);
       if (!Number.isNaN(tsNum) && tsNum !== selectedTimestamp) pendingTsRef.current = tsNum;
@@ -354,6 +372,40 @@ function App() {
           // Apply after rosbag is ensured to avoid topic reset flicker
           pendingCanvasRef.current = parsed as { root: Node; metadata: { [id: number]: NodeMetadata } };
           pendingRosbagParamRef.current = rosbagParam;
+          // If the currently selected rosbag already matches the URL rosbag, apply immediately
+          if (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam) {
+            const { root, metadata } = pendingCanvasRef.current;
+            pendingCanvasRef.current = null;
+            pendingRosbagParamRef.current = null;
+            setCurrentRoot(root);
+            setCurrentMetadata(metadata);
+            const encoded = encodeCanvas({ root, metadata });
+            if (encoded) updateSearchParams({ canvas: encoded });
+          }
+        }
+      }
+    }
+    // If timestamp param exists and rosbag already matches, apply immediately
+    if (tsParam && (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam)) {
+      const tsNum = Number(tsParam);
+      if (!Number.isNaN(tsNum)) {
+        pendingTsRef.current = tsNum;
+        if (availableTimestamps && availableTimestamps.length > 0) {
+          // trigger timestamp application now; the timestamps-ready effect will normalize to nearest if needed
+          const target = pendingTsRef.current;
+          pendingTsRef.current = null;
+          // If exact index unknown yet, call handleSliderChange with best guess when list is there
+          let chosen = target;
+          if (!availableTimestamps.includes(target)) {
+            let best = availableTimestamps[0];
+            let bestDiff = Math.abs(best - target);
+            for (const t of availableTimestamps) {
+              const diff = Math.abs(t - target);
+              if (diff < bestDiff) { best = t; bestDiff = diff; }
+            }
+            chosen = best;
+          }
+          handleSliderChange(chosen);
         }
       }
     }

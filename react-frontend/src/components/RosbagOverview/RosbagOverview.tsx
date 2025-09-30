@@ -5,6 +5,7 @@ import { HeatBar } from '../HeatBar/HeatBar';
 // Preview is rendered inline above the bar, fixed to the mark position.
 import IconButton from '@mui/material/IconButton/IconButton';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import { useNavigate } from 'react-router-dom';
 
 interface RosbagOverviewProps {
     rosbags: string[];
@@ -29,10 +30,19 @@ interface RosbagOverviewProps {
 const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, categorizedSearchResults }) => {
     const PREVIEW_W = 240; // fixed preview width in px
     const PREVIEW_HALF = PREVIEW_W / 2;
+    const navigate = useNavigate();
     const [topics, setTopics] = useState<{ [model: string]: { [rosbag: string]: string[] } }>({});
     const [timestampLengths, setTimestampLengths] = useState<{ [rosbag: string]: number }>({});
     const [preview, setPreview] = useState<{ url: string; fraction: number; rowKey: string; leftPx?: number } | null>(null);
+    // Track per-row representative image heights so hover preview scales with them
+    const repImgRefs = useRef<{ [rowKey: string]: HTMLImageElement | null }>({});
+    const [repImgHeights, setRepImgHeights] = useState<{ [rowKey: string]: number }>({});
     const lastKeyRef = useRef<string>('');
+    // Debounce + cancellation for hover previews
+    const hoverTimerRef = useRef<number | null>(null);
+    const abortRef = useRef<AbortController | null>(null);
+    const latestSeqRef = useRef<number>(0);
+    const latestHoverRef = useRef<{ rowKey: string; rosbagName: string; topic: string; idx: number; fraction: number; leftPx: number } | null>(null);
 
     useEffect(() => {
         const fetchTopics = async () => {
@@ -120,6 +130,24 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                         src={`/representative-image/${rosbagName}/${topicSafe}_collage.webp`}
                                                         alt={`Representative for ${topic}`}
                                                         style={{ width: 'auto', maxWidth: '100%', height: 'auto' }}
+                                                        ref={(el) => {
+                                                            const rowKey = `${rosbagName}|${topic}`;
+                                                            repImgRefs.current[rowKey] = el;
+                                                            if (el) {
+                                                                const h = el.clientHeight;
+                                                                if (h && h !== repImgHeights[rowKey]) {
+                                                                    setRepImgHeights((prev) => ({ ...prev, [rowKey]: h }));
+                                                                }
+                                                            }
+                                                        }}
+                                                        onLoad={(e) => {
+                                                            const img = e.currentTarget;
+                                                            const rowKey = `${rosbagName}|${topic}`;
+                                                            const h = img.clientHeight;
+                                                            if (h && h !== repImgHeights[rowKey]) {
+                                                                setRepImgHeights((prev) => ({ ...prev, [rowKey]: h }));
+                                                            }
+                                                        }}
                                                     />
                                                     <img
                                                         src={`/adjacency-image/${model}/${rosbagName}/${topicSafe}/${topicSafe}.png`}
@@ -138,45 +166,73 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                             bins={1000}
                                                             windowSize={50}
                                                             height={20}
-                                                            onHover={async (fraction, e) => {
+                                                            onHover={(fraction, e) => {
                                                                 const count = timestampLengths[rosbag] || 0;
                                                                 if (!count) return;
                                                                 const idx = Math.max(0, Math.min(count - 1, Math.round(fraction * (count - 1))));
-                                                                const cacheKey = `${rosbagName}|${topic}|${idx}`;
                                                                 const rowKey = `${rosbagName}|${topic}`;
-                                                                // Compute clamped left position in pixels so the image
-                                                                // is fully visible and stops moving within the last PREVIEW_HALF px
                                                                 const targetEl = e.currentTarget as HTMLDivElement;
                                                                 const width = targetEl?.clientWidth || 0;
                                                                 let leftPx = fraction * width;
                                                                 leftPx = Math.max(PREVIEW_HALF, Math.min(width - PREVIEW_HALF, leftPx));
-                                                                if (lastKeyRef.current === cacheKey && preview?.url && preview.rowKey === rowKey) {
-                                                                    setPreview({ url: preview.url, fraction, rowKey });
-                                                                    return;
+
+                                                                // Remember the latest hover intent
+                                                                latestHoverRef.current = { rowKey, rosbagName, topic, idx, fraction, leftPx };
+
+                                                                // Debounce: wait for 500ms of still cursor before fetching
+                                                                if (hoverTimerRef.current) {
+                                                                    window.clearTimeout(hoverTimerRef.current);
+                                                                    hoverTimerRef.current = null;
                                                                 }
-                                                                lastKeyRef.current = cacheKey;
-                                                            try {
-                                                                const params = new URLSearchParams({
-                                                                    rosbag: rosbagName,
-                                                                    topic: topic,
-                                                                    index: String(idx)
-                                                                }).toString();
-                                                                const res = await fetch(`/api/get-topic-image-preview?${params}`);
-                                                                const data = await res.json();
-                                                                    if (res.ok && data.imageUrl) {
-                                                                        // Preload image to avoid showing tiny placeholder/dot before it has size
+                                                                hoverTimerRef.current = window.setTimeout(async () => {
+                                                                    const intent = latestHoverRef.current;
+                                                                    if (!intent || intent.rowKey !== rowKey || intent.idx !== idx) return;
+
+                                                                    // Cancel any in-flight request
+                                                                    if (abortRef.current) {
+                                                                        abortRef.current.abort();
+                                                                        abortRef.current = null;
+                                                                    }
+                                                                    const seq = ++latestSeqRef.current;
+                                                                    const controller = new AbortController();
+                                                                    abortRef.current = controller;
+                                                                    try {
+                                                                        const params = new URLSearchParams({
+                                                                            rosbag: intent.rosbagName,
+                                                                            topic: intent.topic,
+                                                                            index: String(intent.idx)
+                                                                        }).toString();
+                                                                        const res = await fetch(`/api/get-topic-image-preview?${params}`, { signal: controller.signal });
+                                                                        if (!res.ok) return;
+                                                                        const data = await res.json();
+                                                                        if (!data?.imageUrl) return;
+
+                                                                        // Preload and only apply if still latest
                                                                         const img = new Image();
                                                                         img.onload = () => {
-                                                                            // Only set if still relevant for this row
-                                                                            setPreview({ url: data.imageUrl, fraction, rowKey, leftPx });
+                                                                            if (seq !== latestSeqRef.current) return;
+                                                                            setPreview({ url: data.imageUrl, fraction: intent.fraction, rowKey: intent.rowKey, leftPx: intent.leftPx });
                                                                         };
                                                                         img.src = data.imageUrl;
+                                                                    } catch (err) {
+                                                                        // ignore aborts/errors
                                                                     }
-                                                                } catch (err) {
-                                                                    // ignore errors for hover
+                                                                }, 100) as unknown as number;
+                                                            }}
+                                                            onLeave={() => {
+                                                                // Clear preview and cancel timers/requests
+                                                                setPreview(null);
+                                                                lastKeyRef.current = '';
+                                                                latestHoverRef.current = null;
+                                                                if (hoverTimerRef.current) {
+                                                                    window.clearTimeout(hoverTimerRef.current);
+                                                                    hoverTimerRef.current = null;
+                                                                }
+                                                                if (abortRef.current) {
+                                                                    abortRef.current.abort();
+                                                                    abortRef.current = null;
                                                                 }
                                                             }}
-                                                        onLeave={() => { setPreview(null); lastKeyRef.current = ''; }}
                                                     />
                                                         {preview && preview.rowKey === `${rosbagName}|${topic}` && (
                                                             <div
@@ -193,7 +249,24 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                                     zIndex: 10
                                                                 }}
                                                             >
-                                                                <img src={preview.url} alt="preview" style={{ width: PREVIEW_W, height: 'auto', maxHeight: 180, display: 'block', borderRadius: 4 }} />
+                                                                {(() => {
+                                                                    const rowKey = `${rosbagName}|${topic}`;
+                                                                    const h = repImgHeights[rowKey];
+                                                                    const targetH = h ? Math.max(40, Math.min(400, h)) : undefined;
+                                                                    return (
+                                                                        <img
+                                                                            src={preview.url}
+                                                                            alt="preview"
+                                                                            style={{
+                                                                                height: targetH ? `${targetH}px` : 'auto',
+                                                                                width: 'auto',
+                                                                                maxHeight: targetH ? `${targetH}px` : '180px',
+                                                                                display: 'block',
+                                                                                borderRadius: 4
+                                                                            }}
+                                                                        />
+                                                                    );
+                                                                })()}
                                                             </div>
                                                         )}
                                                     </div>
@@ -204,7 +277,49 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                     aria-label="open"
                                                     size="small"
                                                     sx={{ color: 'white' }}
-                                                    onClick={() => console.log(`Explore → model: ${model}, rosbag: ${rosbagName}, topic: ${topic}`)}
+                                                    onClick={async () => {
+                                                        // Build a single-panel canvas for this topic
+                                                        const canvas = {
+                                                            root: { id: 1 },
+                                                            metadata: {
+                                                                1: { nodeTimestamp: null, nodeTopic: topic, nodeTopicType: "sensor_msgs/msg/CompressedImage" }
+                                                            }
+                                                        } as any;
+                                                        const encodedCanvas = encodeURIComponent(JSON.stringify(canvas));
+                                                        // Use existing marks for this topic to seed the explore page heatmap
+                                                        const marks = (categorizedSearchResults[model]?.[rosbagName]?.[topic]?.marks || []);
+                                                        const encodedMarks = encodeURIComponent(JSON.stringify(marks));
+                                                        
+                                                        // Try to get the first timestamp for this topic/rosbag
+                                                        let firstTimestamp = null;
+                                                        try {
+                                                            const response = await fetch(`/api/get-first-timestamp-for-topic?rosbag=${encodeURIComponent(rosbagName)}&topic=${encodeURIComponent(topic)}`);
+                                                            if (response.ok) {
+                                                                const data = await response.json();
+                                                                firstTimestamp = data.timestamp;
+                                                            }
+                                                        } catch (err) {
+                                                            // Fallback: try to get first timestamp from available timestamps
+                                                            try {
+                                                                const timestampResponse = await fetch('/api/get-available-timestamps');
+                                                                if (timestampResponse.ok) {
+                                                                    const timestampData = await timestampResponse.json();
+                                                                    if (timestampData.availableTimestamps && timestampData.availableTimestamps.length > 0) {
+                                                                        firstTimestamp = timestampData.availableTimestamps[0];
+                                                                    }
+                                                                }
+                                                            } catch (e) {
+                                                                // ignore
+                                                            }
+                                                        }
+                                                        
+                                                        const params = new URLSearchParams();
+                                                        params.set('rosbag', rosbagName);
+                                                        params.set('canvas', encodedCanvas);
+                                                        if (firstTimestamp) params.set('ts', String(firstTimestamp));
+                                                        if (marks && marks.length > 0) params.set('marks', encodedMarks);
+                                                        navigate(`/explore?${params.toString()}`);
+                                                    }}
                                                 >
                                                     <KeyboardArrowRightIcon />
                                                 </IconButton>

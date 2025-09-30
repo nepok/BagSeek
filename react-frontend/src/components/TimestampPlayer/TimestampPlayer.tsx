@@ -299,12 +299,11 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }
   }, [searchResults]);
 
-  // Reset UI state on rosbag change
+  // Reset UI state on rosbag change (keep heatmap marks if already provided)
   useEffect(() => {
-    // Clear search results and images when rosbag changes
     setSearchResults([]);
     setImageGallery([]);
-    setSearchMarks([]);
+    // Do not clear searchMarks here so heatmap can be shown by default when provided via URL
   }, [selectedRosbag]);
   
   // Run search when user presses Enter in search box

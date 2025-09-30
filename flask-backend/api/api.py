@@ -5,7 +5,7 @@ from pathlib import Path
 from rosbags.rosbag2 import Reader, Writer  # type: ignore
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg # type: ignore
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory, send_file # type: ignore
+from flask import Flask, jsonify, request, send_from_directory, send_file, abort # type: ignore
 from flask_cors import CORS  # type: ignore
 import logging
 import pandas as pd
@@ -16,11 +16,12 @@ from typing import TYPE_CHECKING, cast
 from rosbags.interfaces import ConnectionExtRosbag2  # type: ignore
 import open_clip
 import math
-from threading import Thread
+from threading import Thread, Lock
 from datetime import datetime
 import gc
 from collections import defaultdict
 from dotenv import load_dotenv
+from time import time
 
 # Load environment variables from .env file
 PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
@@ -46,11 +47,12 @@ CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 # EXPORT_DIR: Directory where exported Rosbags are saved
 # SELECTED_ROSBAG: Currently selected Rosbag file path
 
-ROSBAGS_DIR = os.getenv("ROSBAGS_DIR_OLD")
+ROSBAGS_DIR_MNT = os.getenv("ROSBAGS_DIR_MNT")
 ROSBAGS_DIR_NAS = os.getenv("ROSBAGS_DIR_NAS")
 BASE_DIR = os.getenv("BASE_DIR")
 TOPICS_DIR = os.getenv("TOPICS_DIR")
 IMAGES_DIR = os.getenv("IMAGES_DIR")
+IMAGES_PER_TOPIC_DIR = os.getenv("IMAGES_PER_TOPIC_DIR")
 LOOKUP_TABLES_DIR = os.getenv("LOOKUP_TABLES_DIR")
 EMBEDDINGS_DIR = os.getenv("EMBEDDINGS_DIR")
 EMBEDDINGS_PER_TOPIC_DIR = os.getenv("EMBEDDINGS_PER_TOPIC_DIR")
@@ -75,6 +77,11 @@ SEARCHED_ROSBAGS = []
 
 # MAX_K: Number of top results to return for semantic search
 MAX_K = 100
+
+# Cache setup for expensive rosbag discovery
+FILE_PATH_CACHE_TTL_SECONDS = 60
+_file_path_cache = {"paths": [], "timestamp": 0.0}
+_file_path_cache_lock = Lock()
 
 # Initialize the type system for ROS2 deserialization, including custom Novatel messages
 # This is required to correctly deserialize messages from Rosbags, especially for custom message types
@@ -143,6 +150,40 @@ def load_canvases():
 def save_canvases(data):
     with open(CANVASES_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+
+def _collect_rosbag_paths(force_refresh: bool = False):
+    now = time()
+    with _file_path_cache_lock:
+        cached_paths = list(_file_path_cache["paths"])
+        cached_timestamp = _file_path_cache["timestamp"]
+
+    if (
+        cached_paths
+        and not force_refresh
+        and (now - cached_timestamp) < FILE_PATH_CACHE_TTL_SECONDS
+    ):
+        return cached_paths
+
+    ros_files = []
+    if not ROSBAGS_DIR_NAS:
+        return ros_files
+
+    for root, dirs, files in os.walk(ROSBAGS_DIR_NAS, topdown=True):
+        if 'metadata.yaml' in files:
+            if "EXCLUDED" in root:
+                dirs[:] = []
+                continue
+            ros_files.append(root)
+            dirs[:] = []
+
+    ros_files.sort()
+
+    with _file_path_cache_lock:
+        _file_path_cache["paths"] = ros_files
+        _file_path_cache["timestamp"] = time()
+
+    return ros_files
 
 # Copy messages from one Rosbag to another within a timestamp range and selected topics
 def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timestamp, end_timestamp) -> None:
@@ -266,14 +307,18 @@ def get_file_paths():
     Return all available Rosbag file paths (excluding those in EXCLUDED).
     """
     try:
-        ros_files = []
-        for root, dirs, files in os.walk(ROSBAGS_DIR):
-            if 'metadata.yaml' in files:
-                rosbag_path = os.path.dirname(os.path.join(root, 'metadata.yaml'))
-                if "EXCLUDED" in rosbag_path:
-                    continue
-                ros_files.append(rosbag_path)
+        ros_files = _collect_rosbag_paths()
         return jsonify({"paths": ros_files}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/refresh-file-paths', methods=['POST'])
+def refresh_file_paths():
+    """Force refresh of the cached Rosbag file paths."""
+    try:
+        ros_files = _collect_rosbag_paths(force_refresh=True)
+        return jsonify({"paths": ros_files, "message": "Rosbag file paths refreshed."}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
@@ -418,30 +463,30 @@ def get_timestamp_density():
     density_array = ALIGNED_DATA.drop(columns=["Reference Timestamp"]).notnull().sum(axis=1).tolist()
     return jsonify({'timestampDensity': density_array})
     
-@app.route('/images/<path:filename>')
-def serve_image(filename):
+@app.route('/images/<path:image_path>')
+def serve_image(image_path):
     """
     Serve an extracted image file from the backend image directory.
     """
-    response = send_from_directory(IMAGES_DIR, filename)
+    response = send_from_directory(IMAGES_PER_TOPIC_DIR, image_path)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
 
-@app.route('/adjacency-image/<path:filename>')
-def serve_adjacency_image(filename):
+@app.route('/adjacency-image/<path:adjacency_image_path>')
+def serve_adjacency_image(adjacency_image_path):
     """
     Serve an extracted image file from the backend image directory.
     """
-    response = send_from_directory(ADJACENT_SIMILARITIES_DIR, filename)
+    response = send_from_directory(ADJACENT_SIMILARITIES_DIR, adjacency_image_path)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
 
-@app.route('/representative-image/<path:filename>')
-def serve_representative_image(filename):
+@app.route('/representative-image/<path:representative_image_path>')
+def serve_representative_image(representative_image_path):
     """
     Serve an extracted image file from the backend image directory.
     """
-    response = send_from_directory(REPRESENTATIVE_IMAGES_DIR, filename)
+    response = send_from_directory(REPRESENTATIVE_IMAGES_DIR, representative_image_path)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
 
@@ -670,7 +715,6 @@ def search_new():
     if accuracy is None:
         return jsonify({'error': 'No accuracy provided'}), 400
 
-    logging.warning(f"\n\n\n accuracy: {accuracy} \n\n\n")
     models = models.split(",")
     rosbags = rosbags.split(",")
     rosbags = [os.path.basename(r) for r in rosbags]
@@ -699,7 +743,7 @@ def search_new():
                         total_steps += 1
 
         #total_steps = len(models) * len(rosbags)
-        logging.warning(f"Total steps to process: {total_steps}")
+        #logging.warning(f"Total steps to process: {total_steps}")
         step_count = 0
 
         for model_idx, model_name in enumerate(models):

@@ -214,6 +214,15 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           <Button
             variant={viewMode === 'explore' ? 'contained' : 'outlined'}
             onClick={() => {
+              // Cache current search tab before navigating to explore
+              if (location.pathname.startsWith('/search')) {
+                try { 
+                  const cache = (globalThis as any).__BagSeekGlobalSearchCache;
+                  if (cache && cache.viewMode) {
+                    sessionStorage.setItem('lastSearchTab', cache.viewMode);
+                  }
+                } catch {}
+              }
               let qs = '';
               try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
               navigate(`/explore${qs}`);
