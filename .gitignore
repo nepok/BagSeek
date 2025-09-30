@@ -19,4 +19,4 @@ docker-compose.yml
 .env
 .env_old
 
-preprocessing/mcap_*
+preprocessing/mcap_* 
