@@ -20,3 +20,5 @@ docker-compose.yml
 .env_old
 
 preprocessing/mcap_* 
+
+*.pyc
