@@ -11,23 +11,18 @@ interface RosbagOverviewProps {
     rosbags: string[];
     models: string[];
     searchDone: boolean;
-    categorizedSearchResults: {
+    marksPerTopic: {
         [model: string]: {
             [rosbag: string]: {
                 [topic: string]: {
                     marks: { value: number }[];
-                    results: {
-                        minuteOfDay: string;
-                        rank: number;
-                        similarityScore: number;
-                    }[];
                 };
             };
         };
     };
 }
 
-const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, categorizedSearchResults }) => {
+const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic }) => {
     const PREVIEW_W = 240; // fixed preview width in px
     const PREVIEW_HALF = PREVIEW_W / 2;
     const navigate = useNavigate();
@@ -67,7 +62,9 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
             }
         };
         fetchTopics();
+    }, [rosbags, models]);
 
+    useEffect(() => {
         const fetchTimestampLengths = async () => {
             try {
                 const response = await axios.get('/api/get-timestamp-lengths', {
@@ -88,50 +85,38 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
             }
         };
         fetchTimestampLengths();
-
-    }, [rosbags, models]);
+    }, [rosbags]);
 
     return (
         <div>
             {models.map((model) => (
-                <div key={model}>
-                    <Typography variant="h6" sx={{ color: 'white', mb: 1 }}>
-                        Model: {model}
+                <div key={model} style={{ marginBottom: '2rem' }}>
+                    <Typography variant="h6" sx={{ color: 'white', mb: 1, fontWeight: 'bold' }}>
+                        {model}
                     </Typography>
                     {rosbags.map((rosbag) => {
                         const rosbagName = rosbag.split('/').pop() || rosbag;
                         return (
-                            <div key={rosbag} style={{ paddingLeft: '1rem', marginBottom: '2rem' }}>
-                                <Typography variant="subtitle1" sx={{ color: 'white', mb: 1 }}>
-                                    Rosbag: {rosbagName}
+                            <div key={rosbag} style={{ paddingLeft: '2rem', marginBottom: '1.5rem' }}>
+                                <Typography variant="subtitle1" sx={{ color: 'white', mb: 1, fontWeight: 600 }}>
+                                    {rosbagName}
                                 </Typography>
+                                <div style={{ paddingLeft: '1rem' }}>
                                 {(topics[model]?.[rosbagName] || []).map((topic) => {
                                     const topicSafe = topic.replace(/\//g, '__');
+                                        const rowKey = `${rosbagName}|${topic}`;
                                     return (
-                                        <div key={topic} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem', borderRadius: '6px', overflow: 'hidden' }}>
-                                            <div style={{ display: 'flex', flexGrow: 1 }}>
-                                                <div style={{
-                                                    width: '20%',
-                                                    backgroundColor: '#3a3a3a',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    padding: '1rem'
-                                                }}>
-                                                    <Typography variant="body2" sx={{ color: 'white', textAlign: 'center' }}>{topic}</Typography>
-                                                </div>
-                                                <div style={{
-                                                    width: '80%',
-                                                    backgroundColor: '#1e1e1e',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                }}>
+                                            <div key={topic} style={{ marginBottom: '1.5rem', paddingLeft: '1rem' }}>
+                                                <Typography variant="body2" sx={{ color: 'white', mb: 0.5, opacity: 0.9 }}>
+                                                    {topic}
+                                                </Typography>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', position: 'relative' }}>
+                                                    {/* Representative Image */}
                                                     <img
                                                         src={`/representative-image/${rosbagName}/${topicSafe}_collage.webp`}
                                                         alt={`Representative for ${topic}`}
-                                                        style={{ width: 'auto', maxWidth: '100%', height: 'auto' }}
+                                                        style={{ width: 'auto', maxWidth: '100%', height: 'auto', display: 'block' }}
                                                         ref={(el) => {
-                                                            const rowKey = `${rosbagName}|${topic}`;
                                                             repImgRefs.current[rowKey] = el;
                                                             if (el) {
                                                                 const h = el.clientHeight;
@@ -142,13 +127,14 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                         }}
                                                         onLoad={(e) => {
                                                             const img = e.currentTarget;
-                                                            const rowKey = `${rosbagName}|${topic}`;
                                                             const h = img.clientHeight;
                                                             if (h && h !== repImgHeights[rowKey]) {
                                                                 setRepImgHeights((prev) => ({ ...prev, [rowKey]: h }));
                                                             }
                                                         }}
                                                     />
+                                                    
+                                                    {/* Adjacency Image */}
                                                     <img
                                                         src={`/adjacency-image/${model}/${rosbagName}/${topicSafe}/${topicSafe}.png`}
                                                         alt={`Adjacency for ${model} - ${topic}`}
@@ -156,13 +142,16 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                             width: 'auto',
                                                             maxWidth: '100%',
                                                             height: 'auto',
-                                                            maxHeight: '20px' // ✅ this line reduces height
+                                                            maxHeight: '20px',
+                                                            display: 'block'
                                                         }}
                                                     />
+                                                    
+                                                    {/* HeatBar */}
                                                     <div style={{ position: 'relative', zIndex: 1 }}>
                                                         <HeatBar
                                                             timestampCount={timestampLengths[rosbag] || 0}
-                                                            searchMarks={categorizedSearchResults[model]?.[rosbagName]?.[topic]?.marks || []}
+                                                            searchMarks={marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []}
                                                             bins={1000}
                                                             windowSize={50}
                                                             height={20}
@@ -170,9 +159,13 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                                 const count = timestampLengths[rosbag] || 0;
                                                                 if (!count) return;
                                                                 const idx = Math.max(0, Math.min(count - 1, Math.round(fraction * (count - 1))));
-                                                                const rowKey = `${rosbagName}|${topic}`;
-                                                                const targetEl = e.currentTarget as HTMLDivElement;
-                                                                const width = targetEl?.clientWidth || 0;
+                                                                // Get the parent container (the div with position: relative) for width calculation
+                                                                const trackEl = e.currentTarget as HTMLDivElement;
+                                                                const containerEl = trackEl?.parentElement as HTMLDivElement;
+                                                                if (!containerEl) return;
+                                                                const rect = containerEl.getBoundingClientRect();
+                                                                const width = rect.width;
+                                                                if (!width) return;
                                                                 let leftPx = fraction * width;
                                                                 leftPx = Math.max(PREVIEW_HALF, Math.min(width - PREVIEW_HALF, leftPx));
 
@@ -234,7 +227,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                                 }
                                                             }}
                                                     />
-                                                        {preview && preview.rowKey === `${rosbagName}|${topic}` && (
+                                                        {preview && preview.rowKey === rowKey && (
                                                             <div
                                                                 style={{
                                                                     position: 'absolute',
@@ -250,7 +243,6 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                                 }}
                                                             >
                                                                 {(() => {
-                                                                    const rowKey = `${rosbagName}|${topic}`;
                                                                     const h = repImgHeights[rowKey];
                                                                     const targetH = h ? Math.max(40, Math.min(400, h)) : undefined;
                                                                     return (
@@ -270,9 +262,9 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                             </div>
                                                         )}
                                                     </div>
-                                                </div>
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                    
+                                                    {/* Arrow button positioned absolutely */}
+                                                    <div style={{ position: 'absolute', top: 0, right: 0 }}>
                                                 <IconButton
                                                     aria-label="open"
                                                     size="small"
@@ -287,8 +279,17 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                         } as any;
                                                         const encodedCanvas = encodeURIComponent(JSON.stringify(canvas));
                                                         // Use existing marks for this topic to seed the explore page heatmap
-                                                        const marks = (categorizedSearchResults[model]?.[rosbagName]?.[topic]?.marks || []);
-                                                        const encodedMarks = encodeURIComponent(JSON.stringify(marks));
+                                                        const marks = (marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []);
+                                                        
+                                                        // Store marks in sessionStorage (not in URL for cleaner, shareable links)
+                                                        if (marks && marks.length > 0) {
+                                                            const marksKey = `marks_${rosbagName}_${topic}`;
+                                                            try {
+                                                                sessionStorage.setItem(marksKey, JSON.stringify(marks));
+                                                            } catch (e) {
+                                                                console.warn('Failed to store marks in sessionStorage', e);
+                                                            }
+                                                        }
                                                         
                                                         // Try to get the first timestamp for this topic/rosbag
                                                         let firstTimestamp = null;
@@ -317,22 +318,23 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, catego
                                                         params.set('rosbag', rosbagName);
                                                         params.set('canvas', encodedCanvas);
                                                         if (firstTimestamp) params.set('ts', String(firstTimestamp));
-                                                        if (marks && marks.length > 0) params.set('marks', encodedMarks);
+                                                        // Marks are now stored in sessionStorage, not in URL
                                                         navigate(`/explore?${params.toString()}`);
                                                     }}
                                                 >
                                                     <KeyboardArrowRightIcon />
                                                 </IconButton>
+                                                    </div>
                                             </div>
                                         </div>
                                     );
                                 })}
+                                </div>
                             </div>
                         );
                     })}
                 </div>
             ))}
-            {/* Inline poppers are rendered per-row above */}
         </div>
     );
 };

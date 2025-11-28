@@ -25,12 +25,13 @@ interface SplittableCanvasProps {
   availableTopicTypes: { [topic: string]: string };
   mappedTimestamps: { [topic: string]: number };
   selectedRosbag: string | null;
+  mcapIdentifier: string | null;
   onCanvasChange: (root: Node, metadata: { [id: number]: NodeMetadata }) => void;
   currentRoot: Node | null;
   currentMetadata: { [id: number]: NodeMetadata };
 }
 
-const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, availableTopicTypes, mappedTimestamps, selectedRosbag, onCanvasChange, currentRoot, currentMetadata }) => {
+const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, availableTopicTypes, mappedTimestamps, selectedRosbag, mcapIdentifier, onCanvasChange, currentRoot, currentMetadata }) => {
 
   const [root, setRoot] = useState<Node>({ id: 1 }); // root node of canvas layout tree
   const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({}); // metadata for each panel
@@ -254,7 +255,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
       setNodeMetadata((prev) => {
         const nextMeta = {
           ...prev,
-          [currentNode.id]: { nodeTopic: topic, nodeTopicType: availableTopicTypes[topic] },
+          [currentNode.id]: { nodeTopic: topic.replace(/\//g, '_').replace(/^_/, ''), nodeTopicType: availableTopicTypes[topic] },
         };
         onCanvasChange(root, nextMeta);
         return nextMeta;
@@ -279,6 +280,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
                 ? mappedTimestamps[metadata.nodeTopic]
                 : null
             }
+            mcapIdentifier={mcapIdentifier}
           />
           <IconButton
             size="small"

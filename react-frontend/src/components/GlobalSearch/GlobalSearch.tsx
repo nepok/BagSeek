@@ -1,10 +1,11 @@
-import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemText, OutlinedInput, IconButton, SelectChangeEvent, Box, Typography, Popper, Paper, TextField, LinearProgress, ButtonGroup, Button, Chip, Tabs, Tab } from '@mui/material';
+import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemText, OutlinedInput, IconButton, SelectChangeEvent, Box, Typography, Popper, Paper, TextField, LinearProgress, ButtonGroup, Button, Chip, Tabs, Tab, FormControlLabel } from '@mui/material';
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
 import { Center } from '@react-three/drei';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
+import RoomIcon from '@mui/icons-material/Room';
 
 // Hover-still helper: true after delay ms with no meaningful cursor movement
 function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
@@ -202,11 +203,12 @@ const GlobalSearch: React.FC = () => {
     const [searchDone, setSearchDone] = useState(false);
     // View mode state: 'images' or 'rosbags'
     const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => 'images');
-    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>([]);
-    const [categorizedSearchResults, setCategorizedSearchResults] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[], query: string, results: { minuteOfDay: string, rank: number, similarityScore: number }[] } } } }>({});
+    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>([]);
+    const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } }>({});
     const [searchStatus, setSearchStatus] = useState<{progress: number, status: string, message: string}>({progress: 0, status: 'idle', message: ''});
 
     const searchIconRef = useRef<HTMLDivElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
 
     const [models, setModels] = useState<string[]>([]);
     const [rosbags, setRosbags] = useState<string[]>([]);
@@ -216,14 +218,29 @@ const GlobalSearch: React.FC = () => {
     const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>([]);
     const [timeRange, setTimeRange] = useState<number[]>([0, 1439]);
     const [sampling, setSampling] = useState<number>(10); // Default to 1, which is 10^0
+    const [enhancePrompt, setEnhancePrompt] = useState<boolean>(true);
+    const [enhancedPrompt, setEnhancedPrompt] = useState<string>('');
+    const [isEnhancing, setIsEnhancing] = useState<boolean>(false);
     const samplingSteps = [
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       20, 30, 40, 50, 60, 70, 80, 90, 100,
       200, 300, 400, 500, 600, 700, 800, 900, 1000
     ];
+    const render_limit = 12; // Max images to show in grid
 
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
+    const [positionallyFilteredRosbags, setPositionallyFilteredRosbags] = useState<string[] | null>(null);
+
+    const getBasename = (fullPath: string) => fullPath.split(/[\\/]/).pop() ?? fullPath;
+    
+    // Compute filtered rosbags based on positional filter
+    const filteredAvailableRosbags = positionallyFilteredRosbags
+        ? availableRosbags.filter(rosbagPath => {
+            const basename = getBasename(rosbagPath);
+            return positionallyFilteredRosbags.includes(basename);
+          })
+        : availableRosbags;
 
     // In-memory cache shared across route switches in this tab
     type Cache = {
@@ -231,8 +248,8 @@ const GlobalSearch: React.FC = () => {
       models?: string[];
       rosbags?: string[];
       viewMode?: 'images' | 'rosbags';
-      searchResults?: { rank: number, rosbag: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[];
-      categorizedSearchResults?: { [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[], query: string, results: { minuteOfDay: string, rank: number, similarityScore: number }[] } } } };
+      searchResults?: { rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[];
+      marksPerTopic?: { [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } };
       searchDone?: boolean;
       confirmedModels?: string[];
       confirmedRosbags?: string[];
@@ -272,7 +289,7 @@ const GlobalSearch: React.FC = () => {
         if (cacheRef.rosbags !== undefined) setRosbags(cacheRef.rosbags);
         if (cacheRef.viewMode !== undefined) setViewMode(cacheRef.viewMode);
         if (cacheRef.searchResults !== undefined) setSearchResults(cacheRef.searchResults);
-        if (cacheRef.categorizedSearchResults !== undefined) setCategorizedSearchResults(cacheRef.categorizedSearchResults as any);
+        if (cacheRef.marksPerTopic !== undefined) setMarksPerTopic(cacheRef.marksPerTopic as any);
         if (cacheRef.searchDone !== undefined) setSearchDone(cacheRef.searchDone);
         if (cacheRef.confirmedModels !== undefined) setConfirmedModels(cacheRef.confirmedModels);
         if (cacheRef.confirmedRosbags !== undefined) setConfirmedRosbags(cacheRef.confirmedRosbags);
@@ -288,7 +305,7 @@ const GlobalSearch: React.FC = () => {
               if (saved) {
                 if (saved.query) setSearch(saved.query);
                 if (Array.isArray(saved.results)) setSearchResults(saved.results);
-                if (saved.categorizedSearchResults) setCategorizedSearchResults(saved.categorizedSearchResults);
+                if (saved.marksPerTopic) setMarksPerTopic(saved.marksPerTopic);
                 if (Array.isArray(saved.confirmedModels)) setConfirmedModels(saved.confirmedModels);
                 if (Array.isArray(saved.confirmedRosbags)) setConfirmedRosbags(saved.confirmedRosbags);
                 if (Array.isArray(saved.timeRange)) setTimeRange(saved.timeRange);
@@ -307,6 +324,46 @@ const GlobalSearch: React.FC = () => {
             setViewMode(lastTab);
           }
         } catch {}
+        
+        // Restore positional filter from sessionStorage
+        const loadPositionalFilter = () => {
+          try {
+            const positionalFilterRaw = sessionStorage.getItem('__BagSeekPositionalFilter');
+            if (positionalFilterRaw) {
+              const filtered = JSON.parse(positionalFilterRaw);
+              if (Array.isArray(filtered) && filtered.length > 0) {
+                setPositionallyFilteredRosbags(filtered);
+              } else {
+                setPositionallyFilteredRosbags(null);
+              }
+            } else {
+              setPositionallyFilteredRosbags(null);
+            }
+          } catch {}
+        };
+        
+        loadPositionalFilter();
+        
+        // Listen for storage changes to update filter immediately
+        const handleStorageChange = (e: StorageEvent) => {
+          if (e.key === '__BagSeekPositionalFilter') {
+            loadPositionalFilter();
+          }
+        };
+        
+        window.addEventListener('storage', handleStorageChange);
+        
+        // Also listen for custom event for same-tab updates
+        const handleCustomStorageChange = () => {
+          loadPositionalFilter();
+        };
+        
+        window.addEventListener('__BagSeekPositionalFilterChanged', handleCustomStorageChange);
+        
+        return () => {
+          window.removeEventListener('storage', handleStorageChange);
+          window.removeEventListener('__BagSeekPositionalFilterChanged', handleCustomStorageChange);
+        };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -317,12 +374,12 @@ const GlobalSearch: React.FC = () => {
         cacheRef.rosbags = rosbags;
         cacheRef.viewMode = viewMode;
         cacheRef.searchResults = searchResults;
-        cacheRef.categorizedSearchResults = categorizedSearchResults as any;
+        cacheRef.marksPerTopic = marksPerTopic as any;
         cacheRef.searchDone = searchDone;
         cacheRef.confirmedModels = confirmedModels;
         cacheRef.confirmedRosbags = confirmedRosbags;
         cacheRef.searchStatus = searchStatus;
-    }, [search, models, rosbags, viewMode, searchResults, categorizedSearchResults, searchDone, confirmedModels, confirmedRosbags, searchStatus]);
+    }, [search, models, rosbags, viewMode, searchResults, marksPerTopic, searchDone, confirmedModels, confirmedRosbags, searchStatus]);
 
     // Preselect default model once models are loaded
     useEffect(() => {
@@ -340,6 +397,20 @@ const GlobalSearch: React.FC = () => {
             if (match) setRosbags([match]);
         }
     }, [availableRosbags]);
+    
+    // Filter out selected rosbags that don't match positional filter
+    useEffect(() => {
+        if (positionallyFilteredRosbags && rosbags.length > 0) {
+            const filtered = rosbags.filter(rosbagPath => {
+                const basename = getBasename(rosbagPath);
+                return positionallyFilteredRosbags.includes(basename);
+            });
+            if (filtered.length !== rosbags.length) {
+                setRosbags(filtered);
+            }
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [positionallyFilteredRosbags]);
 
     // Poll search status periodically when running, stop after 3 failed fetches
     useEffect(() => {
@@ -367,47 +438,68 @@ const GlobalSearch: React.FC = () => {
         return () => clearInterval(interval);
     }, [searchStatus.status]);
 
+
     const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
         if (event.key === 'Enter' && search.trim()) {
+            // Validate that at least one rosbag is selected
+            if (rosbags.length === 0) {
+                return; // Prevent search if no rosbags selected
+            }
+            
             // Clear cache and UI before starting a new search
             try { sessionStorage.removeItem(GS_SESSION_KEY); } catch {}
             setSearchResults([]);
-            setCategorizedSearchResults({});
+            setMarksPerTopic({});
             setConfirmedModels(models);
             setConfirmedRosbags(rosbags);
             setSearchDone(false);
             setSearchStatus({ progress: 0, status: 'running', message: 'Starting search...' });
             try {
+                // Wait for enhancement if enhancePrompt is enabled
+                let queryToUse = search;
+                if (enhancePrompt) {
+                    try {
+                        const enhanceResponse = await fetch(`/api/enhance-prompt?prompt=${encodeURIComponent(search)}`);
+                        const enhanceData = await enhanceResponse.json();
+                        if (enhanceData.enhanced) {
+                            queryToUse = enhanceData.enhanced;
+                            setEnhancedPrompt(enhanceData.enhanced);
+                        }
+                    } catch (error) {
+                        console.error('Failed to enhance prompt:', error);
+                        // Continue with original prompt if enhancement fails
+                    }
+                }
+                
                 const modelParams = models.join(',');
                 const rosbagParams = rosbags.join(',');
                 const timeRangeParam = timeRange.join(',');
                 const accuracyParam = sampling.toString();
                 const queryParams = new URLSearchParams({
-                  query: search,
+                  query: queryToUse,
                   models: modelParams,
                   rosbags: rosbagParams,
                   timeRange: timeRangeParam,
                   accuracy: accuracyParam
                 }).toString();
-                const response = await fetch(`/api/search-new?${queryParams}`, { method: 'GET' });
+                const response = await fetch(`/api/search?${queryParams}`, { method: 'GET' });
                 const data = await response.json();
                 setSearchResults(data.results || []);
-                setCategorizedSearchResults(data.categorizedSearchResults || {});
+                setMarksPerTopic(data.marksPerTopic || {});
                 setSearchDone(true);
                 setConfirmedModels(models);
                 setConfirmedRosbags(rosbags);
                 // Persist successful response to session so results survive navigation
                 try {
-                  sessionStorage.setItem(GS_SESSION_KEY, JSON.stringify({
-                    query: search,
-                    results: data.results || [],
-                    marks: data.marks || [],
-                    categorizedSearchResults: data.categorizedSearchResults || {},
-                    confirmedModels: models,
-                    confirmedRosbags: rosbags,
-                    timeRange,
-                    sampling,
-                  }));
+                    sessionStorage.setItem(GS_SESSION_KEY, JSON.stringify({
+                      query: search,
+                      results: data.results || [],
+                      marksPerTopic: data.marksPerTopic || {},
+                      confirmedModels: models,
+                      confirmedRosbags: rosbags,
+                      timeRange,
+                      sampling,
+                    }));
                 } catch {}
             } catch (error) {
                 console.error('Search failed', error);
@@ -436,12 +528,13 @@ const GlobalSearch: React.FC = () => {
     const handleRosbagSelection = (event: SelectChangeEvent<string[]>) => {
         const value = event.target.value as string[];
         let newSelection: string[] = [];
+        const rosbagsToUse = positionallyFilteredRosbags ? filteredAvailableRosbags : availableRosbags;
 
         if (value.includes("ALL")) {
             newSelection =
-                rosbags.length === availableRosbags.length ? [] : availableRosbags;
+                rosbags.length === rosbagsToUse.length ? [] : rosbagsToUse;
         } else if (value.includes("currently selected")) {
-            const matched = availableRosbags.find(
+            const matched = rosbagsToUse.find(
                 bag => searchResults[0]?.rosbag && bag.split("/").pop() === searchResults[0].rosbag
             );
             if (matched) {
@@ -488,56 +581,64 @@ const GlobalSearch: React.FC = () => {
     }
 
     return (
+        <>
         <Box sx={{ width: '80%', mx: 'auto', mt: 4 }}>
             <Box sx={{ display: 'flex', gap: 1, mb: 1, width: '100%' }}>
-                {/* Models */}
-                <FormControl size="small" sx={{ flex: 1, minWidth: 0 }}>
-                    <InputLabel>Models</InputLabel>
-                    <Select
-                        multiple
-                        value={models}
-                        onChange={handleModelSelection}
-                        input={<OutlinedInput label="Models" />}
-                        renderValue={(selected) => (selected as string[]).join(', ')}
-                        MenuProps={{
-                          anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
-                          transformOrigin: { vertical: 'top', horizontal: 'left' },
-                          PaperProps: {
-                            sx: {
-                              width: '300px',
-                              maxHeight: '80vh',
-                              mt: 0,
-                              '& .MuiMenuItem-root': {
-                                minHeight: '24px',
-                                fontSize: '0.75rem',
-                                py: 0.25,
-                              }
-                            }
-                          }
-                        }}
-                    >
-                        <MenuItem value="ALL">
-                            <Checkbox checked={models.length === availableModels.length && availableModels.length > 0} />
-                            <ListItemText primary="SELECT ALL" />
-                        </MenuItem>
-                        {availableModels.map((name) => (
-                            <MenuItem key={name} value={name}>
-                                <Checkbox checked={models.includes(name)} />
-                                <ListItemText primary={name} />
-                            </MenuItem>
-                        ))}
-                    </Select>
-                </FormControl>
+                {/* Positional Filter */}
+                <Button
+                    variant={positionallyFilteredRosbags ? "contained" : "outlined"}
+                    color={positionallyFilteredRosbags ? "primary" : "secondary"}
+                    onClick={(e) => {
+                        if (e.ctrlKey || e.metaKey) {
+                            // Clear filter on Ctrl/Cmd+Click
+                            setPositionallyFilteredRosbags(null);
+                            try {
+                                sessionStorage.removeItem('__BagSeekPositionalFilter');
+                            } catch {}
+                        } else {
+                            navigate('/positional-overview');
+                        }
+                    }}
+                    sx={{
+                        alignSelf: 'stretch',
+                        minWidth: 0,
+                        px: 2,
+                        whiteSpace: 'nowrap',
+                        position: 'relative'
+                    }}
+                >
+                    <RoomIcon />
+                    <Typography variant="body2" sx={{ ml: 1 }}>Positional Filter</Typography>
+                    {positionallyFilteredRosbags && (
+                        <Chip
+                            label={positionallyFilteredRosbags.length}
+                            size="small"
+                            color="primary"
+                            sx={{
+                                ml: 1,
+                                height: 20,
+                                fontSize: '0.7rem',
+                                '& .MuiChip-label': {
+                                    px: 0.75
+                                }
+                            }}
+                        />
+                    )}
+                </Button>
 
                 {/* Rosbags */}
-                <FormControl size="small" sx={{ flex: 1, minWidth: 0 }}>
+                <FormControl 
+                    size="small" 
+                    sx={{ flex: 1, minWidth: 0 }}
+                    error={rosbags.length === 0}
+                >
                     <InputLabel>Rosbags</InputLabel>
                     <Select
                         multiple
                         value={rosbags}
                         onChange={handleRosbagSelection}
                         input={<OutlinedInput label="Rosbags" />}
-                        renderValue={(selected) => (selected as string[]).join(', ')}
+                        renderValue={(selected) => (selected as string[]).length > 0 ? (selected as string[]).join(', ') : ''}
                         MenuProps={{
                           anchorOrigin: { vertical: 'bottom', horizontal: 'center' },
                           transformOrigin: { vertical: 'top', horizontal: 'center' },
@@ -562,22 +663,35 @@ const GlobalSearch: React.FC = () => {
                         }}
                     >
                         <MenuItem value="ALL">
-                            <Checkbox checked={rosbags.length === availableRosbags.length && availableRosbags.length > 0} />
+                            <Checkbox checked={rosbags.length === filteredAvailableRosbags.length && filteredAvailableRosbags.length > 0} />
                             <ListItemText primary="SELECT ALL" />
                         </MenuItem>
                         <MenuItem value="currently selected">
                             <Checkbox checked={(() => {
-                                const matched = availableRosbags.find(b => b.split('/').pop() === searchResults[0]?.rosbag);
+                                const matched = filteredAvailableRosbags.find(b => b.split('/').pop() === searchResults[0]?.rosbag);
                                 return rosbags.includes(matched || '');
                             })()} />
                             <ListItemText primary="CURRENTLY SELECTED" />
                         </MenuItem>
-                        {availableRosbags.map((name) => (
-                            <MenuItem key={name} value={name}>
-                                <Checkbox checked={rosbags.includes(name)} />
-                                <ListItemText primary={name} />
-                            </MenuItem>
-                        ))}
+                        {availableRosbags.map((name) => {
+                            const basename = getBasename(name);
+                            const isFiltered = positionallyFilteredRosbags ? positionallyFilteredRosbags.includes(basename) : true;
+                            const isInFilteredList = !positionallyFilteredRosbags || isFiltered;
+                            
+                            return (
+                                <MenuItem 
+                                    key={name} 
+                                    value={name}
+                                    disabled={!isInFilteredList}
+                                    sx={{
+                                        opacity: isInFilteredList ? 1 : 0.5
+                                    }}
+                                >
+                                    <Checkbox checked={rosbags.includes(name)} disabled={!isInFilteredList} />
+                                    <ListItemText primary={getBasename(name)} />
+                                </MenuItem>
+                            );
+                        })}
                     </Select>
                 </FormControl>
 
@@ -698,6 +812,49 @@ const GlobalSearch: React.FC = () => {
                         </MenuItem>
                     </Select>
                 </FormControl>
+
+                {/* Models */}
+                <FormControl 
+                  size="small" 
+                  sx={{ flex: 1, minWidth: 0 }}
+                  error={models.length === 0}
+                >
+                    <InputLabel>Models</InputLabel>
+                    <Select
+                        multiple
+                        value={models}
+                        onChange={handleModelSelection}
+                        input={<OutlinedInput label="Models" />}
+                        renderValue={(selected) => (selected as string[]).join(', ')}
+                        MenuProps={{
+                          anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
+                          transformOrigin: { vertical: 'top', horizontal: 'left' },
+                          PaperProps: {
+                            sx: {
+                              width: '300px',
+                              maxHeight: '80vh',
+                              mt: 0,
+                              '& .MuiMenuItem-root': {
+                                minHeight: '24px',
+                                fontSize: '0.75rem',
+                                py: 0.25,
+                              }
+                            }
+                          }
+                        }}
+                    >
+                        <MenuItem value="ALL">
+                            <Checkbox checked={models.length === availableModels.length && availableModels.length > 0} />
+                            <ListItemText primary="SELECT ALL" />
+                        </MenuItem>
+                        {availableModels.map((name) => (
+                            <MenuItem key={name} value={name}>
+                                <Checkbox checked={models.includes(name)} />
+                                <ListItemText primary={name} />
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
             </Box>
             <Box ref={searchIconRef}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -705,9 +862,34 @@ const GlobalSearch: React.FC = () => {
                         fullWidth
                         label="Search"
                         variant="outlined"
-                        value={search}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
+                        value={enhancePrompt && enhancedPrompt && !isEnhancing ? enhancedPrompt : search}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            setSearch(e.target.value);
+                            // Clear enhanced prompt when user starts typing
+                            if (enhancedPrompt) {
+                                setEnhancedPrompt('');
+                            }
+                        }}
                         onKeyDown={handleKeyDown}
+                        InputProps={{
+                            sx: {
+                                '& input': {
+                                    color: 'white',
+                                }
+                            }
+                        }}
+                    />
+                    <FormControlLabel
+                      control={<Checkbox checked={enhancePrompt} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setEnhancePrompt(event.target.checked)} />}
+                      label="ENHANCE"
+                      sx={{
+                        ml: 0.0,
+                        color: 'rgba(255,255,255,0.7)',
+                        userSelect: 'none',
+                        '& .MuiFormControlLabel-label': {
+                          fontSize: '0.875rem',
+                        }
+                      }}
                     />
                 </Box>
             </Box>
@@ -727,8 +909,9 @@ const GlobalSearch: React.FC = () => {
             {searchStatus.status !== 'idle' && searchResults.length === 0 && (
               <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column', mt: 4, mb: 4 }}>
                 <Box sx={{ width: '50%' }}>
-                  <LinearProgress variant="determinate" value={searchStatus.progress * 100} />
-                  {/*<LinearProgress />*/}
+                  {searchStatus.status !== 'done' && (
+                    <LinearProgress variant="determinate" value={searchStatus.progress * 100} />
+                  )}
                 </Box>
                 {searchStatus.message && (
                   <Typography variant="body1" sx={{ mt: 2, color: 'white', textAlign: 'center', whiteSpace: 'pre-line' }}>
@@ -742,7 +925,7 @@ const GlobalSearch: React.FC = () => {
                 <Box
                   sx={{
                     padding: '8px',
-                    background: '#202020',
+                    background: '#121212',
                     borderRadius: '8px',
                     display: 'grid',
                     gridTemplateColumns: 'repeat(auto-fill, minmax(30%, 1fr))',
@@ -752,9 +935,9 @@ const GlobalSearch: React.FC = () => {
                     mt: 2,
                   }}
                 >
-                  {searchResults.map((result, index) => {
-                    const url = result.topic && result.timestamp && result.rosbag
-                      ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}/${result.timestamp}.webp`
+                  {searchResults.slice(0, render_limit).map((result, index) => {
+                    const url = result.topic && result.timestamp && result.rosbag && result.mcap_identifier
+                      ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replace(/\//g, '_').replace(/^_/, '')}/${result.mcap_identifier}/${result.timestamp}.png`
                       : undefined;
 
                     return (
@@ -788,13 +971,14 @@ const GlobalSearch: React.FC = () => {
                       rosbags={confirmedRosbags}
                       models={confirmedModels}
                       searchDone={searchDone}
-                      categorizedSearchResults={categorizedSearchResults}
+                      marksPerTopic={marksPerTopic}
                     />
                   )}
                 </Box>
               </Box>
             )}
         </Box>
+        </>
     );
 };
 

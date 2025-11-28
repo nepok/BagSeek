@@ -8,6 +8,7 @@ import FileInput from './components/FileInput/FileInput';
 import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
+import PositionalOverview from './components/PositionalOverview/PositionalOverview';
 
 interface Node {
   id: number;
@@ -33,6 +34,7 @@ function App() {
   const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);  // Currently selected timestamp for playback or display
   const [timestampDensity, setTimestampDensity] = useState<number[]>([]);  // Density information of timestamps, used for UI visualization like heatmaps
   const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});  // Mapping from topic names to their respective timestamps at the selected reference
+  const [mcapIdentifier, setMcapIdentifier] = useState<string | null>(null);  // MCAP identifier for the currently selected reference timestamp
   const [availableTopics, setAvailableTopics] = useState<string[]>([]);  // List of all available topics fetched from backend
   const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});  // Mapping from topic names to their types, e.g., sensor_msgs/Image
   const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);  // Currently selected rosbag file identifier or name
@@ -42,12 +44,13 @@ function App() {
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
-  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
+  // const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
 
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
   const pendingCanvasRef = useRef<{ root: Node; metadata: { [id: number]: NodeMetadata } } | null>(null);
   const pendingRosbagParamRef = useRef<string | null>(null);
+  const isUpdatingTimestampRef = useRef<boolean>(false); // Track if we're updating timestamp from user action
 
   // Helpers to encode/decode canvas JSON into query param
   const encodeCanvas = (canvas: { root: Node; metadata: { [id: number]: NodeMetadata } }) => {
@@ -168,6 +171,19 @@ function App() {
       if (encoded && encoded !== current) updateSearchParams({ canvas: encoded });
     }
   };
+
+  // Reset canvas to empty state (root with id 1, no metadata)
+  const handleResetCanvas = () => {
+    const emptyRoot: Node = { id: 1 };
+    const emptyMetadata: { [id: number]: NodeMetadata } = {};
+    setCurrentRoot(emptyRoot);
+    setCurrentMetadata(emptyMetadata);
+    // Update URL when on /explore
+    if (location.pathname.startsWith('/explore')) {
+      const encoded = encodeCanvas({ root: emptyRoot, metadata: emptyMetadata });
+      updateSearchParams({ canvas: encoded });
+    }
+  };
   
   // Effect to update selected timestamp when available timestamps change
   useEffect(() => {
@@ -204,6 +220,7 @@ function App() {
 
   // Handler for when user changes the timestamp slider
   const handleSliderChange = async (value: number) => {
+    isUpdatingTimestampRef.current = true; // Mark that we're updating from user action
     setSelectedTimestamp(value); // Update selected timestamp in state
     // Sync to URL if on /explore
     if (location.pathname.startsWith('/explore')) {
@@ -227,9 +244,15 @@ function App() {
         throw new Error(data.error || 'Failed to set reference timestamp');
       }
       setMappedTimestamps(data.mappedTimestamps); // Update mapped timestamps for topics
+      setMcapIdentifier(data.mcapIdentifier || null); // Update mcap identifier
     } catch (error) {
       setError('Error sending reference timestamp');
       console.error('Error sending reference timestamp:', error);
+    } finally {
+      // Reset the flag after a short delay to allow URL update to complete
+      setTimeout(() => {
+        isUpdatingTimestampRef.current = false;
+      }, 100);
     }
   };
 
@@ -310,7 +333,6 @@ function App() {
     const rosbagParam = searchParams.get('rosbag');
     const tsParam = searchParams.get('ts');
     const canvasParam = searchParams.get('canvas');
-    const marksParam = searchParams.get('marks');
 
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
@@ -342,22 +364,41 @@ function App() {
 
     ensureRosbag();
 
-    // 2) Apply marks (heatmap) immediately if provided
-    if (marksParam) {
-      try {
-        const decoded = JSON.parse(decodeURIComponent(marksParam));
-        if (Array.isArray(decoded)) {
-          const normalized = decoded.map((m: any) => {
-            if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
-            if (typeof m === 'number') return { value: m, label: '' };
-            return null;
-          }).filter(Boolean) as { value: number; label: string }[];
-          setSearchMarks(normalized);
-        }
-      } catch (e) {
-        // ignore invalid marks
-      }
-    }
+    // 2) Load marks from sessionStorage based on rosbag and topic (not from URL for cleaner, shareable links)
+    // COMMENTED OUT: Search functionality disabled
+    // if (rosbagParam && canvasParam) {
+    //   try {
+    //     const canvas = decodeCanvas(canvasParam);
+    //     if (canvas?.metadata) {
+    //       const nodeId = Object.keys(canvas.metadata)[0];
+    //       const topic = canvas.metadata[nodeId]?.nodeTopic;
+    //       if (topic) {
+    //         const marksKey = `marks_${rosbagParam}_${topic}`;
+    //         const stored = sessionStorage.getItem(marksKey);
+    //         if (stored) {
+    //           const decoded = JSON.parse(stored);
+    //           if (Array.isArray(decoded)) {
+    //             const normalized = decoded.map((m: any) => {
+    //               if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
+    //               if (typeof m === 'number') return { value: m, label: '' };
+    //               return null;
+    //             }).filter(Boolean) as { value: number; label: string }[];
+    //             setSearchMarks(normalized);
+    //           } else {
+    //             // Invalid marks data, clear marks
+    //             setSearchMarks([]);
+    //           }
+    //         } else {
+    //           // No marks found in sessionStorage, clear any existing marks
+    //           setSearchMarks([]);
+    //         }
+    //       }
+    //     }
+    //   } catch (e) {
+    //     // Marks not available - clear any existing marks
+    //     setSearchMarks([]);
+    //   }
+    // }
 
     // 3) Stash ts/canvas to apply when data is ready
     if (tsParam) {
@@ -386,9 +427,10 @@ function App() {
       }
     }
     // If timestamp param exists and rosbag already matches, apply immediately
-    if (tsParam && (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam)) {
+    // Skip if we're currently updating from user action to avoid double calls
+    if (tsParam && (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam) && !isUpdatingTimestampRef.current) {
       const tsNum = Number(tsParam);
-      if (!Number.isNaN(tsNum)) {
+      if (!Number.isNaN(tsNum) && tsNum !== selectedTimestamp) {
         pendingTsRef.current = tsNum;
         if (availableTimestamps && availableTimestamps.length > 0) {
           // trigger timestamp application now; the timestamps-ready effect will normalize to nearest if needed
@@ -474,7 +516,7 @@ function App() {
         topicTypes={availableTopicTypes}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
-        searchMarks={searchMarks}
+        searchMarks={[]} // COMMENTED OUT: Search functionality disabled
       />
       {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -485,6 +527,8 @@ function App() {
           selectedRosbag={selectedRosbag}
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}
+          handleResetCanvas={handleResetCanvas}
+          availableTopics={availableTopics}
         />
         <Routes>
           <Route path="/" element={<Navigate to="/explore" replace />} />
@@ -497,6 +541,7 @@ function App() {
                   availableTopicTypes={availableTopicTypes}
                   mappedTimestamps={mappedTimestamps}
                   selectedRosbag={selectedRosbag}
+                  mcapIdentifier={mcapIdentifier}
                   onCanvasChange={handleCanvasChange}
                   currentRoot={currentRoot}
                   currentMetadata={currentMetadata}
@@ -507,13 +552,14 @@ function App() {
                   selectedTimestamp={selectedTimestamp}
                   onSliderChange={handleSliderChange}
                   selectedRosbag={selectedRosbag}
-                  searchMarks={searchMarks}
-                  setSearchMarks={setSearchMarks}
+                  searchMarks={[]} // COMMENTED OUT: Search functionality disabled
+                  setSearchMarks={() => {}} // COMMENTED OUT: Search functionality disabled
                 />
               </>
             }
           />
           <Route path="/search" element={<GlobalSearch />} />
+          <Route path="/positional-overview" element={<PositionalOverview />} />
           <Route path="*" element={<Navigate to="/explore" replace />} />
         </Routes>
       </div>

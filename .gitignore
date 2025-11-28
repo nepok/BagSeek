@@ -8,6 +8,7 @@ flask-backend/Dockerfile
 # Frontend
 react-frontend/node_modules
 react-frontend/Dockerfile
+react-frontend/build
 
 # Preprocessing
 preprocessing/model_cache

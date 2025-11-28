@@ -1,20 +1,22 @@
 import os
 import csv
 from pathlib import Path
-from flask import config
 import numpy as np
 import json
-from rosbags.rosbag2 import Reader  # type: ignore
 from collections import defaultdict
 from tqdm import tqdm
 from dotenv import load_dotenv
+from mcap.reader import make_reader
+
+
+SOFT_MCAP_ERRORS = {"EndOfFile", "RecordLengthLimitExceeded"}
 
 PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=PARENT_ENV)
 
 # Define constants for paths
 ROSBAGS_DIR_MNT = os.getenv("ROSBAGS_DIR_MNT")
-ROSBAGS_DIR_NAS = os.getenv("ROSBAGS_DIR_NAS")
+ROSBAGS_DIR = os.getenv("ROSBAGS_DIR")
 LOOKUP_TABLES_DIR = os.getenv("LOOKUP_TABLES_DIR")
 TOPICS_DIR = os.getenv("TOPICS_DIR")
 
@@ -26,9 +28,12 @@ def determine_reference_topic(topic_timestamps):
 # The factor reduces the mean interval to create a denser timeline for better matching
 def create_reference_timestamps(timestamps, factor=2):
     timestamps = sorted(set(timestamps))
+    if len(timestamps) < 2:
+        return np.array(timestamps, dtype=np.int64)
+
     diffs = np.diff(timestamps)
     mean_interval = np.mean(diffs)
-    refined_interval = mean_interval / factor
+    refined_interval = mean_interval / factor if mean_interval else 1
     ref_start = timestamps[0]
     ref_end = timestamps[-1]
     return np.arange(ref_start, ref_end, refined_interval).astype(np.int64)
@@ -36,6 +41,9 @@ def create_reference_timestamps(timestamps, factor=2):
 # Align timestamps of a topic to the closest reference timestamps within max_diff
 # For each reference timestamp, find the closest topic timestamp to align messages across topics
 def align_topic_to_reference(topic_ts, ref_ts, max_diff=int(1e8)):
+    if not topic_ts:
+        return [None] * len(ref_ts)
+
     aligned = []
     topic_idx = 0
     for rt in ref_ts:
@@ -48,26 +56,62 @@ def align_topic_to_reference(topic_ts, ref_ts, max_diff=int(1e8)):
             aligned.append(None)
     return aligned
 
+def resolve_mcap_files(path: Path) -> list[Path]:
+    """Return a list of MCAP files contained in the provided path."""
+    if path.is_file() and path.suffix == ".mcap":
+        return [path]
+
+    if path.is_dir():
+        return sorted(child for child in path.glob("*.mcap") if child.is_file())
+
+    return []
+
+
 def process_rosbag(rosbag_path, csv_path):
+    rosbag_path = Path(rosbag_path)
+    csv_path = Path(csv_path)
+
     topic_data = defaultdict(list)
     topic_types = {}
+
+    mcap_files = resolve_mcap_files(rosbag_path)
+
+    if not mcap_files:
+        print(f"No .mcap files found for {rosbag_path}")
+        return False
+
     try:
-        with Reader(rosbag_path) as reader:
-            for connection, timestamp, rawdata in tqdm(reader.messages(), desc="Reading rosbag"):
-                topic_data[connection.topic].append(timestamp)
-                topic_types[connection.topic] = connection.msgtype
+        with tqdm(desc=f"Reading {os.path.basename(rosbag_path)}", unit="msg") as pbar:
+            for file_path in mcap_files:
+                with file_path.open("rb") as handle:
+                    reader = make_reader(handle)
+                    for schema, channel, message in reader.iter_messages():
+                        topic_data[channel.topic].append(int(message.log_time))
+                        if channel.topic not in topic_types:
+                            topic_types[channel.topic] = schema.name if schema else "<unknown>"
+                        pbar.update()
     except Exception as e:
-        print(f"Error reading .db3 bag: {e}")
-        return
-    
+        error_name = e.__class__.__name__
+        if error_name in SOFT_MCAP_ERRORS:
+            if error_name == "EndOfFile":
+                print(f"Reached end of MCAP data for {rosbag_path}: {e!r}")
+            else:
+                print(
+                    f"Encountered recoverable MCAP error for {rosbag_path}: {e!r} — continuing with collected data"
+                )
+        else:
+            print(f"Error reading MCAP data at {rosbag_path}: {e!r}")
+            return False
+
     if not topic_data:
         print(f"No topics found in {rosbag_path}")
-        return
-    
+        return False
+
     # Save topics to a JSON file without indentation
     topics = sorted(topic_data.keys())
-    os.makedirs(TOPICS_DIR, exist_ok=True)
-    topics_json_path = os.path.join(TOPICS_DIR, f"{os.path.basename(rosbag_path)}.json")
+    topics_root = Path(TOPICS_DIR)
+    topics_root.mkdir(parents=True, exist_ok=True)
+    topics_json_path = topics_root / f"{rosbag_path.name}.json"
     with open(topics_json_path, 'w') as jsonfile:
         json.dump({"topics": topics, "types": topic_types}, jsonfile, indent=2)
     print(f"Topics JSON file generated: {topics_json_path}")
@@ -106,8 +150,10 @@ def process_rosbag(rosbag_path, csv_path):
         writer.writerows(csv_data)
 
     print(f"CSV file generated: {csv_path}")
+    return True
 
 def create_topics_json_from_csv(csv_path):
+    csv_path = Path(csv_path)
     try:
         with open(csv_path, 'r') as csvfile:
             reader = csv.reader(csvfile)
@@ -123,49 +169,73 @@ def create_topics_json_from_csv(csv_path):
         return
 
     topics = sorted(topics)
-    os.makedirs(TOPICS_DIR, exist_ok=True)
-    rosbag_name = os.path.splitext(os.path.basename(csv_path))[0]
-    topics_json_path = os.path.join(TOPICS_DIR, f"{rosbag_name}.json")
-    if not os.path.exists(topics_json_path):
+    topics_root = Path(TOPICS_DIR)
+    topics_root.mkdir(parents=True, exist_ok=True)
+    rosbag_name = csv_path.stem
+    topics_json_path = topics_root / f"{rosbag_name}.json"
+    if not topics_json_path.exists():
         with open(topics_json_path, 'w') as jsonfile:
             json.dump({"topics": topics}, jsonfile, indent=2)
         print(f"Topics JSON file generated: {topics_json_path}")
     else:
         print(f"Skipping already existing topics JSON: {topics_json_path}")
 
-def walk(rosbag_dir):
-    for root, dirs, files in os.walk(rosbag_dir):
-        if "metadata.yaml" in files:
-            rosbag_path = os.path.dirname(os.path.join(root, "metadata.yaml"))
-            
-            if "EXCLUDED" in rosbag_path:
-                continue
+def iter_rosbag_dirs(base_dir: Path):
+    for dirpath, _dirnames, filenames in os.walk(base_dir):
+        bag_dir = Path(dirpath)
+        if "EXCLUDED" in str(bag_dir):
+            continue
 
-            rosbag_name = os.path.basename(rosbag_path)
+        if not any(name.endswith('.mcap') for name in filenames):
+            continue
 
-            csv_path = os.path.join(LOOKUP_TABLES_DIR, f"{rosbag_name}.csv")
-            topics_json_path = os.path.join(TOPICS_DIR, f"{rosbag_name}.json")
-            
-            if not os.path.exists(csv_path):
-                print(f"Processing rosbag to CSV: {rosbag_name}")
-                process_rosbag(rosbag_path, csv_path)
-            else:
-                print(f"Skipping already processed rosbag CSV: {rosbag_name}")
+        yield bag_dir
 
-            if not os.path.exists(topics_json_path):
-                print(f"Generating topics JSON for: {rosbag_name}")
-                create_topics_json_from_csv(csv_path)
-            else:
-                print(f"Skipping already existing topics JSON: {rosbag_name}")
-        else: 
-            print("Skipping directory without metadata.yaml:", os.path.basename(root))
+
+def walk(rosbag_dir: Path):
+    topics_root = Path(TOPICS_DIR)
+    lookup_root = Path(LOOKUP_TABLES_DIR)
+    lookup_root.mkdir(parents=True, exist_ok=True)
+    topics_root.mkdir(parents=True, exist_ok=True)
+
+    for bag_dir in iter_rosbag_dirs(rosbag_dir):
+        rosbag_name = bag_dir.name
+
+        csv_path = lookup_root / f"{rosbag_name}.csv"
+        topics_json_path = topics_root / f"{rosbag_name}.json"
+
+        processed = False
+        if not csv_path.exists():
+            print(f"Processing rosbag to CSV: {rosbag_name}")
+            processed = process_rosbag(bag_dir, csv_path)
+        else:
+            print(f"Skipping already processed rosbag CSV: {rosbag_name}")
+            processed = True
+
+        if processed and csv_path.exists() and not topics_json_path.exists():
+            print(f"Generating topics JSON for: {rosbag_name}")
+            create_topics_json_from_csv(csv_path)
+        elif topics_json_path.exists():
+            print(f"Skipping already existing topics JSON: {rosbag_name}")
+        else:
+            print(f"Skipping topics JSON generation for {rosbag_name} because CSV is missing")
 
 
 # Main function walks through rosbags directory and processes each rosbag only if it hasn't been processed before
 # This avoids redundant computation by checking for existing CSV and JSON files before processing
 def main():
-    for dir in [ROSBAGS_DIR_MNT, ROSBAGS_DIR_NAS]:
-        walk(dir)
+    if not ROSBAGS_DIR:
+        raise RuntimeError("ROSBAGS_DIR is not set in the environment")
+    if not LOOKUP_TABLES_DIR:
+        raise RuntimeError("LOOKUP_TABLES_DIR is not set in the environment")
+    if not TOPICS_DIR:
+        raise RuntimeError("TOPICS_DIR is not set in the environment")
+
+    rosbag_root = Path(ROSBAGS_DIR)
+    if not rosbag_root.exists():
+        raise FileNotFoundError(f"ROSBAGS_DIR path does not exist: {rosbag_root}")
+
+    walk(rosbag_root)
 
 if __name__ == "__main__":
     main()

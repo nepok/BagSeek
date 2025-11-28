@@ -202,7 +202,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       const imageUrls = searchResults.slice(0, maxResults).map((result) => {
         const imageUrl =
           result.topic && result.timestamp && result.rosbag
-            ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replaceAll("/", "__")}-${result.timestamp}.webp`
+            ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replace(/\//g, '_').replace(/^_/, '')}/${result.timestamp}.png`
             : undefined;
         return imageUrl;
       });

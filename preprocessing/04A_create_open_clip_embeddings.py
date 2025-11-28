@@ -14,7 +14,7 @@ load_dotenv(dotenv_path=PARENT_ENV)
 # Define constants for paths
 BASE_DIR = os.getenv("BASE_DIR")
 PREPROCESSED_DIR = os.getenv("PREPROCESSED_DIR")
-EMBEDDINGS_DIR = os.getenv("EMBEDDINGS_DIR")
+EMBEDDINGS_PER_TOPIC_DIR = os.getenv("EMBEDDINGS_PER_TOPIC_DIR")
 
 model_configs = [
     ('ViT-B-32-quickgelu', 'openai'),
@@ -25,9 +25,8 @@ model_configs = [
     ('ViT-bigG-14', 'laion2b_s39b_b160k')
 ]
 
-
 # Create output directory if it doesn't exist
-Path(EMBEDDINGS_DIR).mkdir(parents=True, exist_ok=True)
+Path(EMBEDDINGS_PER_TOPIC_DIR).mkdir(parents=True, exist_ok=True)
 
 # Load Hugging Face CLIP model and processor
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -43,7 +42,7 @@ def generate_embeddings(input_dir, output_dir, model, model_name, preprocess, de
                 output_file_dir = os.path.join(output_dir, relative_dir)
 
                 base_name = os.path.splitext(file)[0]
-                output_file_path = os.path.join(output_file_dir, f"{base_name}_embedding.pt")
+                output_file_path = os.path.join(output_file_dir, f"{base_name}.pt")
 
                 if os.path.exists(output_file_path):
                     continue
@@ -73,7 +72,7 @@ def worker(model_name, pretrained, device_id):
         model = model.to(device)
         model.eval()
 
-        embeddings_model_dir = os.path.join(EMBEDDINGS_DIR, f"{model_name.replace('/', '_')}__{pretrained}")
+        embeddings_model_dir = os.path.join(EMBEDDINGS_PER_TOPIC_DIR, f"{model_name.replace('/', '_')}__{pretrained}")
         Path(embeddings_model_dir).mkdir(parents=True, exist_ok=True)
 
         for preprocess_id in tqdm(os.listdir(PREPROCESSED_DIR), desc=f"[{model_name}] Processing preprocess folders"):

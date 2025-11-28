@@ -12,12 +12,13 @@ interface NodeContentProps {
   nodeTopicType: string | null; // Type of the topic, e.g., "sensor_msgs/Image"
   selectedRosbag: string | null;
   mappedTimestamp: number | null; // Optional timestamp for image reference
+  mcapIdentifier: string | null;
 }
 
-const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp }) => {
-  
+const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp, mcapIdentifier }) => {
+
   const [text, setText] = useState<string | null>(null);   // fetched textual message (e.g. string payloads)
-  const [pointCloud, setPointCloud] = useState<number[] | null>(null); // 3D point cloud data from sensor
+  const [pointCloud, setPointCloud] = useState<{ positions: number[]; colors: number[] } | null>(null); // 3D point cloud data from sensor with optional colors
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null); // human-readable timestamp string
   const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null); // GPS position (lat, lon, alt)
   const [gpsPath, setGpsPath] = useState<[number, number][]>([]); // array of previous GPS coordinates for path drawing
@@ -27,9 +28,22 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     linear_acceleration: { x: number; y: number; z: number };
   } | null>(null); // orientation, angular velocity, and acceleration from IMU
   
+  // Debug logging to understand why image URL might not be constructed
+  useEffect(() => {
+    if (nodeTopic && nodeTopicType && (nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image")) {
+      console.log('NodeContent image URL check:', {
+        nodeTopic,
+        mappedTimestamp,
+        selectedRosbag,
+        mcapIdentifier,
+        hasAll: !!(nodeTopic && mappedTimestamp && selectedRosbag && mcapIdentifier)
+      });
+    }
+  }, [nodeTopic, mappedTimestamp, selectedRosbag, mcapIdentifier, nodeTopicType]);
+
   const imageUrl =
-    nodeTopic && mappedTimestamp && selectedRosbag
-      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replaceAll("/", "__")}/${mappedTimestamp}.webp`
+    nodeTopic && mappedTimestamp && selectedRosbag && mcapIdentifier
+      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replace(/\//g, '_').replace(/^_/, '')}/${mcapIdentifier}/${mappedTimestamp}.png`
       : undefined; // resolved URL to load image from local server
 
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
@@ -38,7 +52,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
     try {
-      const response = await fetch(`/api/content?timestamp=${mappedTimestamp}&topic=${nodeTopic}`);
+      const response = await fetch(`/api/content?topic=${nodeTopic}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
       const data = await response.json();
 
       setText(null); // clear previous text
@@ -50,7 +64,19 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           setText(data.text);
           break;
         case 'pointCloud':
-          setPointCloud(data.pointCloud);
+          // Handle both old format (flat array) and new format (object with positions and colors)
+          if (Array.isArray(data.pointCloud)) {
+            // Old format: flat array [x, y, z, ...]
+            setPointCloud({ positions: data.pointCloud, colors: [] });
+          } else if (data.pointCloud && typeof data.pointCloud === 'object') {
+            // New format: { positions: [...], colors: [...] }
+            setPointCloud({
+              positions: data.pointCloud.positions || [],
+              colors: data.pointCloud.colors || []
+            });
+          } else {
+            setPointCloud(null);
+          }
           break;
         case 'position':
           setPosition(data.position);
@@ -64,6 +90,14 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
               orientation: rotation,
               angular_velocity: { x: 0, y: 0, z: 0 },
               linear_acceleration: { x: 0, y: 0, z: 0 }
+            });
+          break;
+        case 'odometry':
+            const odom = data.odometry;
+            setImuData({
+              orientation: odom.pose.orientation,
+              angular_velocity: odom.twist.angular,
+              linear_acceleration: odom.twist.linear // Use linear velocity as approximation, or { x: 0, y: 0, z: 0 }
             });
           break;
         default:
@@ -188,15 +222,48 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     }
   }, [nodeTopicType, position, gpsPath]);
 
+  // Create circular texture once and reuse it (standard Three.js approach for circular points)
+  const circleTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  
+  if (!circleTextureRef.current) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext('2d');
+    if (context) {
+      // Draw a white circle on transparent background
+      context.beginPath();
+      context.arc(32, 32, 30, 0, Math.PI * 2);
+      context.fillStyle = 'white';
+      context.fill();
+    }
+    circleTextureRef.current = new THREE.CanvasTexture(canvas);
+    circleTextureRef.current.needsUpdate = true;
+  }
+
   // Render 3D point cloud using Three.js
-  const PointCloud: React.FC<{ pointCloud: number[] }> = ({ pointCloud }) => {
+  const PointCloud: React.FC<{ pointCloud: { positions: number[]; colors: number[] } }> = ({ pointCloud }) => {
     const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(pointCloud);
+    const positions = new Float32Array(pointCloud.positions);
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
+    // Check if colors are available
+    const hasColors = pointCloud.colors && pointCloud.colors.length > 0;
+    
+    if (hasColors) {
+      // Normalize colors from 0-255 to 0-1 range for Three.js
+      const normalizedColors = pointCloud.colors.map(c => c / 255);
+      const colors = new Float32Array(normalizedColors);
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
+
     const material = new THREE.PointsMaterial({
-      color: 0x888888,
       size: 0.05,
+      vertexColors: hasColors, // Use vertex colors if available
+      color: hasColors ? 0xffffff : 0x888888, // White if using colors, gray otherwise
+      map: circleTextureRef.current, // Use circular texture (standard way to render circles in Three.js)
+      transparent: true,
+      alphaTest: 0.1, // Discard pixels with low alpha
     });
 
     return <primitive object={new THREE.Points(geometry, material)} />;

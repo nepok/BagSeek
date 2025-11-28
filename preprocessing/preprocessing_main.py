@@ -9,10 +9,12 @@ WORKING_DIR = "/mnt/data/bagseek/preprocessing"
 
 # Lists preprocessing scripts to run in order
 scripts = [
-    "01_generate_alignment_and_metadata.py",
-    "02_extract_images.py",
+    #"01_generate_alignment_and_metadata.py",
+    #"02A_extract_images.py",
+    #"02B_create_representative_images.py",
     "03_preprocess_images.py",
-    "04_create_clip_embeddings.py",
+    "04A_create_open_clip_embeddings.py",
+    "04B_create_not_open_clip_embeddings.py"
     "05_create_faiss_indices.py"
 ]
 

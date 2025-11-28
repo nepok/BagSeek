@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { styled } from '@mui/material/styles';
 
 interface HeatBarProps {
@@ -16,6 +16,21 @@ function getHeatColor(value: number, densityFactor: number) {
   const hue = (1 - value) * 268;
   const sat = densityFactor * 30 + value * 70;
   return `hsl(${hue}, ${sat}%, 50%)`;
+}
+
+// Math.max(...array) throws when the array is huge; this helper avoids spreading.
+function arrayMax(values: number[] | undefined, fallback: number) {
+  if (!values || values.length === 0) {
+    return fallback;
+  }
+
+  let max = values[0];
+  for (let i = 1; i < values.length; i += 1) {
+    if (values[i] > max) {
+      max = values[i];
+    }
+  }
+  return max;
 }
 
 const StyledTrack = styled('div')<{ height?: number }>(({ height }) => ({
@@ -62,13 +77,19 @@ export const HeatBar: React.FC<HeatBarProps> = ({
       counts[i] = score;
     }
 
-    const max = Math.max(...counts);
-    return counts.map((c) => c / (max || 1));
+    const max = arrayMax(counts, 1);
+    const normalizedCounts = counts.map((c) => c / (max || 1));
+
+    return normalizedCounts;
   }, [searchMarks, timestampCount, bins, windowSize]);
 
   const normalizedDensity = useMemo(() => {
-    const max = Math.max(...(timestampDensity ?? [1]));
-    const normalized = (timestampDensity ?? new Array(bins).fill(0)).map((v) => v / (max || 1));
+    const source = timestampDensity && timestampDensity.length > 0
+      ? timestampDensity
+      : new Array(bins).fill(0);
+
+    const max = arrayMax(source, 1);
+    const normalized = source.map((v) => v / (max || 1));
 
     const resized = new Array(bins).fill(0);
     const factor = (timestampDensity?.length ?? bins) / bins;

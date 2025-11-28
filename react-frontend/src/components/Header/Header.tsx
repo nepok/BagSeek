@@ -14,6 +14,8 @@ interface HeaderProps {
   selectedRosbag: string | null; // Currently selected ROS bag name
   handleLoadCanvas: (name: string) => void; // Callback to load a canvas by name
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
+  handleResetCanvas: () => void; // Callback to reset canvas to empty state
+  availableTopics: string[]; // List of available topics for the currently selected rosbag
 }
 
 // Generates a consistent color based on rosbag name hash for UI elements
@@ -30,15 +32,45 @@ const generateColor = (rosbagName: string) => {
   return colors[hash % colors.length];
 };
 
+// Normalize topic name: replace / with _ and remove leading _
+const normalizeTopic = (topic: string): string => {
+  return topic.replace(/\//g, '_').replace(/^_/, '');
+};
+
+// Extract all topics from a canvas metadata
+const extractTopicsFromCanvas = (canvas: { metadata?: { [id: number]: { nodeTopic: string | null } } }): string[] => {
+  const topics: string[] = [];
+  if (canvas?.metadata) {
+    Object.values(canvas.metadata).forEach((meta) => {
+      if (meta.nodeTopic) {
+        topics.push(meta.nodeTopic);
+      }
+    });
+  }
+  return topics;
+};
+
+// Check if a canvas is compatible with the currently selected rosbag based on topics
+const isCanvasCompatible = (canvas: any, availableTopics: string[]): boolean => {
+  const requiredTopics = extractTopicsFromCanvas(canvas);
+  if (requiredTopics.length === 0) return false; // Canvas with no topics is not compatible
+  
+  // Normalize available topics for comparison (canvas topics are already normalized)
+  const normalizedAvailableTopics = availableTopics.map(normalizeTopic);
+  
+  // Check if all required topics (already normalized) exist in available topics
+  return requiredTopics.every(topic => normalizedAvailableTopics.includes(topic));
+};
+
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const viewMode: 'explore' | 'search' = location.pathname.startsWith('/search') ? 'search' : 'explore';
   // State to show/hide the canvas selection popper menu
   const [showCanvasPopper, setShowCanvasPopper] = useState(false);
-  // List of canvases loaded from backend, each with name, associated rosbag, and color
-  const [canvasList, setCanvasList] = useState<{ name: string, rosbag: string, color: string }[]>([]);
+  // List of canvases loaded from backend, storing full canvas data for topic checking
+  const [canvasList, setCanvasList] = useState<{ name: string, canvas: any, rosbag: string, color: string }[]>([]);
   // Controls visibility of TextField for adding a new canvas
   const [showTextField, setShowTextField] = useState(false);
   // Holds the user input for new canvas name
@@ -51,9 +83,10 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
     try {
       const response = await fetch('/api/load-canvases');
       const data = await response.json();
-      // Map backend data to local state including generated colors
+      // Map backend data to local state including full canvas data and generated colors
       setCanvasList(Object.keys(data).map((name) => ({
         name,
+        canvas: data[name],
         rosbag: data[name].rosbag,
         color: generateColor(data[name].rosbag || ''),
       })));
@@ -76,7 +109,8 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   const onAddCanvas = async () => {
     if (!newCanvasName.trim()) return; // Ignore empty names
     handleAddCanvas(newCanvasName);
-    setCanvasList([...canvasList, { name: newCanvasName, rosbag: selectedRosbag || '', color: generateColor(selectedRosbag || '') }]);
+    // Fetch updated canvas list to get the full canvas data
+    await fetchCanvasList();
     setNewCanvasName('');
     setShowTextField(false);
   };
@@ -88,15 +122,14 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
 
   // Delete a canvas by name, update state and notify backend
   const onDeleteCanvas = async (name: string) => {
-    const updatedCanvasList = canvasList.filter((canvas) => canvas.name !== name);
-    setCanvasList(updatedCanvasList);
-  
     try {
       await fetch('/api/delete-canvas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
+      // Refresh canvas list to get updated data
+      await fetchCanvasList();
     } catch (error) {
       console.error('Error deleting canvas:', error);
     }
@@ -112,28 +145,52 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         {/* Popper menu anchored to canvas icon, lists canvases and add option */}
         <Popper open={showCanvasPopper} anchorEl={canvasIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '300px' }}>
           <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
-            {canvasList.map((canvas, index) => (
-              <MenuItem 
-                key={index} 
-                style={{ 
-                  fontSize: '0.8rem', 
-                  padding: '0px 8px', 
-                  display: 'flex', 
-                  alignItems: 'center',
-                  color: selectedRosbag === canvas.rosbag ? 'white' : 'gray' // Gray out if rosbag does not match selected
-                }}
-                onClick={() => selectedRosbag === canvas.rosbag && onLoadCanvas(canvas.name)} // Load only if rosbag matches
-                disabled={selectedRosbag !== canvas.rosbag} // Disable if rosbag doesn't match
-              >
-                {/* Colored circle representing canvas */}
-                <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px', marginBottom: '3.5px' }} />
-                {canvas.name}
-                {/* Delete button for canvas */}
-                <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </MenuItem>
-            ))}
+            {/* RESET canvas button */}
+            <Button
+              onClick={() => {
+                handleResetCanvas();
+                setShowCanvasPopper(false);
+              }}
+              variant="contained"
+              color="primary"
+              fullWidth
+              sx={{ 
+                fontSize: '0.8rem', 
+                marginBottom: '8px',
+                textTransform: 'none'
+              }}
+            >
+              RESET
+            </Button>
+            
+            {canvasList.map((canvas, index) => {
+              const isExactMatch = selectedRosbag === canvas.rosbag;
+              const isCompatible = isCanvasCompatible(canvas.canvas, availableTopics);
+              const canLoad = isExactMatch || isCompatible;
+              
+              return (
+                <MenuItem 
+                  key={index} 
+                  style={{ 
+                    fontSize: '0.8rem', 
+                    padding: '0px 8px', 
+                    display: 'flex', 
+                    alignItems: 'center',
+                    color: canLoad ? 'white' : 'gray' // Gray out if not compatible
+                  }}
+                  onClick={() => canLoad && onLoadCanvas(canvas.name)} // Load if compatible
+                  disabled={!canLoad} // Disable if not compatible
+                >
+                  {/* Colored circle representing canvas */}
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px', marginBottom: '3.5px' }} />
+                  {canvas.name}
+                  {/* Delete button for canvas */}
+                  <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </MenuItem>
+              );
+            })}
 
             {/* TextField shown when adding a new canvas */}
             {showTextField ? (

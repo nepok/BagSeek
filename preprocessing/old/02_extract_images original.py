@@ -34,6 +34,10 @@ def detect_bag_format(bag_path: Path):
     if not metadata_file.is_file():
         return None
 
+    if metadata_file.stat().st_size == 0:
+        print(f"Skipping {bag_path.name}: metadata.yaml is empty")
+        return None
+    
     for entry in bag_path.iterdir():
         if entry.suffix == ".db3":
             return "db3"
@@ -53,6 +57,33 @@ def load_lookup_table(csv_path: Path):
             lookup[ref_timestamp] = topic_timestamps
     return lookup
 
+
+def build_topic_timestamp_map(aligned_df: pd.DataFrame) -> dict[str, dict[str, str]]:
+    """Create fast lookup maps: topic -> {message timestamp -> reference timestamp}."""
+    topic_timestamp_map: dict[str, dict[str, str]] = {}
+
+    if "Reference Timestamp" not in aligned_df.columns:
+        return topic_timestamp_map
+
+    reference_values = aligned_df["Reference Timestamp"].tolist()
+
+    for column in aligned_df.columns:
+        if column == "Reference Timestamp":
+            continue
+
+        topic_values = aligned_df[column].tolist()
+        mapping: dict[str, str] = {}
+
+        for ref_ts, topic_ts in zip(reference_values, topic_values):
+            if not topic_ts or topic_ts in {"None", "nan", "NaN"}:
+                continue
+            mapping[str(topic_ts)] = str(ref_ts)
+
+        if mapping:
+            topic_timestamp_map[column] = mapping
+
+    return topic_timestamp_map
+
 # Reads messages from an .mcap rosbag
 def read_mcap_messages(bag_path: Path, allowed_topics: set[str]):
     reader = SequentialReader()
@@ -60,7 +91,6 @@ def read_mcap_messages(bag_path: Path, allowed_topics: set[str]):
         StorageOptions(uri=str(bag_path), storage_id="mcap"),
         ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
     )
-
     topic_types = {topic.name: topic.type for topic in reader.get_all_topics_and_types()}
 
     message_types = {}
@@ -89,21 +119,11 @@ def save_image(img, img_filepath: Path):
     cv2.imwrite(str(img_filepath), img)
 
 # Extracts and saves an image from a single message
-def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir: Path):
-    # Find the row(s) in aligned_data where the topic timestamp matches the current message timestamp
-    matching_rows = aligned_data[topic] == str(timestamp)
-    try:
-        # Use the index of the first matching row to get the correct reference timestamp
-        ref_row_index = matching_rows.idxmax()
-        reference_timestamp = aligned_data.iloc[ref_row_index]["Reference Timestamp"]
-    except Exception as e:
-        print(f"Error: No reference timestamp found for {topic} at {timestamp}")
-        return
-
+def extract_image_from_message(msg, topic, timestamp, output_dir: Path):
     # Save image using the actual message timestamp (not the reference timestamp)
-    img_filename = f"{topic.replace('/', '__')}-{timestamp}.webp"
+    img_filename = f"{timestamp}.webp"
     img_filepath = output_dir / img_filename
-
+    
     if img_filepath.exists():
         print(f"Skipping already extracted image: {img_filepath}")
         return
@@ -148,6 +168,13 @@ def extract_image_from_message(msg, topic, timestamp, aligned_data, output_dir: 
 # Extract images from a single rosbag and save them to the output directory
 def extract_images_from_rosbag(rosbag_path: Path, output_dir: Path, csv_path: Path, format: str):
     aligned_data = pd.read_csv(csv_path, dtype=str)
+    topic_timestamp_map = build_topic_timestamp_map(aligned_data)
+    del aligned_data
+
+    if not topic_timestamp_map:
+        print(f"No timestamp alignment data available for {rosbag_path.name}, skipping")
+        return
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     topics_root = Path(TOPICS_DIR)
@@ -180,12 +207,12 @@ def extract_images_from_rosbag(rosbag_path: Path, output_dir: Path, csv_path: Pa
                     try:
                         msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
 
-                        if connection.topic not in aligned_data.columns:
+                        topic_map = topic_timestamp_map.get(connection.topic)
+                        if not topic_map:
                             print(f"\nWarning: Topic {connection.topic} not found in aligned data — skipping message at {timestamp}")
                             continue
 
-                        matching_rows = aligned_data[connection.topic] == str(timestamp)
-                        if not matching_rows.any():
+                        if str(timestamp) not in topic_map:
                             print(f"\nWarning: No reference timestamp found for {connection.topic} at {timestamp} — skipping")
                             continue
 
@@ -196,7 +223,6 @@ def extract_images_from_rosbag(rosbag_path: Path, output_dir: Path, csv_path: Pa
                             msg,
                             connection.topic,
                             timestamp,
-                            aligned_data,
                             topic_dir,
                         )
                         futures.append(future)
@@ -207,12 +233,12 @@ def extract_images_from_rosbag(rosbag_path: Path, output_dir: Path, csv_path: Pa
             message_reader = read_mcap_messages(rosbag_path, image_topic_set)
             for topic, msg, timestamp in tqdm(message_reader, desc=f"Extracting {rosbag_path.name}"):
                 try:
-                    if topic not in aligned_data.columns:
+                    topic_map = topic_timestamp_map.get(topic)
+                    if not topic_map:
                         print(f"\nWarning: Topic {topic} not found in aligned data — skipping message at {timestamp}")
                         continue
 
-                    matching_rows = aligned_data[topic] == str(timestamp)
-                    if not matching_rows.any():
+                    if str(timestamp) not in topic_map:
                         continue
 
                     topic_dir = output_dir / topic.replace('/', '__')
@@ -222,7 +248,6 @@ def extract_images_from_rosbag(rosbag_path: Path, output_dir: Path, csv_path: Pa
                         msg,
                         topic,
                         timestamp,
-                        aligned_data,
                         topic_dir,
                     )
                     futures.append(future)
@@ -247,16 +272,6 @@ def iter_rosbag_dirs(base_dir: Path):
 
 # Main function to iterate over all rosbags and extract images
 def main():
-    required_env = {
-        "ROSBAGS_DIR_NAS": ROSBAGS_DIR_NAS,
-        "LOOKUP_TABLES_DIR": LOOKUP_TABLES_DIR,
-        "IMAGES_PER_TOPIC_DIR": IMAGES_PER_TOPIC_DIR,
-        "TOPICS_DIR": TOPICS_DIR,
-    }
-
-    missing = [key for key, value in required_env.items() if not value]
-    if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     rosbag_root = Path(ROSBAGS_DIR_NAS)
     if not rosbag_root.exists():
