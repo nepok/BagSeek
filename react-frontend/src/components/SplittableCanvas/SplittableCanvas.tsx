@@ -255,7 +255,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
       setNodeMetadata((prev) => {
         const nextMeta = {
           ...prev,
-          [currentNode.id]: { nodeTopic: topic.replace(/\//g, '_').replace(/^_/, ''), nodeTopicType: availableTopicTypes[topic] },
+          [currentNode.id]: { nodeTopic: topic, nodeTopicType: availableTopicTypes[topic] },
         };
         onCanvasChange(root, nextMeta);
         return nextMeta;

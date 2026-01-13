@@ -1,4 +1,4 @@
-import { Alert, Box, Button, CircularProgress, IconButton, Slider, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, MenuItem, Select, Slider, TextField, Tooltip, Typography } from '@mui/material';
 import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import Switch from '@mui/material/Switch';
@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { inflatePathsD, PathsD, PathD, JoinType, EndType } from 'clipper2-ts';
 
 type RosbagPoint = {
   lat: number;
@@ -31,8 +32,30 @@ type Polygon = {
   isClosed: boolean;
 };
 
+type McapLocationPoint = {
+  lat: number;
+  lon: number;
+  mcaps: { [mcap_id: string]: number }; // mcap_id -> count
+};
+
+type McapInfo = {
+  id: string;
+  totalCount: number;
+};
+
 const TILE_LAYER_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_LAYER_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+// Global heatmap configuration
+const HEATMAP_BASE_RADIUS = 30;
+const HEATMAP_BASE_BLUR = 30;
+const HEATMAP_MAX_ZOOM = 18;
+const HEATMAP_MIN_ZOOM_FACTOR = 0.3;
+
+// Calculate zoom factor for heatmap scaling
+const calculateHeatmapZoomFactor = (currentZoom: number): number => {
+  return Math.max(HEATMAP_MIN_ZOOM_FACTOR, currentZoom / HEATMAP_MAX_ZOOM);
+};
 
 const ROSBAG_TIMESTAMP_REGEX = /^rosbag2_(\d{4})_(\d{2})_(\d{2})-(\d{2})_(\d{2})_(\d{2})(?:_short)?$/;
 
@@ -89,27 +112,302 @@ const pointInPolygon = (point: { lat: number; lon: number }, polygon: PolygonPoi
   return inside;
 };
 
+// Format MCAP IDs with consecutive ranges (e.g., [0,1,2,3,4,7,9,10,11] -> "0 - 4, 7, 9 - 11")
+const formatMcapRanges = (mcapIds: string[]): string => {
+  if (mcapIds.length === 0) {
+    return '';
+  }
+
+  // Sort MCAP IDs numerically if possible, otherwise alphabetically
+  const sorted = [...mcapIds].sort((a, b) => {
+    const aNum = parseInt(a, 10);
+    const bNum = parseInt(b, 10);
+    if (!isNaN(aNum) && !isNaN(bNum)) {
+      return aNum - bNum;
+    }
+    return a.localeCompare(b);
+  });
+
+  const ranges: string[] = [];
+  let rangeStart: string | null = null;
+  let rangeEnd: string | null = null;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const current = sorted[i];
+    const currentNum = parseInt(current, 10);
+    const prevNum = rangeEnd !== null ? parseInt(rangeEnd, 10) : null;
+
+    // Check if current is consecutive to previous
+    if (rangeStart !== null && prevNum !== null && !isNaN(currentNum) && !isNaN(prevNum) && currentNum === prevNum + 1) {
+      // Continue the range
+      rangeEnd = current;
+    } else {
+      // Finish previous range if exists
+      if (rangeStart !== null) {
+        if (rangeEnd !== null && rangeStart !== rangeEnd) {
+          ranges.push(`${rangeStart} - ${rangeEnd}`);
+        } else {
+          ranges.push(rangeStart);
+        }
+      }
+      // Start new range
+      rangeStart = current;
+      rangeEnd = current;
+    }
+  }
+
+  // Finish last range
+  if (rangeStart !== null) {
+    if (rangeEnd !== null && rangeStart !== rangeEnd) {
+      ranges.push(`${rangeStart} - ${rangeEnd}`);
+    } else {
+      ranges.push(rangeStart);
+    }
+  }
+
+  return ranges.join(', ');
+};
+
+// Convert GeoJSON to Polygon format
+const convertGeoJSONToPolygons = (geoJson: any, baseId: string): Polygon[] => {
+  const polygons: Polygon[] = [];
+  
+  if (!geoJson || geoJson.type !== 'FeatureCollection' || !Array.isArray(geoJson.features)) {
+    return polygons;
+  }
+  
+  geoJson.features.forEach((feature: any, featureIndex: number) => {
+    if (!feature.geometry || feature.geometry.type !== 'Polygon') {
+      return;
+    }
+    
+    // GeoJSON Polygon coordinates: array of rings, first ring is exterior
+    const coordinates = feature.geometry.coordinates;
+    if (!Array.isArray(coordinates) || coordinates.length === 0) {
+      return;
+    }
+    
+    // Use the first ring (exterior ring) for the polygon
+    const exteriorRing = coordinates[0];
+    if (!Array.isArray(exteriorRing) || exteriorRing.length < 3) {
+      return;
+    }
+    
+    // Convert [lon, lat] to {lat, lon, id}
+    let points: PolygonPoint[] = exteriorRing.map((coord: number[], pointIndex: number) => {
+      const [lon, lat] = coord;
+      return {
+        lat,
+        lon,
+        id: `${baseId}_${featureIndex}_${pointIndex}`,
+      };
+    });
+    
+    // Remove duplicate first/last point if present (GeoJSON polygons are closed)
+    if (points.length > 1) {
+      const first = points[0];
+      const last = points[points.length - 1];
+      if (first.lat === last.lat && first.lon === last.lon && points.length > 3) {
+        points = points.slice(0, -1);
+      }
+      
+      // Remove any other duplicate consecutive points
+      const uniquePoints: PolygonPoint[] = [points[0]];
+      for (let i = 1; i < points.length; i++) {
+        const current = points[i];
+        const prev = uniquePoints[uniquePoints.length - 1];
+        const dist = Math.sqrt(
+          Math.pow(current.lat - prev.lat, 2) +
+          Math.pow(current.lon - prev.lon, 2)
+        );
+        if (dist > 1e-9) {
+          uniquePoints.push(current);
+        }
+      }
+      points = uniquePoints;
+    }
+    
+    // Generate unique polygon ID
+    const polygonId = feature.properties?.name || feature.properties?.id || `${baseId}_${featureIndex}`;
+    
+    polygons.push({
+      id: polygonId,
+      points,
+      isClosed: true, // Imported polygons are always closed
+    });
+  });
+  
+  return polygons;
+};
+
+// Offset polygon by distance in meters using Clipper2-ts
+// Positive offset = shrink inward, negative offset = expand outward
+// Based on: https://www.angusj.com/clipper2/Docs/Units/Clipper.Offset/Classes/ClipperOffset/_Body.htm
+const offsetPolygon = (polygon: PolygonPoint[], offsetMeters: number): PolygonPoint[] => {
+  if (polygon.length < 3 || offsetMeters === 0) {
+    return polygon;
+  }
+
+  // Remove duplicate first/last point if polygon is already closed
+  let workingPoints = [...polygon];
+  if (workingPoints.length > 0) {
+    const first = workingPoints[0];
+    const last = workingPoints[workingPoints.length - 1];
+    // Check if first and last points are the same (closed polygon)
+    if (first.lat === last.lat && first.lon === last.lon && workingPoints.length > 3) {
+      workingPoints = workingPoints.slice(0, -1); // Remove duplicate last point
+    }
+  }
+  
+  if (workingPoints.length < 3) {
+    return polygon; // Return original if not enough points after deduplication
+  }
+
+  // Calculate average latitude for coordinate conversion
+  const avgLat = workingPoints.reduce((sum, p) => sum + p.lat, 0) / workingPoints.length;
+  
+  // Convert lat/lon to local meter-based coordinate system for better precision
+  // Use the centroid as the origin
+  const centroidLat = avgLat;
+  const centroidLon = workingPoints.reduce((sum, p) => sum + p.lon, 0) / workingPoints.length;
+  
+  // Conversion factors
+  const metersPerDegreeLat = 111000;
+  const metersPerDegreeLon = 111000 * Math.cos((avgLat * Math.PI) / 180);
+  
+  // Scale factor to convert meters to a reasonable coordinate system
+  // Use 1:1 mapping (1 unit = 1 meter) for best precision
+  const scale = 1.0;
+  
+  try {
+    // Convert polygon points to local meter-based coordinates
+    // PathD: array of {x, y} where x and y are in meters from centroid
+    const pathD: PathD = workingPoints.map((p) => ({
+      x: (p.lon - centroidLon) * metersPerDegreeLon * scale,
+      y: (p.lat - centroidLat) * metersPerDegreeLat * scale,
+    }));
+    
+    // Create PathsD containing our path
+    const pathsD: PathsD = [pathD];
+    
+    // Clipper2's inflatePathsD: positive delta = expand, negative = shrink
+    // Our convention: positive = shrink inward, so we negate
+    // Delta is in the same units as the coordinates (meters * scale)
+    const delta = -offsetMeters * scale;
+    
+    // Apply offset using Clipper2's inflatePathsD
+    // According to docs: positive delta expands outer contours, negative contracts them
+    const offsetResult = inflatePathsD(
+      pathsD,
+      delta,
+      JoinType.Miter,
+      EndType.Polygon,
+      10.0,  // miterLimit
+      undefined, // precision (use default)
+      0.1    // arcTolerance (in meters, relative to coordinate system)
+    );
+    
+    // Check if we got a result
+    if (!offsetResult || offsetResult.length === 0 || offsetResult[0].length === 0) {
+      // Offset failed (e.g., too large offset), return original
+      return polygon;
+    }
+    
+    // Get the first path from result
+    const resultPath = offsetResult[0];
+    
+    // Convert back from local meter-based coordinates to lat/lon
+    const offsetPoints: PolygonPoint[] = resultPath.map((pt, index) => ({
+      lat: centroidLat + (pt.y / scale) / metersPerDegreeLat,
+      lon: centroidLon + (pt.x / scale) / metersPerDegreeLon,
+      id: workingPoints[index]?.id || `offset_${index}`,
+    }));
+    
+    // Remove duplicate consecutive points
+    if (offsetPoints.length > 1) {
+      const cleanedPoints: PolygonPoint[] = [offsetPoints[0]];
+      
+      for (let i = 1; i < offsetPoints.length; i++) {
+        const current = offsetPoints[i];
+        const prev = cleanedPoints[cleanedPoints.length - 1];
+        const dist = Math.sqrt(
+          Math.pow(current.lat - prev.lat, 2) +
+          Math.pow(current.lon - prev.lon, 2)
+        );
+        
+        // Only add if point is different from previous
+        if (dist > 1e-9) {
+          cleanedPoints.push(current);
+        }
+      }
+      
+      // Check if last point is same as first (closed polygon)
+      if (cleanedPoints.length > 1) {
+        const firstPoint = cleanedPoints[0];
+        const lastPoint = cleanedPoints[cleanedPoints.length - 1];
+        const dist = Math.sqrt(
+          Math.pow(lastPoint.lat - firstPoint.lat, 2) +
+          Math.pow(lastPoint.lon - firstPoint.lon, 2)
+        );
+        if (dist < 1e-6) {
+          // Remove duplicate last point
+          cleanedPoints.pop();
+        }
+      }
+      
+      return cleanedPoints.length >= 3 ? cleanedPoints : polygon;
+    }
+    
+    return offsetPoints.length >= 3 ? offsetPoints : polygon;
+  } catch (error) {
+    // If offset fails, return original polygon
+    console.warn('Polygon offset failed:', error);
+    return polygon;
+  }
+};
+
+// Get polygons to use for filtering (offset if offsetDistance !== 0, otherwise original)
+const getPolygonsForFiltering = (polygons: Polygon[], offsetDistance: number): PolygonPoint[][] => {
+  const closedPolygons = polygons.filter((p) => p.isClosed);
+  
+  if (offsetDistance === 0) {
+    return closedPolygons.map((p) => p.points);
+  }
+  
+  return closedPolygons.map((polygon) => {
+    try {
+      return offsetPolygon(polygon.points, offsetDistance);
+    } catch {
+      return polygon.points; // Fallback to original if offset fails
+    }
+  });
+};
+
 // Check if any point from rosbag overlaps with any closed polygon
 const checkRosbagOverlap = async (
   rosbagName: string,
-  closedPolygons: Polygon[]
+  closedPolygons: Polygon[],
+  offsetDistance: number = 0
 ): Promise<boolean> => {
   if (closedPolygons.length === 0) {
     return true; // No polygons means all overlap
   }
 
   try {
-    const response = await fetch(`/api/gps/rosbags/${encodeURIComponent(rosbagName)}`);
+    const response = await fetch(`/api/positions/rosbags/${encodeURIComponent(rosbagName)}`);
     if (!response.ok) {
       return false; // If we can't fetch data, assume no overlap
     }
     const data = await response.json();
     const rosbagPoints: RosbagPoint[] = Array.isArray(data.points) ? data.points : [];
 
-    // Check if any point from rosbag is inside any closed polygon
+    // Get polygons to use (offset or original)
+    const polygonsToCheck = getPolygonsForFiltering(closedPolygons, offsetDistance);
+
+    // Check if any point from rosbag is inside any polygon
     for (const point of rosbagPoints) {
-      for (const polygon of closedPolygons) {
-        if (polygon.isClosed && pointInPolygon({ lat: point.lat, lon: point.lon }, polygon.points)) {
+      for (const polygonPoints of polygonsToCheck) {
+        if (pointInPolygon({ lat: point.lat, lon: point.lon }, polygonPoints)) {
           return true; // Found overlap
         }
       }
@@ -118,6 +416,54 @@ const checkRosbagOverlap = async (
     return false; // No overlap found
   } catch {
     return false;
+  }
+};
+
+// Get MCAP IDs that have points inside closed polygons
+const getMcapsInsidePolygons = async (
+  rosbagName: string,
+  closedPolygons: Polygon[],
+  offsetDistance: number = 0
+): Promise<Set<string>> => {
+  const mcapIds = new Set<string>();
+
+  if (closedPolygons.length === 0) {
+    return mcapIds; // No polygons means no MCAPs inside
+  }
+
+  try {
+    const response = await fetch(`/api/positions/rosbags/${encodeURIComponent(rosbagName)}/mcaps`);
+    if (!response.ok) {
+      return mcapIds; // If we can't fetch data, return empty set
+    }
+    const data = await response.json();
+    const mcapPoints: McapLocationPoint[] = Array.isArray(data.points) ? data.points : [];
+
+    // Get polygons to use (offset or original)
+    const polygonsToCheck = getPolygonsForFiltering(closedPolygons, offsetDistance);
+
+    // Check each MCAP point
+    for (const point of mcapPoints) {
+      // Check if point is inside any polygon
+      let isInside = false;
+      for (const polygonPoints of polygonsToCheck) {
+        if (pointInPolygon({ lat: point.lat, lon: point.lon }, polygonPoints)) {
+          isInside = true;
+          break;
+        }
+      }
+
+      // If point is inside, add all MCAP IDs from this point
+      if (isInside && point.mcaps) {
+        for (const mcapId of Object.keys(point.mcaps)) {
+          mcapIds.add(mcapId);
+        }
+      }
+    }
+
+    return mcapIds;
+  } catch {
+    return mcapIds;
   }
 };
 
@@ -132,6 +478,12 @@ const PositionalOverview: React.FC = () => {
   const [loadingAllPoints, setLoadingAllPoints] = useState<boolean>(false);
   const [allPointsLoaded, setAllPointsLoaded] = useState<boolean>(false);
   const [showAllRosbags, setShowAllRosbags] = useState<boolean>(false);
+  const [showMcaps, setShowMcaps] = useState<boolean>(false);
+  const [mcapLocationPoints, setMcapLocationPoints] = useState<McapLocationPoint[]>([]);
+  const [availableMcaps, setAvailableMcaps] = useState<McapInfo[]>([]);
+  const [selectedMcapIndex, setSelectedMcapIndex] = useState<number>(0);
+  const [expandedLocation, setExpandedLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [loadingMcaps, setLoadingMcaps] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [useSatellite, setUseSatellite] = useState<boolean>(false);
   const [polygons, setPolygons] = useState<Polygon[]>([]);
@@ -139,6 +491,12 @@ const PositionalOverview: React.FC = () => {
   const [selectedPolygonId, setSelectedPolygonId] = useState<string | null>(null);
   const [rosbagOverlapStatus, setRosbagOverlapStatus] = useState<Map<string, boolean>>(new Map());
   const [checkingOverlap, setCheckingOverlap] = useState<boolean>(false);
+  const [polygonFiles, setPolygonFiles] = useState<string[]>([]);
+  const [selectedPolygonFile, setSelectedPolygonFile] = useState<string>('');
+  const [loadingPolygonFiles, setLoadingPolygonFiles] = useState<boolean>(false);
+  const [importingPolygon, setImportingPolygon] = useState<boolean>(false);
+  const [exportingList, setExportingList] = useState<boolean>(false);
+  const [offsetDistance, setOffsetDistance] = useState<number>(0);
   const prevPolygonCountRef = useRef<number>(0);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -146,7 +504,11 @@ const PositionalOverview: React.FC = () => {
   const baseLayersRef = useRef<{ map: L.TileLayer | null; satellite: L.TileLayer | null }>({ map: null, satellite: null });
   const heatLayerRef = useRef<L.Layer | null>(null);
   const allHeatLayerRef = useRef<L.Layer | null>(null);
+  const mcapBorderLayersRef = useRef<Map<string, { borders: L.Polygon[]; labels: L.Marker[]; markers: L.Marker[] }>>(new Map());
+  const mcapHeatLayerRef = useRef<L.Layer | null>(null);
+  const hoverTooltipRef = useRef<L.Popup | null>(null);
   const polygonLayersRef = useRef<Map<string, { markers: L.Marker[]; polyline: L.Polyline | null; polygon: L.Polygon | null }>>(new Map());
+  const offsetPolygonLayersRef = useRef<Map<string, L.Polyline>>(new Map());
   const isRestoringRef = useRef(false);
 
   const handleBack = () => {
@@ -163,7 +525,7 @@ const PositionalOverview: React.FC = () => {
       setLoadingRosbags(true);
       setError(null);
       try {
-        const response = await fetch('/api/gps/rosbags');
+        const response = await fetch('/api/positions/rosbags');
         if (!response.ok) {
           throw new Error(`Failed to load rosbag list (${response.status})`);
         }
@@ -233,6 +595,139 @@ const PositionalOverview: React.FC = () => {
     }
   }, []);
 
+  // Fetch available polygon files
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPolygonFiles = async () => {
+      setLoadingPolygonFiles(true);
+      try {
+        const response = await fetch('/api/polygons/list');
+        if (!response.ok) {
+          throw new Error(`Failed to load polygon files (${response.status})`);
+        }
+        const data = await response.json();
+        if (!cancelled && Array.isArray(data.files)) {
+          setPolygonFiles(data.files);
+        }
+      } catch (fetchError) {
+        console.error('Failed to load polygon files:', fetchError);
+        if (!cancelled) {
+          setPolygonFiles([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPolygonFiles(false);
+        }
+      }
+    };
+
+    fetchPolygonFiles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Handle polygon import
+  const handleImportPolygon = useCallback(async (filename: string) => {
+    if (!filename || importingPolygon) {
+      return;
+    }
+
+    setImportingPolygon(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/polygons/${encodeURIComponent(filename)}`);
+      if (!response.ok) {
+        throw new Error(`Failed to load polygon file (${response.status})`);
+      }
+
+      const geoJson = await response.json();
+      const baseId = filename.replace('.json', '');
+      const importedPolygons = convertGeoJSONToPolygons(geoJson, baseId);
+
+      if (importedPolygons.length === 0) {
+        throw new Error('No valid polygons found in file');
+      }
+
+      // Replace existing polygons with imported ones
+      setPolygons(importedPolygons);
+      setActivePolygonId(null);
+      setSelectedPolygonId(null);
+      
+      // Update sessionStorage
+      try {
+        sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(importedPolygons));
+      } catch (e) {
+        console.error('Failed to save polygons to cache:', e);
+      }
+
+      // Reset selection
+      setSelectedPolygonFile('');
+    } catch (fetchError) {
+      const errorMessage = fetchError instanceof Error ? fetchError.message : 'Failed to import polygon';
+      setError(errorMessage);
+      console.error('Failed to import polygon:', fetchError);
+    } finally {
+      setImportingPolygon(false);
+    }
+  }, [importingPolygon]);
+
+  // Handle export list
+  const handleExportList = useCallback(async () => {
+    if (exportingList || rosbags.length === 0) {
+      return;
+    }
+
+    const closedPolygons = polygons.filter((p) => p.isClosed);
+    if (closedPolygons.length === 0) {
+      setError('No closed polygons to export');
+      return;
+    }
+
+    setExportingList(true);
+    setError(null);
+
+    try {
+      const lines: string[] = [];
+
+      // Process each rosbag
+      for (const rosbag of rosbags) {
+        const mcapIds = await getMcapsInsidePolygons(rosbag.name, closedPolygons, offsetDistance);
+        
+        if (mcapIds.size > 0) {
+          const formatted = formatMcapRanges(Array.from(mcapIds));
+          lines.push(`${rosbag.name}: ${formatted}`);
+        }
+      }
+
+      if (lines.length === 0) {
+        setError('No MCAPs found inside polygons');
+        setExportingList(false);
+        return;
+      }
+
+      // Create and download file
+      const content = lines.join('\n\n');
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'list.txt';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      const errorMessage = exportError instanceof Error ? exportError.message : 'Failed to export list';
+      setError(errorMessage);
+      console.error('Failed to export list:', exportError);
+    } finally {
+      setExportingList(false);
+    }
+  }, [exportingList, rosbags, polygons, offsetDistance]);
+
   useEffect(() => {
     if (!rosbags.length) {
       setPoints([]);
@@ -250,12 +745,12 @@ const PositionalOverview: React.FC = () => {
           return;
         }
 
-        const response = await fetch(`/api/gps/rosbags/${encodeURIComponent(selected.name)}`);
+        const response = await fetch(`/api/positions/rosbags/${encodeURIComponent(selected.name)}`);
         if (!response.ok) {
           if (response.status === 404) {
-            throw new Error(`No GPS data found for ${selected.name}`);
+            throw new Error(`No positional data found for ${selected.name}`);
           }
-          throw new Error(`Failed to load GPS data (${response.status})`);
+          throw new Error(`Failed to load positional data (${response.status})`);
         }
         const data = await response.json();
         if (!cancelled) {
@@ -264,7 +759,7 @@ const PositionalOverview: React.FC = () => {
         }
       } catch (fetchError) {
         if (!cancelled) {
-          setError(fetchError instanceof Error ? fetchError.message : 'Failed to load GPS data');
+          setError(fetchError instanceof Error ? fetchError.message : 'Failed to load positional data');
           setPoints([]);
         }
       } finally {
@@ -280,6 +775,73 @@ const PositionalOverview: React.FC = () => {
       cancelled = true;
     };
   }, [rosbags, selectedIndex]);
+
+  useEffect(() => {
+    if (!showMcaps || !rosbags.length) {
+      setMcapLocationPoints([]);
+      setAvailableMcaps([]);
+      setSelectedMcapIndex(0);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchMcapData = async () => {
+      setLoadingMcaps(true);
+      setError(null);
+      try {
+        const selected = rosbags[selectedIndex];
+        if (!selected) {
+          setMcapLocationPoints([]);
+          setAvailableMcaps([]);
+          return;
+        }
+
+        // Fetch mcap location points
+        const pointsResponse = await fetch(`/api/positions/rosbags/${encodeURIComponent(selected.name)}/mcaps`);
+        if (!pointsResponse.ok) {
+          if (pointsResponse.status === 404) {
+            throw new Error(`No mcap positional data found for ${selected.name}`);
+          }
+          throw new Error(`Failed to load mcap positional data (${pointsResponse.status})`);
+        }
+        const pointsData = await pointsResponse.json();
+        
+        // Fetch mcap list
+        const listResponse = await fetch(`/api/positions/rosbags/${encodeURIComponent(selected.name)}/mcap-list`);
+        if (!listResponse.ok) {
+          if (listResponse.status === 404) {
+            throw new Error(`No mcap list found for ${selected.name}`);
+          }
+          throw new Error(`Failed to load mcap list (${listResponse.status})`);
+        }
+        const listData = await listResponse.json();
+
+        if (!cancelled) {
+          const newPoints: McapLocationPoint[] = Array.isArray(pointsData.points) ? pointsData.points : [];
+          const newMcaps: McapInfo[] = Array.isArray(listData.mcaps) ? listData.mcaps : [];
+          setMcapLocationPoints(newPoints);
+          setAvailableMcaps(newMcaps);
+          setSelectedMcapIndex(0);
+        }
+      } catch (fetchError) {
+        if (!cancelled) {
+          setError(fetchError instanceof Error ? fetchError.message : 'Failed to load mcap data');
+          setMcapLocationPoints([]);
+          setAvailableMcaps([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingMcaps(false);
+        }
+      }
+    };
+
+    fetchMcapData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showMcaps, rosbags, selectedIndex]);
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) {
@@ -384,6 +946,11 @@ const PositionalOverview: React.FC = () => {
         });
       });
       polygonLayersRef.current.clear();
+      // Clean up offset polygon layers
+      offsetPolygonLayersRef.current.forEach((polyline) => {
+        map.removeLayer(polyline);
+      });
+      offsetPolygonLayersRef.current.clear();
       map.remove();
       mapRef.current = null;
       if (heatLayerRef.current) {
@@ -449,11 +1016,13 @@ const PositionalOverview: React.FC = () => {
       }).heatLayer;
 
       if (allLayerFactory) {
+        const currentZoom = map.getZoom();
+        const zoomFactor = calculateHeatmapZoomFactor(currentZoom);
         const allLayer = allLayerFactory(allHeatmapData, {
           minOpacity: 0.08,
           maxZoom: 18,
-          radius: 20,
-          blur: 25,
+          radius: HEATMAP_BASE_RADIUS * zoomFactor,
+          blur: HEATMAP_BASE_BLUR * zoomFactor,
           gradient: {
             0.2: '#444127',
             0.4: '#857e42',
@@ -490,11 +1059,15 @@ const PositionalOverview: React.FC = () => {
     }).heatLayer;
 
     if (heatLayerFactory) {
+      const currentZoom = map.getZoom();
+      const zoomFactor = calculateHeatmapZoomFactor(currentZoom);
+      // Reduce opacity when "Show All" is active to prevent excessive layering
+      const minOpacity = showAllRosbags ? 0.1 : 0.2;
       const heatLayer = heatLayerFactory(heatmapData, {
-        minOpacity: 0.2,
+        minOpacity: minOpacity,
         maxZoom: 18,
-        radius: 15,
-        blur: 15,
+        radius: HEATMAP_BASE_RADIUS * zoomFactor,
+        blur: HEATMAP_BASE_BLUR * zoomFactor,
         gradient: {
           0.2: 'blue',
           0.4: 'lime',
@@ -527,6 +1100,302 @@ const PositionalOverview: React.FC = () => {
     
   }, [points, showAllRosbags, allPoints]);
 
+  // Generate consistent color for each mcap_id
+  const getMcapColor = (mcapId: string): string => {
+    let hash = 0;
+    for (let i = 0; i < mcapId.length; i++) {
+      hash = mcapId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 70%, 50%)`;
+  };
+
+  // Calculate convex hull for a set of points (simplified version)
+  const calculateConvexHull = (points: { lat: number; lon: number }[]): L.LatLngTuple[] => {
+    if (points.length < 3) {
+      // For less than 3 points, return a simple circle or just the points
+      if (points.length === 1) {
+        const p = points[0];
+        // Create a small circle around the point
+        const radius = 0.001; // ~100m
+        const circlePoints: L.LatLngTuple[] = [];
+        for (let i = 0; i < 16; i++) {
+          const angle = (i / 16) * 2 * Math.PI;
+          circlePoints.push([
+            p.lat + radius * Math.cos(angle),
+            p.lon + radius * Math.sin(angle) / Math.cos(p.lat * Math.PI / 180)
+          ]);
+        }
+        return circlePoints;
+      }
+      return points.map(p => [p.lat, p.lon] as L.LatLngTuple);
+    }
+
+    // Graham scan algorithm for convex hull
+    const sorted = [...points].sort((a, b) => {
+      if (a.lat !== b.lat) return a.lat - b.lat;
+      return a.lon - b.lon;
+    });
+
+    const cross = (o: { lat: number; lon: number }, a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
+      return (a.lat - o.lat) * (b.lon - o.lon) - (a.lon - o.lon) * (b.lat - o.lat);
+    };
+
+    const lower: { lat: number; lon: number }[] = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+        lower.pop();
+      }
+      lower.push(point);
+    }
+
+    const upper: { lat: number; lon: number }[] = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const point = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+        upper.pop();
+      }
+      upper.push(point);
+    }
+
+    upper.pop();
+    lower.pop();
+
+    const hull = [...lower, ...upper];
+    return hull.map(p => [p.lat, p.lon] as L.LatLngTuple);
+  };
+
+  // Calculate centroid of points
+  const calculateCentroid = (points: { lat: number; lon: number }[]): { lat: number; lon: number } => {
+    if (points.length === 0) return { lat: 0, lon: 0 };
+    const sum = points.reduce((acc, p) => ({ lat: acc.lat + p.lat, lon: acc.lon + p.lon }), { lat: 0, lon: 0 });
+    return { lat: sum.lat / points.length, lon: sum.lon / points.length };
+  };
+
+  // Effect to handle mcap bordered visualization
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    // Remove existing mcap border layers
+    mcapBorderLayersRef.current.forEach((layers) => {
+      layers.borders.forEach(border => map.removeLayer(border));
+      layers.labels.forEach(label => map.removeLayer(label));
+      layers.markers.forEach(marker => map.removeLayer(marker));
+    });
+    mcapBorderLayersRef.current.clear();
+
+    // Only show borders when showMcaps is enabled and we have data
+    if (!showMcaps || !mcapLocationPoints.length || !availableMcaps.length || selectedMcapIndex >= availableMcaps.length) {
+      return;
+    }
+
+    const selectedMcap = availableMcaps[selectedMcapIndex];
+    if (!selectedMcap) {
+      return;
+    }
+
+    const mcapId = selectedMcap.id;
+    const color = getMcapColor(mcapId);
+
+    // Filter points that belong to the selected mcap
+    const mcapPoints: { lat: number; lon: number; count: number; hasMultiple: boolean }[] = [];
+
+    mcapLocationPoints.forEach((point) => {
+      if (point.mcaps[mcapId]) {
+        const mcapCount = Object.keys(point.mcaps).length;
+        mcapPoints.push({
+          lat: point.lat,
+          lon: point.lon,
+          count: point.mcaps[mcapId],
+          hasMultiple: mcapCount > 1
+        });
+      }
+    });
+
+    if (mcapPoints.length === 0) {
+      return;
+    }
+
+    // Remove existing mcap heat layer if present
+    if (mcapHeatLayerRef.current) {
+      map.removeLayer(mcapHeatLayerRef.current);
+      mcapHeatLayerRef.current = null;
+    }
+
+    // Calculate centroid for label
+    const centroid = calculateCentroid(mcapPoints);
+
+    // Create inverted heatmap for mcap points
+    // Calculate global max across ALL mcaps for absolute coloring
+    const globalMaxCount = Math.max(
+      ...mcapLocationPoints.flatMap(point => Object.values(point.mcaps)),
+      0
+    );
+    const mcapHeatmapData = mcapPoints.map((point) => {
+      const intensity = globalMaxCount ? Math.max(point.count / globalMaxCount, 0.05) : 0.1;
+      return [point.lat, point.lon, intensity] as [number, number, number];
+    });
+
+    const heatLayerFactory = (L as typeof L & {
+      heatLayer?: (latlngs: [number, number, number?][], options?: Record<string, unknown>) => L.Layer;
+    }).heatLayer;
+
+    if (heatLayerFactory) {
+      // Inverted color gradient (red -> orange -> yellow -> cyan -> blue)
+      const currentZoom = map.getZoom();
+      const zoomFactor = calculateHeatmapZoomFactor(currentZoom);
+      const mcapHeatLayer = heatLayerFactory(mcapHeatmapData, {
+        minOpacity: 0.3,
+        maxZoom: 18,
+        radius: HEATMAP_BASE_RADIUS * zoomFactor,
+        blur: HEATMAP_BASE_BLUR * zoomFactor,
+        gradient: {
+          0.2: 'cyan',
+          0.4: 'yellow',
+          0.6: 'red',
+          1: 'purple',
+        },
+      });
+      mcapHeatLayer.addTo(map);
+      mcapHeatLayerRef.current = mcapHeatLayer;
+      
+      // Set pointer-events: none on heatmap canvas so clicks pass through
+      setTimeout(() => {
+        const mapContainer = map.getContainer();
+        const heatmapCanvases = mapContainer.querySelectorAll('canvas.leaflet-heatmap-layer');
+        heatmapCanvases.forEach((canvas) => {
+          (canvas as HTMLElement).style.pointerEvents = 'none';
+        });
+      }, 0);
+    }
+
+    // Create label marker at centroid
+    const labelIcon = L.divIcon({
+      className: 'mcap-label',
+      html: `<div style="
+        background-color: rgba(0, 0, 0, 0.8);
+        color: ${color};
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 12px;
+        border: 2px solid ${color};
+        white-space: nowrap;
+        text-align: center;
+      ">${mcapId}</div>`,
+      iconSize: [100, 30],
+      iconAnchor: [50, 15],
+    });
+
+    const labelMarker = L.marker([centroid.lat, centroid.lon], { icon: labelIcon });
+    labelMarker.addTo(map);
+
+    // Store layers for cleanup
+    mcapBorderLayersRef.current.set(mcapId, {
+      borders: [],
+      labels: [labelMarker],
+      markers: []
+    });
+
+    return () => {
+      if (mcapHeatLayerRef.current) {
+        map.removeLayer(mcapHeatLayerRef.current);
+        mcapHeatLayerRef.current = null;
+      }
+      mcapBorderLayersRef.current.forEach((layers) => {
+        layers.borders.forEach(border => map.removeLayer(border));
+        layers.labels.forEach(label => map.removeLayer(label));
+        layers.markers.forEach(marker => map.removeLayer(marker));
+      });
+      mcapBorderLayersRef.current.clear();
+    };
+  }, [showMcaps, mcapLocationPoints, availableMcaps, selectedMcapIndex]);
+
+  // Effect to handle hover tooltip for mcap locations
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    // Mouse move handler to show mcap info on hover
+    const handleMouseMove = (e: L.LeafletMouseEvent) => {
+      if (!showMcaps || !mcapLocationPoints.length) {
+        // Remove tooltip if mcap mode is off
+        if (hoverTooltipRef.current) {
+          map.closePopup(hoverTooltipRef.current);
+          hoverTooltipRef.current = null;
+        }
+        return;
+      }
+
+      // Calculate distance to find nearest point (in degrees, roughly)
+      // For small distances, we can use simple Euclidean distance
+      let nearestPoint: McapLocationPoint | null = null;
+      let minDistance = Infinity;
+      const threshold = 0.0001; // ~10m at equator (lower threshold for closer proximity)
+
+      for (const point of mcapLocationPoints) {
+        const dx = point.lat - e.latlng.lat;
+        const dy = point.lon - e.latlng.lng;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < minDistance && distance < threshold) {
+          minDistance = distance;
+          nearestPoint = point;
+        }
+      }
+
+      // Remove existing tooltip
+      if (hoverTooltipRef.current) {
+        map.closePopup(hoverTooltipRef.current);
+        hoverTooltipRef.current = null;
+      }
+
+      // Show tooltip if we found a nearby point
+      if (nearestPoint) {
+        const mcapEntries = Object.entries(nearestPoint.mcaps).sort((a, b) => (b[1] as number) - (a[1] as number));
+        const mcapList = mcapEntries.map(([id, count]) => `${id} (${count})`).join('<br>');
+        
+        const popup = L.popup({
+          closeButton: false,
+          className: 'mcap-hover-popup',
+          offset: [0, -10],
+        })
+          .setLatLng(e.latlng)
+          .setContent(`
+            <div style="
+              background-color: rgba(0, 0, 0, 0.85);
+              color: white;
+              padding: 8px 12px;
+              border-radius: 4px;
+              font-size: 12px;
+              max-width: 200px;
+            ">
+              <strong>MCAPs at location:</strong><br>
+              ${mcapList}
+            </div>
+          `)
+          .openOn(map);
+        
+        hoverTooltipRef.current = popup;
+      }
+    };
+
+    map.on('mousemove', handleMouseMove);
+
+    return () => {
+      map.off('mousemove', handleMouseMove);
+      if (hoverTooltipRef.current) {
+        map.closePopup(hoverTooltipRef.current);
+        hoverTooltipRef.current = null;
+      }
+    };
+  }, [showMcaps, mcapLocationPoints]);
+
   // Effect to handle polygon drawing
   useEffect(() => {
     const map = mapRef.current;
@@ -557,10 +1426,36 @@ const PositionalOverview: React.FC = () => {
       const markers: L.Marker[] = [];
       const isActive = polygon.id === activePolygonId && !polygon.isClosed;
 
+      // Clean points to remove duplicates before rendering
+      let cleanedPoints = [...polygon.points];
+      if (cleanedPoints.length > 1) {
+        // Remove duplicate first/last point if polygon is closed
+        const first = cleanedPoints[0];
+        const last = cleanedPoints[cleanedPoints.length - 1];
+        if (polygon.isClosed && first.lat === last.lat && first.lon === last.lon && cleanedPoints.length > 3) {
+          cleanedPoints = cleanedPoints.slice(0, -1);
+        }
+        
+        // Remove any other duplicate consecutive points
+        const uniquePoints: PolygonPoint[] = [cleanedPoints[0]];
+        for (let i = 1; i < cleanedPoints.length; i++) {
+          const current = cleanedPoints[i];
+          const prev = uniquePoints[uniquePoints.length - 1];
+          const dist = Math.sqrt(
+            Math.pow(current.lat - prev.lat, 2) +
+            Math.pow(current.lon - prev.lon, 2)
+          );
+          if (dist > 1e-9) {
+            uniquePoints.push(current);
+          }
+        }
+        cleanedPoints = uniquePoints;
+      }
+      
       // Create markers for each point
-      polygon.points.forEach((point, index) => {
+      cleanedPoints.forEach((point, index) => {
         const isFirstPoint = index === 0;
-        const isLastPoint = index === polygon.points.length - 1;
+        const isLastPoint = index === cleanedPoints.length - 1;
         
         // Create custom icon
         const icon = L.divIcon({
@@ -588,9 +1483,37 @@ const PositionalOverview: React.FC = () => {
           marker.on('click', () => {
             if (polygon.points.length >= 3) {
               setPolygons((prev) =>
-                prev.map((p) =>
-                  p.id === polygon.id ? { ...p, isClosed: true } : p
-                )
+                prev.map((p) => {
+                  if (p.id !== polygon.id) return p;
+                  
+                  // Clean duplicates when closing
+                  let cleanedPoints = [...p.points];
+                  if (cleanedPoints.length > 1) {
+                    // Remove duplicate first/last point
+                    const first = cleanedPoints[0];
+                    const last = cleanedPoints[cleanedPoints.length - 1];
+                    if (first.lat === last.lat && first.lon === last.lon && cleanedPoints.length > 3) {
+                      cleanedPoints = cleanedPoints.slice(0, -1);
+                    }
+                    
+                    // Remove any other duplicate consecutive points
+                    const uniquePoints: PolygonPoint[] = [cleanedPoints[0]];
+                    for (let i = 1; i < cleanedPoints.length; i++) {
+                      const current = cleanedPoints[i];
+                      const prev = uniquePoints[uniquePoints.length - 1];
+                      const dist = Math.sqrt(
+                        Math.pow(current.lat - prev.lat, 2) +
+                        Math.pow(current.lon - prev.lon, 2)
+                      );
+                      if (dist > 1e-9) {
+                        uniquePoints.push(current);
+                      }
+                    }
+                    cleanedPoints = uniquePoints;
+                  }
+                  
+                  return { ...p, points: cleanedPoints, isClosed: true };
+                })
               );
               setActivePolygonId(null);
             }
@@ -601,18 +1524,53 @@ const PositionalOverview: React.FC = () => {
         marker.on('dragend', () => {
           const newLatLng = marker.getLatLng();
           setPolygons((prev) =>
-            prev.map((p) =>
-              p.id === polygon.id
-                ? {
-                    ...p,
-                    points: p.points.map((pt, idx) =>
-                      idx === index
-                        ? { ...pt, lat: newLatLng.lat, lon: newLatLng.lng }
-                        : pt
-                    ),
+            prev.map((p) => {
+              if (p.id !== polygon.id) return p;
+              
+              // Find the corresponding point in the original points array
+              // Use the point's ID or position to match
+              const cleanedPoint = cleanedPoints[index];
+              const originalIndex = p.points.findIndex(
+                (pt) => 
+                  (pt.id === cleanedPoint.id) ||
+                  (Math.abs(pt.lat - cleanedPoint.lat) < 1e-9 && Math.abs(pt.lon - cleanedPoint.lon) < 1e-9)
+              );
+              
+              if (originalIndex === -1) return p;
+              
+              // Update the point and also clean duplicates
+              let updatedPoints = p.points.map((pt, idx) =>
+                idx === originalIndex
+                  ? { ...pt, lat: newLatLng.lat, lon: newLatLng.lng }
+                  : pt
+              );
+              
+              // Clean duplicates after update
+              if (updatedPoints.length > 1) {
+                const first = updatedPoints[0];
+                const last = updatedPoints[updatedPoints.length - 1];
+                if (p.isClosed && first.lat === last.lat && first.lon === last.lon && updatedPoints.length > 3) {
+                  updatedPoints = updatedPoints.slice(0, -1);
+                }
+                
+                // Remove consecutive duplicates
+                const uniquePoints: PolygonPoint[] = [updatedPoints[0]];
+                for (let i = 1; i < updatedPoints.length; i++) {
+                  const current = updatedPoints[i];
+                  const prev = uniquePoints[uniquePoints.length - 1];
+                  const dist = Math.sqrt(
+                    Math.pow(current.lat - prev.lat, 2) +
+                    Math.pow(current.lon - prev.lon, 2)
+                  );
+                  if (dist > 1e-9) {
+                    uniquePoints.push(current);
                   }
-                : p
-            )
+                }
+                updatedPoints = uniquePoints;
+              }
+              
+              return { ...p, points: updatedPoints };
+            })
           );
         });
 
@@ -620,8 +1578,8 @@ const PositionalOverview: React.FC = () => {
         markers.push(marker);
       });
 
-      // Draw polyline connecting points
-      const latLngs = polygon.points.map((p) => [p.lat, p.lon] as L.LatLngTuple);
+      // Draw polyline connecting points (use cleaned points from above)
+      const latLngs = cleanedPoints.map((p) => [p.lat, p.lon] as L.LatLngTuple);
       const isSelected = polygon.id === selectedPolygonId;
       let polyline: L.Polyline | null = null;
       let polygonFill: L.Polygon | null = null;
@@ -671,6 +1629,67 @@ const PositionalOverview: React.FC = () => {
       });
     });
   }, [polygons, activePolygonId, selectedPolygonId]);
+
+  // Effect to handle offset polygon rendering
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    // Remove all existing offset polygon layers
+    offsetPolygonLayersRef.current.forEach((polyline) => {
+      map.removeLayer(polyline);
+    });
+    offsetPolygonLayersRef.current.clear();
+
+    // Only render offset polygons if offsetDistance is not zero
+    if (offsetDistance !== 0) {
+      const closedPolygons = polygons.filter((p) => p.isClosed);
+      
+      // Process each polygon
+      closedPolygons.forEach((polygon) => {
+        if (polygon.points.length < 3) {
+          return;
+        }
+
+        try {
+          const offsetPoints = offsetPolygon(polygon.points, offsetDistance);
+          
+          if (offsetPoints.length >= 2) {
+            const latLngs = offsetPoints.map((p) => [p.lat, p.lon] as L.LatLngTuple);
+            // Close the polygon by adding the first point at the end (only if not already closed)
+            const firstPoint = latLngs[0];
+            const lastPoint = latLngs[latLngs.length - 1];
+            const isAlreadyClosed = firstPoint[0] === lastPoint[0] && firstPoint[1] === lastPoint[1];
+            if (!isAlreadyClosed) {
+              latLngs.push([firstPoint[0], firstPoint[1]]);
+            }
+            
+            // Create dark blue polyline (lines only, no fill, no points)
+            const offsetPolyline = L.polyline(latLngs, {
+              color: '#000080', // Dark blue
+              weight: 2,
+              opacity: 0.8,
+              fill: false,
+            });
+            
+            offsetPolyline.addTo(map);
+            offsetPolygonLayersRef.current.set(polygon.id, offsetPolyline);
+          }
+        } catch (error) {
+          console.error(`Error creating offset polygon for ${polygon.id}:`, error);
+        }
+      });
+    }
+
+    return () => {
+      offsetPolygonLayersRef.current.forEach((polyline) => {
+        map.removeLayer(polyline);
+      });
+      offsetPolygonLayersRef.current.clear();
+    };
+  }, [polygons, offsetDistance]);
 
   // Keyboard handler for deleting selected polygon
   useEffect(() => {
@@ -761,7 +1780,7 @@ const PositionalOverview: React.FC = () => {
       // Check each rosbag
       for (const rosbag of rosbags) {
         if (cancelled) break;
-        const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons);
+        const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons, offsetDistance);
         overlapMap.set(rosbag.name, overlaps);
       }
       
@@ -795,7 +1814,7 @@ const PositionalOverview: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [polygons, rosbags]);
+  }, [polygons, rosbags, offsetDistance]);
 
   const fetchAllPoints = useCallback(async () => {
     if (loadingAllPoints || allPointsLoaded) {
@@ -806,16 +1825,16 @@ const PositionalOverview: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch('/api/gps/all');
+      const response = await fetch('/api/positions/all');
       if (!response.ok) {
-        throw new Error(`Failed to load aggregated GPS data (${response.status})`);
+        throw new Error(`Failed to load aggregated positional data (${response.status})`);
       }
       const data = await response.json();
       const aggregatedPoints: RosbagPoint[] = Array.isArray(data.points) ? data.points : [];
       setAllPoints(aggregatedPoints);
       setAllPointsLoaded(true);
     } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load aggregated GPS data');
+      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load aggregated positional data');
       setShowAllRosbags(false);
     } finally {
       setLoadingAllPoints(false);
@@ -955,7 +1974,7 @@ const PositionalOverview: React.FC = () => {
               }}
             >
               <CircularProgress size={16} color="inherit" />
-              <Typography variant="body2">Loading GPS data…</Typography>
+              <Typography variant="body2">Loading positional data…</Typography>
             </Box>
           )}
           {error && (
@@ -966,10 +1985,86 @@ const PositionalOverview: React.FC = () => {
           
           {!loadingRosbags && !rosbags.length && !error && (
             <Alert severity="info" sx={{ backgroundColor: '#1f1f1f', color: '#bbdefb' }}>
-              No rosbags available. Generate the GPS lookup table to see data here.
+              No rosbags available. Generate the positional lookup table to see data here.
             </Alert>
           )}
         </Box>
+
+        {showMcaps && availableMcaps.length > 0 && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: '50%',
+              bottom: 140,
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              zIndex: 1000,
+              pointerEvents: 'none', // Allow clicks to pass through to map
+            }}
+          >
+            <Box
+              sx={{
+                width: 'min(620px, 70vw)',
+                backgroundColor: 'rgba(18, 18, 18, 0.9)',
+                borderRadius: 999,
+                boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
+                px: 4,
+                py: 1.5,
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                position: 'relative',
+                pointerEvents: 'auto', // Enable pointer events for this container
+              }}
+            >
+              <Slider
+                value={Math.min(selectedMcapIndex, Math.max(availableMcaps.length - 1, 0))}
+                onChange={(_, value) => {
+                  if (typeof value === 'number') {
+                    setSelectedMcapIndex(value);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                min={0}
+                max={Math.max(availableMcaps.length - 1, 0)}
+                step={1}
+                marks={[]}
+                track={false}
+                disabled={loadingMcaps || !availableMcaps.length}
+                valueLabelDisplay="auto"
+                valueLabelFormat={(value) => availableMcaps[value]?.id ?? ''}
+                color="primary"
+                sx={{
+                  width: '100%',
+                  position: 'relative',
+                  zIndex: 1,
+                  pointerEvents: 'auto',
+                  '& .MuiSlider-thumb': {
+                    width: 18,
+                    height: 18,
+                    boxShadow: (theme) => `0 0 0 8px ${theme.palette.primary.main}40`,
+                    '&:hover, &.Mui-focusVisible': {
+                      boxShadow: (theme) => `0 0 0 12px ${theme.palette.primary.main}55`,
+                    },
+                  },
+                  '& .MuiSlider-rail': {
+                    opacity: 0.2,
+                  },
+                  '& .MuiSlider-valueLabel': {
+                    background: (theme) => theme.palette.background.paper,
+                    borderRadius: 5,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    color: (theme) => theme.palette.text.primary,
+                  },
+                }}
+              />
+            </Box>
+          </Box>
+        )}
 
         {rosbags.length > 1 && (
           <Box
@@ -1111,41 +2206,128 @@ const PositionalOverview: React.FC = () => {
                 size="small"
               />
             </Box>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                padding: '10px 18px',
+                borderRadius: 999,
+                backgroundColor: 'rgba(18, 18, 18, 0.92)',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                backdropFilter: 'blur(8px)',
+                pointerEvents: 'auto', // Enable pointer events for this container
+              }}
+            >
+              <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 500 }}>
+                Show mcaps
+              </Typography>
+              <Switch
+                checked={showMcaps}
+                onChange={(event) => {
+                  setShowMcaps(event.target.checked);
+                }}
+                color="primary"
+                disabled={loadingMcaps}
+                size="small"
+              />
+            </Box>
           </Box>
         )}
 
-        {selectedRosbag && (
+        <Box
+          sx={{
+            position: 'absolute',
+            left: 32,
+            bottom: 72,
+            zIndex: 1100,
+            backgroundColor: 'rgba(18, 18, 18, 0.92)',
+            borderRadius: 2,
+            padding: '16px',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            maxWidth: '400px',
+            color: '#fff',
+          }}
+        >
+          {/* Offset Section */}
           <Box
             sx={{
-              position: 'absolute',
-              left: 32,
-              bottom: 88,
-              backgroundColor: 'rgba(18, 18, 18, 0.92)',
-              borderRadius: 5,
-              padding: '12px 16px',
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-              backdropFilter: 'blur(6px)',
-              maxWidth: '70%',
-              zIndex: 1100,
-              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
             }}
           >
+            <Typography variant="body2" sx={{ fontSize: '0.85rem', color: '#ffffff', whiteSpace: 'nowrap' }}>
+              Offset (m):
+            </Typography>
+            <TextField
+              type="number"
+              value={offsetDistance}
+              onChange={(e) => {
+                const value = parseFloat(e.target.value) || 0;
+                setOffsetDistance(value);
+              }}
+              size="small"
+              inputProps={{
+                step: 1,
+                min: -1000,
+                max: 1000,
+                style: { color: '#ffffff', fontSize: '0.85rem', width: '80px' },
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  backgroundColor: 'rgba(30, 30, 30, 0.8)',
+                  '& fieldset': {
+                    borderColor: 'rgba(255, 255, 255, 0.23)',
+                  },
+                  '&:hover fieldset': {
+                    borderColor: 'rgba(255, 255, 255, 0.4)',
+                  },
+                  '&.Mui-focused fieldset': {
+                    borderColor: '#2196f3',
+                  },
+                },
+              }}
+            />
+          </Box>
+
+          {/* Separator */}
+          <Box sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
+
+          {/* Selected Rosbag Section */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               Selected Rosbag
             </Typography>
-            <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-              {selectedRosbag.name}
-            </Typography>
-            <Typography variant="body2" sx={{ opacity: 0.7 }}>
-              {formatTimestampLabel(selectedRosbag.timestamp, 'Timestamp unavailable')}
-            </Typography>
-            {showAllRosbags && (
-              <Typography variant="body2" sx={{ opacity: 0.7 }}>
-                Overlay: All rosbags (yellow)
-              </Typography>
+            {selectedRosbag ? (
+              <>
+                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {selectedRosbag.name}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                  {formatTimestampLabel(selectedRosbag.timestamp, 'Timestamp unavailable')}
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Typography variant="body2" sx={{ opacity: 0.5, fontStyle: 'italic' }}>
+                  No rosbag selected
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.5, fontStyle: 'italic' }}>
+                  Timestamp unavailable
+                </Typography>
+              </>
             )}
+            <Typography variant="body2" sx={{ opacity: 0.7 }}>
+              {showAllRosbags ? 'Overlay: All rosbags (yellow)' : 'Overlay: Off'}
+            </Typography>
             {showAllRosbags && loadingAllPoints && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                 <CircularProgress size={14} color="inherit" />
                 <Typography variant="caption">Loading overlay…</Typography>
               </Box>
@@ -1155,76 +2337,128 @@ const PositionalOverview: React.FC = () => {
                 Overlay data cached
               </Typography>
             )}
-            {polygons.length > 0 && (
-              <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                  Polygons: {polygons.length}
-                  {polygons.filter((p) => !p.isClosed).length > 0 && (
-                    <span> ({polygons.filter((p) => !p.isClosed).length} active)</span>
-                  )}
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
-                  {polygons.filter((p) => p.isClosed).length > 0 && (
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color="primary"
-                      onClick={() => {
-                        // Get rosbags that overlap with closed polygons
-                        const closedPolygons = polygons.filter((p) => p.isClosed);
-                        const overlappingRosbags: string[] = [];
-                        
-                        rosbags.forEach((rosbag) => {
-                          const overlaps = rosbagOverlapStatus.get(rosbag.name) ?? false;
-                          if (overlaps) {
-                            overlappingRosbags.push(rosbag.name);
-                          }
-                        });
-                        
-                        // Store filtered rosbags and polygons in sessionStorage
-                        try {
-                          sessionStorage.setItem('__BagSeekPositionalFilter', JSON.stringify(overlappingRosbags));
-                          sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
-                          // Dispatch custom event for same-tab updates
-                          window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
-                        } catch (e) {
-                          console.error('Failed to store positional filter:', e);
-                        }
-                        
-                        // Navigate to GlobalSearch
-                        navigate('/search');
-                      }}
-                      sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
-                    >
-                      Apply to Search
-                    </Button>
-                  )}
-                  {polygons.length > 0 && (
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        setPolygons([]);
-                        setActivePolygonId(null);
-                        setSelectedPolygonId(null);
-                        // Clear positional filter and polygons from sessionStorage
-                        try {
-                          sessionStorage.removeItem('__BagSeekPositionalFilter');
-                          sessionStorage.removeItem('__BagSeekPositionalPolygons');
-                        } catch (e) {
-                          console.error('Failed to clear positional filter:', e);
-                        }
-                      }}
-                      sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
-                    >
-                      Clear All
-                    </Button>
-                  )}
-                </Box>
-              </Box>
-            )}
+            <Box sx={{ mt: 0.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                Polygons: {polygons.length}
+                {polygons.filter((p) => !p.isClosed).length > 0 && (
+                  <span> ({polygons.filter((p) => !p.isClosed).length} active)</span>
+                )}
+              </Typography>
+            </Box>
           </Box>
-        )}
+
+          {/* Separator */}
+          <Box sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
+
+          {/* Polygon Controls Section */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Button
+                size="small"
+                variant="contained"
+                color="primary"
+                disabled={polygons.filter((p) => p.isClosed).length === 0}
+                onClick={async () => {
+                  // Get rosbags that overlap with closed polygons (using offset if applicable)
+                  const closedPolygons = polygons.filter((p) => p.isClosed);
+                  const overlappingRosbags: string[] = [];
+                  
+                  // Re-check overlaps with current offset distance
+                  for (const rosbag of rosbags) {
+                    const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons, offsetDistance);
+                    if (overlaps) {
+                      overlappingRosbags.push(rosbag.name);
+                    }
+                  }
+                  
+                  // Store filtered rosbags and polygons in sessionStorage
+                  try {
+                    sessionStorage.setItem('__BagSeekPositionalFilter', JSON.stringify(overlappingRosbags));
+                    sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
+                    // Dispatch custom event for same-tab updates
+                    window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
+                  } catch (e) {
+                    console.error('Failed to store positional filter:', e);
+                  }
+                  
+                  // Navigate to GlobalSearch
+                  navigate('/search');
+                }}
+                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+              >
+                Apply to Search
+              </Button>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Select
+                value={selectedPolygonFile}
+                onChange={(e) => {
+                  const filename = e.target.value as string;
+                  setSelectedPolygonFile(filename);
+                  if (filename) {
+                    handleImportPolygon(filename);
+                  }
+                }}
+                displayEmpty
+                size="small"
+                disabled={loadingPolygonFiles || importingPolygon || polygonFiles.length === 0}
+                sx={{
+                  fontSize: '0.7rem',
+                  minWidth: 150,
+                  backgroundColor: 'rgba(30, 30, 30, 0.8)',
+                  color: '#ffffff',
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'rgba(255, 255, 255, 0.23)',
+                  },
+                  '&:hover .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'rgba(255, 255, 255, 0.4)',
+                  },
+                  '& .MuiSvgIcon-root': {
+                    color: '#ffffff',
+                  },
+                }}
+              >
+                <MenuItem value="" disabled>
+                  <em>Import Polygon</em>
+                </MenuItem>
+                {polygonFiles.map((filename) => (
+                  <MenuItem key={filename} value={filename}>
+                    {filename.replace('.json', '')}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={polygons.filter((p) => p.isClosed).length === 0 || exportingList}
+                onClick={handleExportList}
+                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+              >
+                {exportingList ? 'Exporting...' : 'Export list'}
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={polygons.length === 0}
+                onClick={() => {
+                  setPolygons([]);
+                  setActivePolygonId(null);
+                  setSelectedPolygonId(null);
+                  // Clear positional filter and polygons from sessionStorage
+                  try {
+                    sessionStorage.removeItem('__BagSeekPositionalFilter');
+                    sessionStorage.removeItem('__BagSeekPositionalPolygons');
+                  } catch (e) {
+                    console.error('Failed to clear positional filter:', e);
+                  }
+                }}
+                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+              >
+                Clear All
+              </Button>
+            </Box>
+          </Box>
+        </Box>
 
         <Tooltip title={useSatellite ? 'Switch to map view' : 'Switch to satellite view'} placement="left">
           <IconButton

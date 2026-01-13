@@ -67,20 +67,55 @@ type SearchResultItem = {
   timestamp: string;
   minuteOfDay: string;
   model: string;
+  mcap_identifier?: string;
 };
 
 function ResultImageCard({
   result,
-  url,
   onOpenExplore,
   onOpenDownload,
 }: {
   result: SearchResultItem;
-  url: string;
   onOpenExplore: () => void;
   onOpenDownload: () => void;
 }) {
   const { still, onPointerEnter, onPointerMove, onPointerLeave } = useHoverStill(500, 3);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!result.topic || !result.timestamp || !result.mcap_identifier) {
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchImage = async () => {
+      try {
+        setIsLoading(true);
+        const response = await fetch(
+          `/api/content-mcap?topic=${encodeURIComponent(result.topic)}&mcap_identifier=${result.mcap_identifier}&timestamp=${result.timestamp}`
+        );
+        const data = await response.json();
+
+        if (data.error) {
+          console.error("API error:", data.error);
+          setIsLoading(false);
+          return;
+        }
+
+        if (data.type === 'image' && data.image) {
+          const format = data.format || 'jpeg';
+          setImageUrl(`data:image/${format};base64,${data.image}`);
+        }
+      } catch (error) {
+        console.error("Error fetching image:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchImage();
+  }, [result.topic, result.timestamp, result.mcap_identifier]);
 
   return (
     <Box
@@ -89,8 +124,25 @@ function ResultImageCard({
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
     >
+      {isLoading ? (
+        <Box
+          sx={{
+            width: '100%',
+            aspectRatio: '16/9',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: '#1e1e1e',
+            borderRadius: '4px',
+          }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            Loading...
+          </Typography>
+        </Box>
+      ) : imageUrl ? (
       <img
-        src={url}
+          src={imageUrl}
         alt="Result"
         style={{
           width: '100%',
@@ -100,6 +152,23 @@ function ResultImageCard({
           display: 'block',
         }}
       />
+      ) : (
+        <Box
+          sx={{
+            width: '100%',
+            aspectRatio: '16/9',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: '#1e1e1e',
+            borderRadius: '4px',
+          }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            No image available
+          </Typography>
+        </Box>
+      )}
 
       <Chip
         label={`${result.rosbag}`}
@@ -173,7 +242,33 @@ function ResultImageCard({
       <IconButton
         size="small"
         color="primary"
-        onClick={onOpenDownload}
+        onClick={() => {
+          if (imageUrl) {
+            // Extract format from data URL (e.g., "data:image/jpeg;base64,..." or "data:image/png;base64,...")
+            const formatMatch = imageUrl.match(/data:image\/([^;]+)/);
+            const format = formatMatch ? formatMatch[1] : 'jpeg';
+            const extension = format === 'png' ? 'png' : 'jpg';
+            
+            // Convert base64 to blob and download
+            const byteCharacters = atob(imageUrl.split(',')[1]);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: `image/${format}` });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${result.rosbag}_${result.timestamp}.${extension}`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          } else {
+            onOpenDownload();
+          }
+        }}
         sx={{
           position: 'absolute',
           top: '55%',
@@ -936,9 +1031,7 @@ const GlobalSearch: React.FC = () => {
                   }}
                 >
                   {searchResults.slice(0, render_limit).map((result, index) => {
-                    const url = result.topic && result.timestamp && result.rosbag && result.mcap_identifier
-                      ? `http://localhost:5000/images/${result.rosbag}/${result.topic.replace(/\//g, '_').replace(/^_/, '')}/${result.mcap_identifier}/${result.timestamp}.png`
-                      : undefined;
+                    const hasRequiredFields = result.topic && result.timestamp && result.rosbag && result.mcap_identifier;
 
                     return (
                       <Box
@@ -949,12 +1042,11 @@ const GlobalSearch: React.FC = () => {
                           alignItems: 'flex-start',
                         }}
                       >
-                        {url && (
+                        {hasRequiredFields && (
                           <ResultImageCard
                             result={result as any}
-                            url={url}
                             onOpenExplore={() => openExplorePage(result)}
-                            onOpenDownload={() => window.open(url, '_blank')}
+                            onOpenDownload={() => {}}
                           />
                         )}
                       </Box>

@@ -17,7 +17,10 @@ interface NodeContentProps {
 
 const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp, mcapIdentifier }) => {
 
+  console.log('NodeContent props:', { nodeTopic, nodeTopicType, selectedRosbag, mappedTimestamp, mcapIdentifier });
+
   const [text, setText] = useState<string | null>(null);   // fetched textual message (e.g. string payloads)
+  const [imageUrl, setImageUrl] = useState<string | null>(null); // image data URL or blob URL
   const [pointCloud, setPointCloud] = useState<{ positions: number[]; colors: number[] } | null>(null); // 3D point cloud data from sensor with optional colors
   const [realTimestamp, setRealTimestamp] = useState<string | null>(null); // human-readable timestamp string
   const [position, setPosition] = useState<{ latitude: number; longitude: number; altitude: number} | null>(null); // GPS position (lat, lon, alt)
@@ -27,24 +30,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     angular_velocity: { x: number; y: number; z: number };
     linear_acceleration: { x: number; y: number; z: number };
   } | null>(null); // orientation, angular velocity, and acceleration from IMU
-  
-  // Debug logging to understand why image URL might not be constructed
-  useEffect(() => {
-    if (nodeTopic && nodeTopicType && (nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image")) {
-      console.log('NodeContent image URL check:', {
-        nodeTopic,
-        mappedTimestamp,
-        selectedRosbag,
-        mcapIdentifier,
-        hasAll: !!(nodeTopic && mappedTimestamp && selectedRosbag && mcapIdentifier)
-      });
-    }
-  }, [nodeTopic, mappedTimestamp, selectedRosbag, mcapIdentifier, nodeTopicType]);
-
-  const imageUrl =
-    nodeTopic && mappedTimestamp && selectedRosbag && mcapIdentifier
-      ? `http://localhost:5000/images/${selectedRosbag}/${nodeTopic.replace(/\//g, '_').replace(/^_/, '')}/${mcapIdentifier}/${mappedTimestamp}.png`
-      : undefined; // resolved URL to load image from local server
 
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
   const mapContainerRef = useRef<HTMLDivElement | null>(null); // reference to the div container holding the map
@@ -52,114 +37,100 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
     try {
-      const response = await fetch(`/api/content?topic=${nodeTopic}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
+      const response = await fetch(`/api/content-mcap?topic=${encodeURIComponent(nodeTopic!)}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
       const data = await response.json();
 
-      setText(null); // clear previous text
-      setPointCloud(null); // clear previous point cloud
-      setPosition(null); // clear previous position
-
-      switch (data.type) {
-        case 'text':
-          setText(data.text);
-          break;
-        case 'pointCloud':
-          // Handle both old format (flat array) and new format (object with positions and colors)
-          if (Array.isArray(data.pointCloud)) {
-            // Old format: flat array [x, y, z, ...]
-            setPointCloud({ positions: data.pointCloud, colors: [] });
-          } else if (data.pointCloud && typeof data.pointCloud === 'object') {
-            // New format: { positions: [...], colors: [...] }
-            setPointCloud({
-              positions: data.pointCloud.positions || [],
-              colors: data.pointCloud.colors || []
-            });
-          } else {
-            setPointCloud(null);
-          }
-          break;
-        case 'position':
-          setPosition(data.position);
-          break;
-        case 'imu':
-            setImuData(data.imu);
-          break;
-        case 'tf':
-            const { translation, rotation } = data.tf;
-            setImuData({
-              orientation: rotation,
-              angular_velocity: { x: 0, y: 0, z: 0 },
-              linear_acceleration: { x: 0, y: 0, z: 0 }
-            });
-          break;
-        case 'odometry':
-            const odom = data.odometry;
-            setImuData({
-              orientation: odom.pose.orientation,
-              angular_velocity: odom.twist.angular,
-              linear_acceleration: odom.twist.linear // Use linear velocity as approximation, or { x: 0, y: 0, z: 0 }
-            });
-          break;
-        default:
-          console.warn("Unknown data type:", data.type);
+      if (data.error) {
+        console.error("API error:", data.error);
+        // Reset all states in case of error
+        setText(null);
+        setImageUrl(null);
+        setPointCloud(null);
+        setPosition(null);
+        setImuData(null);
+        setRealTimestamp(null);
+        return;
       }
-  // IMU Visualizer component
-  const ImuVisualizer: React.FC<{ imu: typeof imuData }> = ({ imu }) => {
-    const groupRef = useRef<THREE.Group>(null);
 
-    useEffect(() => {
-      if (groupRef.current && imu) {
-        const { x, y, z, w } = imu.orientation;
-        const quaternion = new THREE.Quaternion(x, y, z, w);
-        groupRef.current.setRotationFromQuaternion(quaternion);
+      // Clear all previous data
+      setText(null);
+      setImageUrl(null);
+      setPointCloud(null);
+      setPosition(null);
+      setImuData(null);
+      setRealTimestamp(null);
+
+      // Handle different response types
+      if (data.timestamp) {
+        // Convert timestamp to human-readable format
+        const date = new Date(Number(data.timestamp) / 1000000); // Convert nanoseconds to milliseconds
+        setRealTimestamp(date.toISOString());
       }
-    }, [imu]);
 
-    return (
-      <>
-        <group ref={groupRef}>
-          <mesh position={[1, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
-            <coneGeometry args={[0.05, 0.2, 8]} />
-            <meshBasicMaterial color="red" />
-          </mesh>
-          <mesh position={[0, 1, 0]}>
-            <coneGeometry args={[0.05, 0.2, 8]} />
-            <meshBasicMaterial color="green" />
-          </mesh>
-          <mesh position={[0, 0, 1]} rotation={[Math.PI / 2, 0, 0]}>
-            <coneGeometry args={[0.05, 0.2, 8]} />
-            <meshBasicMaterial color="blue" />
-          </mesh>
-        </group>
-      </>
-    );
-  };
+      // Handle image response
+      if (data.type === 'image' && data.image) {
+        const format = data.format || 'jpeg';
+        setImageUrl(`data:image/${format};base64,${data.image}`);
+      }
+      // Handle point cloud response
+      else if (data.type === 'pointCloud' && data.pointCloud) {
+        setPointCloud({
+          positions: data.pointCloud.positions || [],
+          colors: data.pointCloud.colors || []
+        });
+      }
+      // Handle GPS position response
+      else if (data.type === 'position' && data.position) {
+        setPosition({
+          latitude: data.position.latitude,
+          longitude: data.position.longitude,
+          altitude: data.position.altitude || 0
+        });
+      }
+      // Handle IMU response
+      else if (data.type === 'imu' && data.imu) {
+        setImuData({
+          orientation: data.imu.orientation || { x: 0, y: 0, z: 0, w: 1 },
+          angular_velocity: data.imu.angular_velocity || { x: 0, y: 0, z: 0 },
+          linear_acceleration: data.imu.linear_acceleration || { x: 0, y: 0, z: 0 }
+        });
+      }
+      // Handle text response (fallback for unsupported types)
+      else if (data.type === 'text' && data.text) {
+        setText(data.text);
+      }
+      // Handle TF response (transform)
+      else if (data.type === 'tf' && data.tf) {
+        // For TF messages, we could display as text or visualize
+        setText(`Transform:\nTranslation: (${data.tf.translation.x}, ${data.tf.translation.y}, ${data.tf.translation.z})\nRotation: (${data.tf.rotation.x}, ${data.tf.rotation.y}, ${data.tf.rotation.z}, ${data.tf.rotation.w})`);
+      }
+      // Handle odometry response
+      else if (data.type === 'odometry' && data.odometry) {
+        const odom = data.odometry;
+        setImuData({
+          orientation: odom.pose.orientation || { x: 0, y: 0, z: 0, w: 1 },
+          angular_velocity: odom.twist.angular || { x: 0, y: 0, z: 0 },
+          linear_acceleration: odom.twist.linear || { x: 0, y: 0, z: 0 } // Note: this is actually linear velocity, not acceleration
+        });
+      }
     } catch (error) {
       console.error("Error fetching data:", error);
       // Reset all states in case of error
       setText(null);
+      setImageUrl(null);
       setPointCloud(null);
+      setPosition(null);
+      setImuData(null);
       setRealTimestamp(null);
     }
   };
 
   // Trigger fetch when topic or timestamp changes
   useEffect(() => {
-    if (nodeTopic && nodeTopicType && mappedTimestamp && selectedRosbag) {
-      // Only call the API if the topicType is not an image
-      if (
-        nodeTopicType !== "sensor_msgs/msg/CompressedImage" &&
-        nodeTopicType !== "sensor_msgs/msg/Image"
-      ) {
-        fetchData();
-      } else {
-        // Clear data for image topics (no fetch needed)
-        setText(null);
-        setPointCloud(null);
-        setPosition(null);
-      }
+    if (nodeTopic && nodeTopicType && mappedTimestamp && mcapIdentifier) {
+      fetchData();
     }
-  }, [nodeTopic, nodeTopicType, mappedTimestamp, selectedRosbag]);
+  }, [nodeTopic, nodeTopicType, mappedTimestamp, mcapIdentifier]);
 
   useEffect(() => {
     if (position) {
