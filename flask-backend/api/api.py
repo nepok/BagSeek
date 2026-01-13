@@ -1,5 +1,6 @@
 from csv import reader
 import json
+import base64
 import os
 import glob
 from pathlib import Path
@@ -7,6 +8,9 @@ from prompt_toolkit import prompt
 from rosbag2_py import SequentialReader, SequentialWriter, StorageOptions, ConverterOptions, TopicMetadata
 from rclpy.serialization import deserialize_message, serialize_message
 from rosidl_runtime_py.utilities import get_message
+from mcap_ros2.reader import read_ros2_messages
+from mcap.reader import make_reader
+from mcap_ros2.decoder import DecoderFactory
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory, send_file, abort # type: ignore
 from flask_cors import CORS  # type: ignore
@@ -27,6 +31,7 @@ import gc
 from collections import defaultdict, OrderedDict
 from dotenv import load_dotenv
 from time import time
+import sys
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -37,7 +42,7 @@ except ImportError:  # pragma: no cover
 
 
 # Load environment variables from .env file
-PARENT_ENV = Path(__file__).resolve().parents[1] / ".env"
+PARENT_ENV = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=PARENT_ENV)
 
 # Flask API for BagSeek: A tool for exploring Rosbag data and using semantic search via CLIP and FAISS to locate safety critical and relevant scenes.
@@ -50,33 +55,55 @@ CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 gemma_tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
 gemma_model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b-it")
 
-#
-# --- Global Variables and Constants ---
-#
-# ROSBAGS: Directory where all Rosbag files are stored
-# BASE: Base directory for backend resources (topics, images, embeddings, etc.)
-# TOPICS: Directory for storing available topics per Rosbag
-# IMAGES: Directory for extracted image frames
-# LOOKUP_TABLES: Directory for lookup tables mapping reference timestamps to topic timestamps (structure: lookup_tables/rosbag_name/mcap_id.csv)
-# CANVASES_FILE: JSON file for UI canvas state persistence
-# EXPORT: Directory where exported Rosbags are saved
-# SELECTED_ROSBAG: Currently selected Rosbag file path
+BASE_STR = os.getenv("BASE")
+IMAGES_STR = os.getenv("IMAGES")
 
+ODOM_STR = os.getenv("ODOM")
+POINTCLOUDS_STR = os.getenv("POINTCLOUDS")
+POSITIONS_STR = os.getenv("POSITIONS")
+VIDEOS_STR = os.getenv("VIDEOS")
+
+REPRESENTATIVE_PREVIEWS_STR = os.getenv("REPRESENTATIVE_PREVIEWS")
+
+LOOKUP_TABLES_STR = os.getenv("LOOKUP_TABLES")
+TOPICS_STR = os.getenv("TOPICS")
+CANVASES_FILE_STR = os.getenv("CANVASES_FILE")
+
+ADJACENT_SIMILARITIES_STR = os.getenv("ADJACENT_SIMILARITIES")
+EMBEDDINGS_STR = os.getenv("EMBEDDINGS")
+POSITIONAL_LOOKUP_TABLE_STR = os.getenv("POSITIONAL_LOOKUP_TABLE")
+
+EXPORT_STR = os.getenv("EXPORT")
+
+
+###############################################################################################################
 
 ROSBAGS = Path(os.getenv("ROSBAGS"))
-BASE = Path(os.getenv("BASE"))
-TOPICS = Path(os.getenv("TOPICS"))
-IMAGES = Path(os.getenv("IMAGES"))
-LOOKUP_TABLES = Path(os.getenv("LOOKUP_TABLES"))
-EMBEDDINGS = Path(os.getenv("EMBEDDINGS"))
-CANVASES_FILE = os.getenv("CANVASES_FILE")
+PRESELECTED_ROSBAG = Path(os.getenv("PRESELECTED_ROSBAG"))
 
-EXPORT = Path(os.getenv("EXPORT"))
-ADJACENT_SIMILARITIES = Path(os.getenv("ADJACENT_SIMILARITIES"))
-REPRESENTATIVE_PREVIEWS = Path(os.getenv("REPRESENTATIVE_PREVIEWS"))    
-GPS_LOOKUP_TABLE = Path(os.getenv("GPS_LOOKUP_TABLE"))
+IMAGES = Path(BASE_STR + IMAGES_STR)
+ODOM = Path(BASE_STR + ODOM_STR)
+POINTCLOUDS = Path(BASE_STR + POINTCLOUDS_STR)
+POSITIONS = Path(BASE_STR + POSITIONS_STR)
+VIDEOS = Path(BASE_STR + VIDEOS_STR)
+REPRESENTATIVE_PREVIEWS = Path(BASE_STR + REPRESENTATIVE_PREVIEWS_STR)
 
-SELECTED_ROSBAG = Path('/media/nepomuk/ext4_8tb_3/rosbags/rosbag2_2025_09_09-15_03_02_short')
+LOOKUP_TABLES = Path(BASE_STR + LOOKUP_TABLES_STR)
+TOPICS = Path(BASE_STR + TOPICS_STR)
+CANVASES_FILE = Path(BASE_STR + CANVASES_FILE_STR)
+
+ADJACENT_SIMILARITIES = Path(BASE_STR + ADJACENT_SIMILARITIES_STR)
+EMBEDDINGS = Path(BASE_STR + EMBEDDINGS_STR)
+POSITIONAL_LOOKUP_TABLE = Path(BASE_STR + POSITIONAL_LOOKUP_TABLE_STR)
+
+EXPORT = Path(BASE_STR + EXPORT_STR)
+
+PRESELECTED_MODEL = str(os.getenv("PRESELECTED_MODEL"))
+OPEN_CLIP_MODELS = Path(os.getenv("OPEN_CLIP_MODELS"))
+OTHER_MODELS = Path(os.getenv("OTHER_MODELS"))
+
+SELECTED_ROSBAG = PRESELECTED_ROSBAG
+SELECTED_MODEL = PRESELECTED_MODEL
 
 # Helper function for loading lookup tables (defined below, initialized after)
 def load_lookup_tables_for_rosbag(rosbag_name: str) -> pd.DataFrame:
@@ -118,14 +145,14 @@ def load_lookup_tables_for_rosbag(rosbag_name: str) -> pd.DataFrame:
     return pd.concat(all_dfs, ignore_index=True)
 
 # ALIGNED_DATA: DataFrame mapping reference timestamps to per-topic timestamps for alignment
+
 ALIGNED_DATA = load_lookup_tables_for_rosbag(os.path.basename(SELECTED_ROSBAG))
+
 
 # EXPORT_PROGRESS: Dictionary to track progress and status of export jobs
 EXPORT_PROGRESS = {"status": "idle", "progress": -1}
 SEARCH_PROGRESS = {"status": "idle", "progress": -1, "message": "idle"}
 
-# SELECTED_MODEL: Default CLIP model for semantic search (format: <model_name>__<pretrained_name>)
-SELECTED_MODEL = 'ViT-B-16-quickgelu__openai'
 SEARCHED_ROSBAGS = []
 
 # MAX_K: Number of top results to return for semantic search
@@ -136,28 +163,11 @@ FILE_PATH_CACHE_TTL_SECONDS = 60
 _matching_rosbag_cache = {"paths": [], "timestamp": 0.0}
 _file_path_cache_lock = Lock()
 
-NEW_MODEL_DIR = Path("/mnt/data/bagseek/flask-backend/src/models")
-_gps_lookup_cache: dict[str, dict[str, dict[str, int]]] = {"data": None, "mtime": None}  # type: ignore[assignment]
+_positional_lookup_cache: dict[str, dict[str, dict[str, int]]] = {"data": None, "mtime": None}  # type: ignore[assignment]
 CUSTOM_MODEL_DEFAULTS = {
-    "agriclip": Path("/mnt/data/bagseek/flask-backend/src/models/agriclip.pt"),
-    "epoch32": NEW_MODEL_DIR / "epoch_32.pt",
+    "agriclip": OTHER_MODELS / "agriclip.pt",
+    "epoch32": OTHER_MODELS / "epoch_32.pt",
 }
-
-""" IF NOVATEL DOESNT WORK: (OLD CODE)
-# Initialize the type system for ROS2 deserialization, including custom Novatel messages
-# This is required to correctly deserialize messages from Rosbags, especially for custom message types
-typestore = get_typestore(Stores.ROS2_HUMBLE)
-novatel_msg_folder = Path('/opt/ros/humble/share/novatel_oem7_msgs/msg')
-custom_types = {}
-for msg_file in novatel_msg_folder.glob('*.msg'):
-    try:
-        text = msg_file.read_text()
-        typename = f"novatel_oem7_msgs/msg/{msg_file.stem}"
-        result = get_types_from_msg(text, typename)
-        custom_types.update(result)
-    except Exception as e:
-        logging.warning(f"Failed to parse {msg_file.name}: {e}")
-typestore.register(custom_types)"""
 
 # Used to track the currently selected reference timestamp and its aligned mappings
 # current_reference_timestamp: The reference timestamp selected by the user
@@ -168,8 +178,8 @@ mapped_timestamps = {}
 def resolve_custom_checkpoint(model_name: str) -> Path:
     """Return a filesystem path to the checkpoint for a custom (non-open_clip) model."""
     candidates = [
-        NEW_MODEL_DIR / f"{model_name}.pt",
-        NEW_MODEL_DIR / model_name,
+        OTHER_MODELS / f"{model_name}.pt",
+        OTHER_MODELS / model_name,
         CUSTOM_MODEL_DEFAULTS.get(model_name),
         Path(model_name) if model_name.endswith(".pt") else None,
     ]
@@ -708,9 +718,9 @@ def post_file_paths():
         return jsonify({"error": str(e)}), 500
 
 
-def _load_gps_lookup() -> dict[str, dict[str, dict[str, int | dict[str, int]]]]:
+def _load_positional_lookup() -> dict[str, dict[str, dict[str, int | dict[str, int]]]]:
     """
-    Load and cache the GPS lookup JSON, refreshing when the file changes.
+    Load and cache the positional lookup JSON, refreshing when the file changes.
     
     Returns structure: {
         "rosbag_name": {
@@ -721,26 +731,26 @@ def _load_gps_lookup() -> dict[str, dict[str, dict[str, int | dict[str, int]]]]:
         }
     }
     """
-    if not GPS_LOOKUP_TABLE.exists():
-        raise FileNotFoundError(f"GPS lookup file not found at {GPS_LOOKUP_TABLE}")
+    if not POSITIONAL_LOOKUP_TABLE.exists():
+        raise FileNotFoundError(f"Positional lookup file not found at {POSITIONAL_LOOKUP_TABLE}")
 
-    stat = GPS_LOOKUP_TABLE.stat()
-    cached_mtime = _gps_lookup_cache.get("mtime")
-    if _gps_lookup_cache.get("data") is None or cached_mtime != stat.st_mtime:
-        with GPS_LOOKUP_TABLE.open("r", encoding="utf-8") as fp:
-            _gps_lookup_cache["data"] = json.load(fp)
-        _gps_lookup_cache["mtime"] = stat.st_mtime
+    stat = POSITIONAL_LOOKUP_TABLE.stat()
+    cached_mtime = _positional_lookup_cache.get("mtime")
+    if _positional_lookup_cache.get("data") is None or cached_mtime != stat.st_mtime:
+        with POSITIONAL_LOOKUP_TABLE.open("r", encoding="utf-8") as fp:
+            _positional_lookup_cache["data"] = json.load(fp)
+        _positional_lookup_cache["mtime"] = stat.st_mtime
 
-    return _gps_lookup_cache["data"]  # type: ignore[return-value]
+    return _positional_lookup_cache["data"]  # type: ignore[return-value]
 
 
-@app.route('/api/gps/rosbags', methods=['GET'])
-def get_gps_rosbags():
+@app.route('/api/positions/rosbags', methods=['GET'])
+def get_positions_rosbags():
     """
-    Return the list of rosbag names available in the GPS lookup table.
+    Return the list of rosbag names available in the positional lookup table.
     """
     try:
-        lookup = _load_gps_lookup()
+        lookup = _load_positional_lookup()
         rosbag_names = sorted(lookup.keys())
         return jsonify({"rosbags": rosbag_names}), 200
     except FileNotFoundError:
@@ -749,13 +759,13 @@ def get_gps_rosbags():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/gps/rosbags/<string:rosbag_name>', methods=['GET'])
-def get_gps_rosbag_entries(rosbag_name: str):
+@app.route('/api/positions/rosbags/<string:rosbag_name>', methods=['GET'])
+def get_positional_rosbag_entries(rosbag_name: str):
     """
-    Return the GPS lookup entries for a specific rosbag.
+    Return the positional lookup entries for a specific rosbag.
     """
     try:
-        lookup = _load_gps_lookup()
+        lookup = _load_positional_lookup()
         rosbag_data = lookup.get(rosbag_name)
         if rosbag_data is None:
             return jsonify({"error": f"Rosbag '{rosbag_name}' not found"}), 404
@@ -781,18 +791,143 @@ def get_gps_rosbag_entries(rosbag_name: str):
             "points": points
         }), 200
     except FileNotFoundError:
-        return jsonify({"error": "GPS lookup file not available"}), 500
+        return jsonify({"error": "Positional lookup file not available"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/gps/all', methods=['GET'])
-def get_gps_all():
+@app.route('/api/positions/rosbags/<string:rosbag_name>/mcaps', methods=['GET'])
+def get_positional_rosbag_mcaps(rosbag_name: str):
     """
-    Return aggregated GPS lookup entries across all rosbags.
+    Return positional lookup entries for a specific rosbag grouped by location with per-mcap breakdown.
     """
     try:
-        lookup = _load_gps_lookup()
+        lookup = _load_positional_lookup()
+        rosbag_data = lookup.get(rosbag_name)
+        if rosbag_data is None:
+            return jsonify({"error": f"Rosbag '{rosbag_name}' not found"}), 404
+
+        points = []
+        for lat_lon, location_data in rosbag_data.items():
+            try:
+                lat_str, lon_str = lat_lon.split(',')
+                mcaps = location_data.get("mcaps", {})
+                
+                # Group by location, include all mcaps at this location
+                if mcaps:
+                    points.append({
+                        "lat": float(lat_str),
+                        "lon": float(lon_str),
+                        "mcaps": {mcap_id: int(count) for mcap_id, count in mcaps.items()}
+                    })
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        return jsonify({
+            "rosbag": rosbag_name,
+            "points": points
+        }), 200
+    except FileNotFoundError:
+        return jsonify({"error": "Positional lookup file not available"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/positions/rosbags/<string:rosbag_name>/mcap-list', methods=['GET'])
+def get_positional_rosbag_mcap_list(rosbag_name: str):
+    """
+    Return positional lookup entries for a specific rosbag grouped by location with per-mcap breakdown.
+    """
+    try:
+        lookup = _load_positional_lookup()
+        rosbag_data = lookup.get(rosbag_name)
+        if rosbag_data is None:
+            return jsonify({"error": f"Rosbag '{rosbag_name}' not found"}), 404
+
+        mcap_counts: dict[str, int] = {}
+        for location_data in rosbag_data.values():
+            mcaps = location_data.get("mcaps", {})
+            for mcap_id, count in mcaps.items():
+                mcap_counts[mcap_id] = mcap_counts.get(mcap_id, 0) + int(count)
+
+        # Convert to list of dicts and sort by mcap_id (numeric if possible, otherwise alphabetical)
+        def sort_key(item):
+            mcap_id = item[0]
+            # Try to parse as integer for numeric sorting, otherwise use string
+            try:
+                return (0, int(mcap_id))  # Numeric IDs first
+            except ValueError:
+                return (1, mcap_id)  # Non-numeric IDs after
+        
+        mcap_list = [
+            {"id": mcap_id, "totalCount": count}
+            for mcap_id, count in sorted(mcap_counts.items(), key=sort_key)
+        ]
+
+        return jsonify({
+            "rosbag": rosbag_name,
+            "mcaps": mcap_list
+        }), 200
+    except FileNotFoundError:
+        return jsonify({"error": "Positional lookup file not available"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Polygon endpoints
+POLYGONS_DIR = Path("/mnt/data/ongoing_projects/positional_filter/polygons")
+
+@app.route('/api/polygons/list', methods=['GET'])
+def get_polygon_files():
+    """
+    Return list of available polygon JSON files.
+    """
+    try:
+        if not POLYGONS_DIR.exists():
+            return jsonify({"error": "Polygons directory not found"}), 404
+        
+        json_files = sorted([f.name for f in POLYGONS_DIR.glob("*.json")])
+        return jsonify({"files": json_files}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/polygons/<filename>', methods=['GET'])
+def get_polygon_file(filename: str):
+    """
+    Return polygon JSON file content.
+    Validates filename to prevent path traversal.
+    """
+    try:
+        # Validate filename to prevent path traversal
+        if not filename.endswith('.json') or '..' in filename or '/' in filename or '\\' in filename:
+            return jsonify({"error": "Invalid filename"}), 400
+        
+        file_path = POLYGONS_DIR / filename
+        if not file_path.exists():
+            return jsonify({"error": f"File '{filename}' not found"}), 404
+        
+        # Ensure file is within POLYGONS_DIR (additional safety check)
+        if not file_path.resolve().is_relative_to(POLYGONS_DIR.resolve()):
+            return jsonify({"error": "Invalid file path"}), 400
+        
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        
+        return jsonify(data), 200
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid JSON file"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/positions/all', methods=['GET'])
+def get_positions_all():
+    """
+    Return aggregated positional lookup entries across all rosbags.
+    """
+    try:
+        lookup = _load_positional_lookup()
         aggregated: dict[str, dict[str, float | int]] = {}
 
         for rosbag_data in lookup.values():
@@ -828,7 +963,7 @@ def get_gps_all():
 
         return jsonify({"points": points}), 200
     except FileNotFoundError:
-        return jsonify({"error": "GPS lookup file not available"}), 500
+        return jsonify({"error": "Positional lookup file not available"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -838,6 +973,7 @@ def get_gps_all():
 def get_file_paths():
     """
     Return all available Rosbag file paths (excluding those in EXCLUDED).
+    Simplified: Just scans ROSBAGS directory, no IMAGES scan.
     """
     try:
         now = time()
@@ -852,36 +988,67 @@ def get_file_paths():
             return jsonify({"paths": cached_paths}), 200
 
         rosbag_paths: list[str] = []
-        for base_dir in [ROSBAGS]: #ROSBAGS_DIR_MNT, ROSBAGS_DIR_NAS):
-            if not base_dir:
+        for base_dir in [ROSBAGS]:
+            if not base_dir or not base_dir.exists():
                 continue
-            for root, dirs, files in os.walk(str(base_dir), topdown=True):
-                if "metadata.yaml" in files:
-                    if "EXCLUDED" in root:
-                        dirs[:] = []
-                        continue
-                    rosbag_paths.append(root)
-                    dirs[:] = []
+            
+            base_path = Path(base_dir)
+            stack = [base_path]
+            
+            while stack:
+                current_dir = stack.pop()
+                
+                # Skip EXCLUDED and EXPORTED directories early
+                if "EXCLUDED" in current_dir.parts or "EXPORTED" in current_dir.parts:
+                    continue
+                
+                # Skip the base "rosbags" parent folder itself
+                if current_dir == base_path:
+                    # Just add its subdirectories to stack, don't add base_path to results
+                    try:
+                        with os.scandir(str(current_dir)) as entries:
+                            subdirs = []
+                            for entry in entries:
+                                if entry.is_dir():
+                                    # Skip EXCLUDED and EXPORTED subdirectories immediately
+                                    if "EXCLUDED" not in entry.name and "EXPORTED" not in entry.name:
+                                        subdirs.append(Path(entry.path))
+                            stack.extend(subdirs)
+                    except (PermissionError, OSError) as e:
+                        logging.warning(f"Cannot access directory {current_dir}: {e}")
+                    continue
+                
+                try:
+                    # Fast: Just list directories, like 'ls'
+                    with os.scandir(str(current_dir)) as entries:
+                        subdirs = []
+                        
+                        for entry in entries:
+                            if entry.is_dir():
+                                # Skip EXCLUDED and EXPORTED subdirectories immediately
+                                if "EXCLUDED" not in entry.name and "EXPORTED" not in entry.name:
+                                    subdirs.append(Path(entry.path))
+                        
+                        # Add this directory as a potential rosbag path
+                        rosbag_paths.append(str(current_dir))
+                        
+                        # Recurse into subdirectories
+                        stack.extend(subdirs)
+                            
+                except (PermissionError, OSError) as e:
+                    # Skip directories we can't access
+                    logging.warning(f"Cannot access directory {current_dir}: {e}")
+                    continue
+        
         rosbag_paths.sort()
 
-        image_basenames: set[str] = set()
-        if IMAGES and IMAGES.exists() and IMAGES.is_dir():
-            for entry in os.scandir(str(IMAGES)):
-                if entry.is_dir():
-                    image_basenames.add(entry.name)
-
-        matching_paths = [
-            path
-            for path in rosbag_paths
-            if os.path.basename(os.path.normpath(path)) in image_basenames
-        ]
-
         with _file_path_cache_lock:
-            _matching_rosbag_cache["paths"] = list(matching_paths)
+            _matching_rosbag_cache["paths"] = list(rosbag_paths)
             _matching_rosbag_cache["timestamp"] = now
 
-        return jsonify({"paths": matching_paths}), 200
+        return jsonify({"paths": rosbag_paths}), 200
     except Exception as e:
+        logging.error(f"Error in get_file_paths: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1286,17 +1453,244 @@ def get_topic_image_preview():
         logging.error(f"Error in get_topic_image_preview: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
-# New endpoint to serve image reference map JSON file for a given rosbag
-@app.route('/image-reference-map/<rosbag_name>.json', methods=['GET'])
-def get_image_reference_map(rosbag_name):
-    map_path = os.path.join(BASE, "image_reference_maps", f"{rosbag_name}.json")
-    if not os.path.exists(map_path):
-        return jsonify({"error": f"Image reference map for {rosbag_name} not found."}), 404
-    return send_file(map_path, mimetype='application/json')
-
 def normalize_topic(topic: str) -> str:
     """Normalize topic name: replace / with _ and remove leading _"""
     return topic.replace('/', '_').lstrip('_')
+
+def format_message_response(msg, topic_type: str, timestamp: str):
+    """
+    Format a deserialized ROS2 message into JSON response based on message type.
+    
+    Args:
+        msg: Deserialized ROS2 message object
+        topic_type: String type of the message (e.g., 'sensor_msgs/msg/PointCloud2')
+        timestamp: Timestamp string to include in response
+    
+    Returns:
+        Flask jsonify response
+    """
+    match topic_type:
+        case 'sensor_msgs/msg/CompressedImage' | 'sensor_msgs/msg/Image':
+            # Extract image data
+            image_data_bytes = bytes(msg.data) if hasattr(msg, 'data') else None
+            if not image_data_bytes:
+                return jsonify({'error': 'No image data found'}), 404
+            
+            # Detect format
+            format_str = 'jpeg'  # default
+            if hasattr(msg, 'format') and msg.format:
+                format_lower = msg.format.lower()
+                if 'png' in format_lower:
+                    format_str = 'png'
+                elif 'jpeg' in format_lower or 'jpg' in format_lower:
+                    format_str = 'jpeg'
+            
+            # Encode to base64
+            image_data_base64 = base64.b64encode(image_data_bytes).decode('utf-8')
+            
+            return jsonify({
+                'type': 'image',
+                'image': image_data_base64,
+                'format': format_str,
+                'timestamp': timestamp
+            })
+        case 'sensor_msgs/msg/PointCloud2':
+            # Extract point cloud data, filtering out NaNs, Infs, and zeros
+            pointCloud = []
+            colors = []
+            point_step = msg.point_step
+            is_bigendian = msg.is_bigendian
+            
+            # Check fields to find color data
+            has_rgb = False
+            has_separate_rgb = False
+            rgb_offset = None
+            r_offset = None
+            g_offset = None
+            b_offset = None
+            rgb_datatype = None
+            r_datatype = None
+            g_datatype = None
+            b_datatype = None
+            
+            for field in msg.fields:
+                # Debug: log all fields to understand structure
+                logging.debug(f"PointCloud2 field: name={field.name}, offset={field.offset}, datatype={field.datatype}, count={field.count}")
+                if field.name == 'rgb' or field.name == 'rgba':
+                    rgb_offset = field.offset
+                    rgb_datatype = field.datatype
+                    has_rgb = True
+                    logging.debug(f"Found RGB field: offset={rgb_offset}, datatype={rgb_datatype}")
+                    break
+                elif field.name == 'r':
+                    r_offset = field.offset
+                    r_datatype = field.datatype
+                    has_separate_rgb = True
+                elif field.name == 'g':
+                    g_offset = field.offset
+                    g_datatype = field.datatype
+                elif field.name == 'b':
+                    b_offset = field.offset
+                    b_datatype = field.datatype
+            
+            logging.debug(f"Color detection: has_rgb={has_rgb}, has_separate_rgb={has_separate_rgb}, rgb_datatype={rgb_datatype}")
+            
+            # Extract points and colors
+            for i in range(0, len(msg.data), point_step):
+                # Extract x, y, z coordinates
+                if is_bigendian:
+                    x, y, z = struct.unpack_from('>fff', msg.data, i)
+                else:
+                    x, y, z = struct.unpack_from('<fff', msg.data, i)
+                
+                if all(np.isfinite([x, y, z])) and not (x == 0 and y == 0 and z == 0):
+                    pointCloud.extend([x, y, z])
+                    
+                    # Extract RGB colors if available
+                    if has_rgb and rgb_offset is not None:
+                        try:
+                            # Extract RGB as uint32 (4 bytes) - most common format
+                            if is_bigendian:
+                                rgb = struct.unpack_from('>I', msg.data, i + rgb_offset)[0]
+                                # Big-endian: RRGGBBAA format
+                                r = (rgb >> 24) & 0xFF
+                                g = (rgb >> 16) & 0xFF
+                                b = (rgb >> 8) & 0xFF
+                            else:
+                                rgb = struct.unpack_from('<I', msg.data, i + rgb_offset)[0]
+                                # Little-endian: Try different formats
+                                b = rgb & 0xFF
+                                g = (rgb >> 8) & 0xFF
+                                r = (rgb >> 16) & 0xFF
+                            colors.extend([r, g, b])
+                        except Exception as e:
+                            logging.warning(f"Failed to extract RGB color at offset {i + rgb_offset}: {e}")
+                            pass
+                    elif has_separate_rgb and r_offset is not None and g_offset is not None and b_offset is not None:
+                        # Extract separate r, g, b fields
+                        try:
+                            if r_datatype == 7:  # FLOAT32
+                                if is_bigendian:
+                                    r_val = struct.unpack_from('>f', msg.data, i + r_offset)[0]
+                                    g_val = struct.unpack_from('>f', msg.data, i + g_offset)[0]
+                                    b_val = struct.unpack_from('>f', msg.data, i + b_offset)[0]
+                                else:
+                                    r_val = struct.unpack_from('<f', msg.data, i + r_offset)[0]
+                                    g_val = struct.unpack_from('<f', msg.data, i + g_offset)[0]
+                                    b_val = struct.unpack_from('<f', msg.data, i + b_offset)[0]
+                                # Convert float (0.0-1.0) to uint8 (0-255)
+                                r = int(r_val * 255) if r_val <= 1.0 else int(r_val)
+                                g = int(g_val * 255) if g_val <= 1.0 else int(g_val)
+                                b = int(b_val * 255) if b_val <= 1.0 else int(b_val)
+                            else:  # Assume uint8
+                                r = struct.unpack_from('B', msg.data, i + r_offset)[0]
+                                g = struct.unpack_from('B', msg.data, i + g_offset)[0]
+                                b = struct.unpack_from('B', msg.data, i + b_offset)[0]
+                            colors.extend([r, g, b])
+                        except Exception as e:
+                            logging.warning(f"Failed to extract separate RGB: {e}")
+                            pass
+            
+            # Return with colors if available, otherwise just positions
+            if colors:
+                return jsonify({
+                    'type': 'pointCloud',
+                    'pointCloud': {'positions': pointCloud, 'colors': colors},
+                    'timestamp': timestamp
+                })
+            else:
+                return jsonify({
+                    'type': 'pointCloud',
+                    'pointCloud': {'positions': pointCloud, 'colors': []},
+                    'timestamp': timestamp
+                })
+        case 'sensor_msgs/msg/NavSatFix':
+            return jsonify({'type': 'position', 'position': {'latitude': msg.latitude, 'longitude': msg.longitude, 'altitude': msg.altitude}, 'timestamp': timestamp})
+        case 'novatel_oem7_msgs/msg/BESTPOS':
+            return jsonify({'type': 'position', 'position': {'latitude': msg.lat, 'longitude': msg.lon, 'altitude': msg.hgt}, 'timestamp': timestamp})
+        case 'tf2_msgs/msg/TFMessage':
+            # Assume single transform for simplicity
+            if len(msg.transforms) > 0:
+                transform = msg.transforms[0]
+                translation = transform.transform.translation
+                rotation = transform.transform.rotation
+                tf_data = {
+                    'translation': {
+                        'x': translation.x,
+                        'y': translation.y,
+                        'z': translation.z
+                    },
+                    'rotation': {
+                        'x': rotation.x,
+                        'y': rotation.y,
+                        'z': rotation.z,
+                        'w': rotation.w
+                    }
+                }
+                return jsonify({'type': 'tf', 'tf': tf_data, 'timestamp': timestamp})
+        case 'sensor_msgs/msg/Imu':
+            imu_data = {
+                "orientation": {
+                    "x": msg.orientation.x,
+                    "y": msg.orientation.y,
+                    "z": msg.orientation.z,
+                    "w": msg.orientation.w
+                },
+                "angular_velocity": {
+                    "x": msg.angular_velocity.x,
+                    "y": msg.angular_velocity.y,
+                    "z": msg.angular_velocity.z
+                },
+                "linear_acceleration": {
+                    "x": msg.linear_acceleration.x,
+                    "y": msg.linear_acceleration.y,
+                    "z": msg.linear_acceleration.z
+                }
+            }
+            return jsonify({'type': 'imu', 'imu': imu_data, 'timestamp': timestamp})
+        case 'nav_msgs/msg/Odometry':
+            # Extract odometry data: pose (position + orientation) and twist (linear + angular velocity)
+            odometry_data = {
+                "header": {
+                    "frame_id": msg.header.frame_id,
+                    "stamp": {
+                        "sec": msg.header.stamp.sec,
+                        "nanosec": msg.header.stamp.nanosec
+                    }
+                },
+                "child_frame_id": msg.child_frame_id,
+                "pose": {
+                    "position": {
+                        "x": msg.pose.pose.position.x,
+                        "y": msg.pose.pose.position.y,
+                        "z": msg.pose.pose.position.z
+                    },
+                    "orientation": {
+                        "x": msg.pose.pose.orientation.x,
+                        "y": msg.pose.pose.orientation.y,
+                        "z": msg.pose.pose.orientation.z,
+                        "w": msg.pose.pose.orientation.w
+                    },
+                    "covariance": list(msg.pose.covariance) if hasattr(msg.pose, 'covariance') else []
+                },
+                "twist": {
+                    "linear": {
+                        "x": msg.twist.twist.linear.x,
+                        "y": msg.twist.twist.linear.y,
+                        "z": msg.twist.twist.linear.z
+                    },
+                    "angular": {
+                        "x": msg.twist.twist.angular.x,
+                        "y": msg.twist.twist.angular.y,
+                        "z": msg.twist.twist.angular.z
+                    },
+                    "covariance": list(msg.twist.covariance) if hasattr(msg.twist, 'covariance') else []
+                }
+            }
+            return jsonify({'type': 'odometry', 'odometry': odometry_data, 'timestamp': timestamp})
+        case _:
+            # Fallback for unsupported or unknown message types: return string representation
+            return jsonify({'type': 'text', 'text': str(msg), 'timestamp': timestamp})
 
 # Return deserialized message content (image, TF, IMU, etc.) for currently selected topic and reference timestamp
 @app.route('/api/content', methods=['GET'])
@@ -1588,6 +1982,38 @@ def get_ros():
             pass
         return jsonify({'error': f'Error reading rosbag: {str(e)}'})
 
+@app.route('/api/content-mcap', methods=['GET', 'POST'])
+def get_content_mcap():
+    topic = request.args.get('topic')
+    mcap_identifier = request.args.get('mcap_identifier')
+    timestamp = request.args.get('timestamp', type=int)
+    
+    mcap_path = f"{SELECTED_ROSBAG}/{os.path.basename(SELECTED_ROSBAG)}_{mcap_identifier}.mcap"
+    
+    try:        
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f, decoder_factories=[DecoderFactory()])
+            for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
+                topics=[topic],
+                start_time=timestamp,
+                end_time=timestamp+1,
+                log_time_order=True,
+                reverse=False
+            ):
+                # Get schema name for message type
+                schema_name = schema.name if schema else None
+                if not schema_name:
+                    return jsonify({'error': 'No schema found for message'}), 404
+                    
+                # Use the shared format_message_response function
+                # Convert timestamp to string to match the function signature
+                return format_message_response(ros2_msg, schema_name, str(timestamp))
+        
+        return jsonify({'error': 'No message found for the provided timestamp and topic'}), 404
+        
+    except Exception as e:
+        logging.exception("[C] Failed to read mcap file")
+        return jsonify({'error': f'Error reading mcap file: {str(e)}'}), 500
 
 @app.route('/api/enhance-prompt', methods=['GET'])
 def enhance_prompt_endpoint():
@@ -1702,7 +2128,7 @@ def search():
                 if '__' in model_name:
                     name, pretrained = model_name.split('__', 1)
                     model, _, _ = open_clip.create_model_and_transforms(
-                        name, pretrained, device=device, cache_dir="/mnt/data/openclip_cache"
+                        name, pretrained, device=device, cache_dir=OPEN_CLIP_MODELS
                     )
                     tokenizer = open_clip.get_tokenizer(name)
                     query_embedding = get_text_embedding(query_text, model, tokenizer, device)
