@@ -19,6 +19,7 @@ docker-compose.yml
 # Environments
 .env
 .env_old
+.env_*
 
 preprocessing/mcap_* 
 
