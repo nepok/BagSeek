@@ -60,16 +60,17 @@ npm start
 ```bash
 bagseek/
 ├── flask-backend/                # Python backend (Flask API, CLIP, indexing, etc.)
-│   ├── api/                      # Contains api.py and route definitions
-│   │   └── api.py
-│   └── src/                      # necessary preprocessing data: extracted images, embeddings, indices, ...
-│       ├── extracted_images/
-│       ├── embeddings/
-│       ├── faiss_indices/
-│       └── ...
+│   └── api/                      # Contains api.py and route definitions
+│       ├── .flaskenv 
+│       └── api.py
 ├── preprocessing/                # Standalone preprocessing scripts and master preprocessing script 
-│   ├── preprocessing_main.py
-│   └── ...
+│   ├── abstract/
+│   ├── core/
+│   ├── steps/
+│   ├── utils/
+│   ├── __init__.py
+│   ├── config.py
+│   └── main.py   
 ├── react-frontend/               # React frontend (TypeScript, React)
 │   ├── node_modules/
 │   ├── public/
@@ -78,9 +79,10 @@ bagseek/
 │       ├── App.tsx
 │       ├── index.tsx
 │       └── ...
-│
-├── rosbags/                      # Local or mounted ROS 2 bag files
-└── README.md
+├── .gitignore
+├── LICENSE.md
+├── README.md
+└── ...
 ```
 
 ⚠️ **Note**: You have to create your own rosbags folder and update all corresponding paths in api.py and the preprocessing scripts.
