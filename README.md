@@ -85,7 +85,35 @@ bagseek/
 └── ...
 ```
 
-⚠️ **Note**: You have to create your own rosbags folder and update all corresponding paths in api.py and the preprocessing scripts.
+## 🔗 Linking up your infrastructure
+
+You have to create your own `.env` file and link up your own infrastructure using the following template. Note that 
+
+```
+BASE= ---insert base dir for preprocessing here---
+ROSBAGS= ---insert rosbags dir here---
+PRESELECTED_ROSBAG= ---insert preselected rosbag name here---
+
+PRESELECTED_MODEL= ---insert preselected model name---
+OPEN_CLIP_MODELS= ---insert dir of open_clip models---
+OTHER_MODELS= ---insert dir of other models without the open_clip infrastructure---
+
+POSITIONAL_GRID_RESOLUTION=0.0001
+
+IMAGE_TOPIC_PREVIEWS=/frontend/image_topic_previews
+POSITIONAL_LOOKUP_TABLE=/frontend/positional_lookup_table/positional_lookup_table.json
+
+CANVASES_FILE=/public/canvases.json
+POLYGONS_DIR=/public/positional_polygons
+
+LOOKUP_TABLES=/metadata/lookup_tables
+TOPICS=/metadata/topics
+
+ADJACENT_SIMILARITIES=/processed/adjacent_similarities
+EMBEDDINGS=/processed/embeddings
+
+EXPORT=/export
+```
 
 ## 🧪 Evaluation Summary
 
