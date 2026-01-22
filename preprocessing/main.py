@@ -25,7 +25,7 @@ from preprocessing.core import RosbagProcessingContext, McapProcessingContext
 from preprocessing.utils import get_logger, get_all_rosbags, get_all_mcaps
 
 # Import all step classes
-from preprocessing.steps import (
+from preprocessing.processors import (
     # Step 1: Topics
     TopicsExtractionProcessor,
     # Step 2: Timestamp Lookup

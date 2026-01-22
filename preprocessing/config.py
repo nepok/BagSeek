@@ -92,7 +92,7 @@ class Config:
         self.other_models_dir = Path(os.getenv("BASE") + os.getenv("OTHER_MODELS"))
         
         # Processing configuration (with defaults)
-        self.positional_grid_resolution= float(os.getenv("POSITIONAL_GRID_RESOLUTION", "0.0001"))
+        self.positional_grid_resolution= 0.0001
         self.open_clip_models = os.getenv("OPEN_CLIP_MODELS")
         self.other_models = os.getenv("OTHER_MODELS")
         self.shard_size = int(os.getenv("SHARD_SIZE", "100000"))
