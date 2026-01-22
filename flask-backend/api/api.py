@@ -60,14 +60,9 @@ gemma_tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
 gemma_model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b-it")
 
 BASE_STR = os.getenv("BASE")
-IMAGES_STR = os.getenv("IMAGES")
-
-ODOM_STR = os.getenv("ODOM")
-POINTCLOUDS_STR = os.getenv("POINTCLOUDS")
-POSITIONS_STR = os.getenv("POSITIONS")
-VIDEOS_STR = os.getenv("VIDEOS")
 
 IMAGE_TOPIC_PREVIEWS_STR = os.getenv("IMAGE_TOPIC_PREVIEWS")
+POSITIONAL_LOOKUP_TABLE_STR = os.getenv("POSITIONAL_LOOKUP_TABLE")
 
 LOOKUP_TABLES_STR = os.getenv("LOOKUP_TABLES")
 TOPICS_STR = os.getenv("TOPICS")
@@ -77,7 +72,6 @@ POLYGONS_DIR_STR = os.getenv("POLYGONS_DIR")
 
 ADJACENT_SIMILARITIES_STR = os.getenv("ADJACENT_SIMILARITIES")
 EMBEDDINGS_STR = os.getenv("EMBEDDINGS")
-POSITIONAL_LOOKUP_TABLE_STR = os.getenv("POSITIONAL_LOOKUP_TABLE")
 
 EXPORT_STR = os.getenv("EXPORT")
 
@@ -87,12 +81,12 @@ EXPORT_STR = os.getenv("EXPORT")
 ROSBAGS = Path(os.getenv("ROSBAGS"))
 PRESELECTED_ROSBAG = Path(os.getenv("PRESELECTED_ROSBAG"))
 
-IMAGES = Path(BASE_STR + IMAGES_STR)
-ODOM = Path(BASE_STR + ODOM_STR)
-POINTCLOUDS = Path(BASE_STR + POINTCLOUDS_STR)
-POSITIONS = Path(BASE_STR + POSITIONS_STR)
-VIDEOS = Path(BASE_STR + VIDEOS_STR)
+PRESELECTED_MODEL = str(os.getenv("PRESELECTED_MODEL"))
+OPEN_CLIP_MODELS = Path(os.getenv("OPEN_CLIP_MODELS"))
+OTHER_MODELS = Path(os.getenv("OTHER_MODELS"))
+
 IMAGE_TOPIC_PREVIEWS = Path(BASE_STR + IMAGE_TOPIC_PREVIEWS_STR)
+POSITIONAL_LOOKUP_TABLE = Path(BASE_STR + POSITIONAL_LOOKUP_TABLE_STR)
 
 LOOKUP_TABLES = Path(BASE_STR + LOOKUP_TABLES_STR)
 TOPICS = Path(BASE_STR + TOPICS_STR)
@@ -102,17 +96,12 @@ POLYGONS_DIR = Path(BASE_STR + POLYGONS_DIR_STR)
 
 ADJACENT_SIMILARITIES = Path(BASE_STR + ADJACENT_SIMILARITIES_STR)
 EMBEDDINGS = Path(BASE_STR + EMBEDDINGS_STR)
-POSITIONAL_LOOKUP_TABLE = Path(BASE_STR + POSITIONAL_LOOKUP_TABLE_STR)
 
 EXPORT = Path(BASE_STR + EXPORT_STR)
 
-PRESELECTED_MODEL = str(os.getenv("PRESELECTED_MODEL"))
-OPEN_CLIP_MODELS = Path(os.getenv("OPEN_CLIP_MODELS"))
-OTHER_MODELS = Path(os.getenv("OTHER_MODELS"))
 
 SELECTED_ROSBAG = PRESELECTED_ROSBAG
 SELECTED_MODEL = PRESELECTED_MODEL
-MIN_BUFFER_IN_NS = 1000000000 # 1 second
 
 # Helper function to extract rosbag name from path (handles multipart rosbags)
 def get_camera_position_order(topic_name: str) -> int:
@@ -1577,34 +1566,6 @@ def get_topic_timestamp_at_index():
         logging.error(f"Error in get_topic_timestamp_at_index: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
     
-@app.route('/images/<path:image_path>')
-def serve_image(image_path):
-    """
-    Serve an extracted image file from the backend image directory.
-    New structure: images/rosbag_name/topic_name/mcap_identifier/timestamp.png
-    """
-    try:
-        # Construct full path explicitly
-        full_path = IMAGES / image_path
-        
-        # Check if file exists
-        if not full_path.exists():
-            return jsonify({'error': 'Image not found'}), 404
-        
-        # Check if it's actually a file
-        if not full_path.is_file():
-            return jsonify({'error': 'Invalid path'}), 400
-        
-        # Use send_file with explicit path (convert Path to string)
-        response = send_file(str(full_path), mimetype='image/png')
-        response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
-        return response
-        
-    except PermissionError:
-        return jsonify({'error': 'Permission denied'}), 403
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/adjacency-image/<path:adjacency_image_path>')
 def serve_adjacency_image(adjacency_image_path):
     """
@@ -1931,87 +1892,6 @@ def get_content_mcap():
                 return format_message_response(ros2_msg, schema_name, str(timestamp))
         
         return jsonify({'error': 'No message found for the provided timestamp and topic'}), 404
-        
-    except Exception as e:
-        logging.exception("[C] Failed to read mcap file")
-        return jsonify({'error': f'Error reading mcap file: {str(e)}'}), 500
-
-
-@app.route('/api/content-mcap-with-buffer', methods=['GET', 'POST'])
-def get_content_mcap_with_buffer():
-    relative_rosbag_path = request.args.get('relative_rosbag_path')
-    topic = request.args.get('topic')
-    mcap_identifier = request.args.get('mcap_identifier')
-    timestamp = request.args.get('timestamp', type=int)
-    
-    # Validate required parameters
-    if not topic or not mcap_identifier or timestamp is None:
-        return jsonify({'error': 'Missing required parameters: topic, mcap_identifier, and timestamp are required'}), 400
-    
-    # Handle missing relative_rosbag_path - use SELECTED_ROSBAG as fallback
-    if not relative_rosbag_path:
-        if not SELECTED_ROSBAG:
-            return jsonify({'error': 'No rosbag selected and relative_rosbag_path not provided'}), 400
-        # Get relative path from SELECTED_ROSBAG
-        # SELECTED_ROSBAG might be a string or Path, and might be absolute or relative
-        selected_rosbag_str = str(SELECTED_ROSBAG)
-        selected_rosbag_path = Path(selected_rosbag_str)
-        
-        # Check if it's an absolute path (starts with /) or relative
-        if selected_rosbag_path.is_absolute():
-            # Absolute path - get relative path from ROSBAGS
-            try:
-                relative_rosbag_path = str(selected_rosbag_path.relative_to(ROSBAGS))
-            except ValueError:
-                # If not a subpath, try to construct it from the basename
-                relative_rosbag_path = selected_rosbag_path.name
-        else:
-            # Already a relative path - use it directly
-            relative_rosbag_path = selected_rosbag_str
-    
-    # Extract base rosbag name for MCAP filename
-    # For multipart rosbags like "rosbag2_2025_07_23-07_29_39_multi_parts/Part_2",
-    # we need to get the base name (before _multi_parts) for the MCAP filename
-    # MCAP files are named like: rosbag2_2025_07_23-07_29_39_669.mcap
-    if '_multi_parts' in relative_rosbag_path:
-        # Extract base name before _multi_parts
-        base_rosbag_name = relative_rosbag_path.split('_multi_parts')[0]
-    else:
-        # For regular rosbags, use the full path as base name
-        base_rosbag_name = relative_rosbag_path
-    
-    # Construct MCAP path using Path objects for proper handling
-    # MCAP files are in the rosbag directory, named: {base_rosbag_name}_{mcap_identifier}.mcap
-    mcap_path = ROSBAGS / relative_rosbag_path / f"{base_rosbag_name}_{mcap_identifier}.mcap"
-    
-    logging.warning(f"[CONTENT_MCAP] MCAP path: {mcap_path}")
-    
-    responses = []
-    try:        
-        with open(mcap_path, "rb") as f:
-            reader = SeekingReader(f, decoder_factories=[DecoderFactory()])
-            for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
-                topics=[topic],
-                start_time=timestamp,
-                end_time=timestamp + MIN_BUFFER_IN_NS,
-                log_time_order=True,
-                reverse=False
-            ):
-                # Get schema name for message type
-                schema_name = schema.name if schema else None
-                if not schema_name:
-                    return jsonify({'error': 'No schema found for message'}), 404
-                    
-                response = format_message_response(ros2_msg, schema_name, str(timestamp))
-                responses.append(response)
-
-                # Use the shared format_message_response function
-                # Convert timestamp to string to match the function signature
-
-        logging.warning(f"[CONTENT_MCAP] Responses: {responses}")      
-        return jsonify(responses)
-        
-        #return jsonify({'error': 'No message found for the provided timestamp and topic'}), 404
         
     except Exception as e:
         logging.exception("[C] Failed to read mcap file")
