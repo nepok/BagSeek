@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button, ButtonGroup } from '@mui/material';
 import './Header.css';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -16,6 +16,8 @@ interface HeaderProps {
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
   handleResetCanvas: () => void; // Callback to reset canvas to empty state
   availableTopics: string[]; // List of available topics for the currently selected rosbag
+  canvasList: { [key: string]: { root: any, metadata: { [id: number]: any }, rosbag?: string } }; // Collection of saved canvases from App
+  refreshCanvasList: () => Promise<void>; // Function to refresh canvas list from backend
 }
 
 // Generates a consistent color based on rosbag name hash for UI elements
@@ -55,22 +57,24 @@ const isCanvasCompatible = (canvas: any, availableTopics: string[]): boolean => 
   const requiredTopics = extractTopicsFromCanvas(canvas);
   if (requiredTopics.length === 0) return false; // Canvas with no topics is not compatible
   
-  // Normalize available topics for comparison (canvas topics are already normalized)
+  // Normalize both canvas topics and available topics for comparison
+  const normalizedRequiredTopics = requiredTopics.map(normalizeTopic);
   const normalizedAvailableTopics = availableTopics.map(normalizeTopic);
   
-  // Check if all required topics (already normalized) exist in available topics
-  return requiredTopics.every(topic => normalizedAvailableTopics.includes(topic));
+  // Check if all required topics exist in available topics
+  return normalizedRequiredTopics.every(topic => normalizedAvailableTopics.includes(topic));
 };
 
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics, canvasList, refreshCanvasList }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const viewMode: 'explore' | 'search' = location.pathname.startsWith('/search') ? 'search' : 'explore';
+  const viewMode: 'explore' | 'search' | 'positional' = 
+    location.pathname.startsWith('/search') ? 'search' : 
+    location.pathname.startsWith('/positional-overview') ? 'positional' : 
+    'explore';
   // State to show/hide the canvas selection popper menu
   const [showCanvasPopper, setShowCanvasPopper] = useState(false);
-  // List of canvases loaded from backend, storing full canvas data for topic checking
-  const [canvasList, setCanvasList] = useState<{ name: string, canvas: any, rosbag: string, color: string }[]>([]);
   // Controls visibility of TextField for adding a new canvas
   const [showTextField, setShowTextField] = useState(false);
   // Holds the user input for new canvas name
@@ -78,27 +82,15 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   // Ref for the canvas icon button to anchor the popper menu
   const canvasIconRef = useRef<HTMLButtonElement | null>(null);
 
-  // Fetch canvas list from backend on component mount to populate menu
-  const fetchCanvasList = async () => {
-    try {
-      const response = await fetch('/api/load-canvases');
-      const data = await response.json();
-      // Map backend data to local state including full canvas data and generated colors
-      setCanvasList(Object.keys(data).map((name) => ({
-        name,
-        canvas: data[name],
-        rosbag: data[name].rosbag,
-        color: generateColor(data[name].rosbag || ''),
-      })));
-    } catch (error) {
-      console.error('Error fetching canvas list:', error);
-    }
-  };
-
-  // Initial fetch of canvas list when component mounts
-  useEffect(() => {
-    fetchCanvasList();
-  }, []);
+  // Map canvasList prop to the format needed for display (with colors)
+  const mappedCanvasList = useMemo(() => {
+    return Object.keys(canvasList).map((name) => ({
+      name,
+      canvas: canvasList[name],
+      rosbag: canvasList[name].rosbag || '',
+      color: generateColor(canvasList[name].rosbag || ''),
+    }));
+  }, [canvasList]);
 
   // Toggle the visibility of the canvas selection popper
   const toggleCanvasOptions = () => {
@@ -108,9 +100,9 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   // Add a new canvas using the entered name, update list and reset input field
   const onAddCanvas = async () => {
     if (!newCanvasName.trim()) return; // Ignore empty names
-    handleAddCanvas(newCanvasName);
-    // Fetch updated canvas list to get the full canvas data
-    await fetchCanvasList();
+    await handleAddCanvas(newCanvasName);
+    // Refresh canvas list to get the full canvas data
+    await refreshCanvasList();
     setNewCanvasName('');
     setShowTextField(false);
   };
@@ -129,7 +121,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         body: JSON.stringify({ name }),
       });
       // Refresh canvas list to get updated data
-      await fetchCanvasList();
+      await refreshCanvasList();
     } catch (error) {
       console.error('Error deleting canvas:', error);
     }
@@ -137,10 +129,103 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   
   return (
     <Box className="header-container" display="flex" justifyContent="space-between" alignItems="center" padding="8px 16px">
-      <Typography variant="h4" className="header-title">
-        BagSeek
-      </Typography>
+      {/* Left side: Logo + Navigation buttons */}
+      <Box display="flex" alignItems="center">
+        <Typography
+          variant="h4"
+          className="header-title"
+          component="a"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate('/search');
+          }}
+          sx={{
+            cursor: 'pointer',
+            textDecoration: 'none',
+            color: 'inherit',
+            '&:hover': {
+              opacity: 0.8,
+            },
+          }}
+        >
+          BagSeek
+        </Typography>
+        {/* Mode selection buttons */}
+        <Box sx={{ flexGrow: 0, display: 'flex', marginLeft: 4, gap: 1 }}>
+          <Button
+            variant="text"
+            onClick={() => {
+              navigate('/positional-overview');
+            }}
+            sx={{ 
+              color: 'white',
+              textTransform: 'none',
+              fontWeight: viewMode === 'positional' ? 700 : 400,
+              opacity: viewMode === 'positional' ? 1 : 0.7,
+              '&:hover': {
+                opacity: 1,
+                backgroundColor: 'transparent',
+              },
+            }}
+          >
+            MAP
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => {
+              // Save current explore query so we can restore it later
+              if (location.pathname.startsWith('/explore')) {
+                try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
+              }
+              navigate('/search');
+            }}
+            sx={{ 
+              color: 'white',
+              textTransform: 'none',
+              fontWeight: viewMode === 'search' ? 700 : 400,
+              opacity: viewMode === 'search' ? 1 : 0.7,
+              '&:hover': {
+                opacity: 1,
+                backgroundColor: 'transparent',
+              },
+            }}
+          >
+            SEARCH
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => {
+              // Cache current search tab before navigating to explore
+              if (location.pathname.startsWith('/search')) {
+                try { 
+                  const cache = (globalThis as any).__BagSeekGlobalSearchCache;
+                  if (cache && cache.viewMode) {
+                    sessionStorage.setItem('lastSearchTab', cache.viewMode);
+                  }
+                } catch {}
+              }
+              let qs = '';
+              try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
+              navigate(`/explore${qs}`);
+            }}
+            sx={{ 
+              color: 'white',
+              textTransform: 'none',
+              fontWeight: viewMode === 'explore' ? 700 : 400,
+              opacity: viewMode === 'explore' ? 1 : 0.7,
+              '&:hover': {
+                opacity: 1,
+                backgroundColor: 'transparent',
+              },
+            }}
+          >
+            EXPLORE
+          </Button>
+        </Box>
+      </Box>
 
+      {/* Right side: Icons */}
       <Box display="flex" alignItems="center">
         {/* Popper menu anchored to canvas icon, lists canvases and add option */}
         <Popper open={showCanvasPopper} anchorEl={canvasIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '300px' }}>
@@ -163,7 +248,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               RESET
             </Button>
             
-            {canvasList.map((canvas, index) => {
+            {mappedCanvasList.map((canvas, index) => {
               const isExactMatch = selectedRosbag === canvas.rosbag;
               const isCompatible = isCanvasCompatible(canvas.canvas, availableTopics);
               const canLoad = isExactMatch || isCompatible;
@@ -254,40 +339,6 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             </Tooltip>
           </>
         )}
-        {/* Mode selection button group */}
-        <ButtonGroup variant="outlined" sx={{ marginLeft: 2 }}>
-          <Button
-            variant={viewMode === 'search' ? 'contained' : 'outlined'}
-            onClick={() => {
-              // Save current explore query so we can restore it later
-              if (location.pathname.startsWith('/explore')) {
-                try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
-              }
-              navigate('/search');
-            }}
-          >
-            Search
-          </Button>
-          <Button
-            variant={viewMode === 'explore' ? 'contained' : 'outlined'}
-            onClick={() => {
-              // Cache current search tab before navigating to explore
-              if (location.pathname.startsWith('/search')) {
-                try { 
-                  const cache = (globalThis as any).__BagSeekGlobalSearchCache;
-                  if (cache && cache.viewMode) {
-                    sessionStorage.setItem('lastSearchTab', cache.viewMode);
-                  }
-                } catch {}
-              }
-              let qs = '';
-              try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
-              navigate(`/explore${qs}`);
-            }}
-          >
-            Explore
-          </Button>
-        </ButtonGroup>
       </Box>
     </Box>
   );

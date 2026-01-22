@@ -64,7 +64,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       if (data.timestamp) {
         // Convert timestamp to human-readable format
         const date = new Date(Number(data.timestamp) / 1000000); // Convert nanoseconds to milliseconds
-        setRealTimestamp(date.toISOString());
+        setRealTimestamp(date.toLocaleString());
       }
 
       // Handle image response
@@ -310,6 +310,13 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     );
   };
 
+  // Reusable TypographyBox component - always shows topic and timestamp
+  const TypographyBox: React.FC = () => (
+    <div className="typography-box">
+      <Typography variant="body2">{nodeTopic}</Typography>
+    </div>
+  );
+
   // Render content based on the topicType
   let renderedContent: React.ReactNode = null;
   if ((nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image") && imageUrl) {
@@ -320,19 +327,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           alt={`Image for ${nodeTopic}`}
           loading="lazy"
         />
-        <div className="typography-box">
-          <Typography
-            variant="body2"
-            sx={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {nodeTopic}
-          </Typography>
-          <Typography variant="body2">{realTimestamp}</Typography>
-        </div>
       </div>
     ); // image rendering block
   } else if (pointCloud) {
@@ -344,10 +338,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           <pointLight position={[10, 10, 10]} />
           <PointCloud pointCloud={pointCloud} />
         </Canvas>
-        <div className="typography-box">
-          <Typography variant="body2">{nodeTopic}</Typography>
-          <Typography variant="body2">{realTimestamp}</Typography>
-        </div>
       </div>
     ); // point cloud rendering block
   } else if (text) {
@@ -356,10 +346,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
         <Typography variant="body2" sx={{ color: "white", whiteSpace: "pre-wrap" }}>
           {text}
         </Typography>
-        <div className="typography-box">
-          <Typography variant="body2">{nodeTopic}</Typography>
-          <Typography variant="body2">{realTimestamp}</Typography>
-        </div>
       </Box>
     ); // text rendering block
   } else if (position) {
@@ -390,6 +376,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   return (
     <div className="node-content"> {/* container for rendered content */}
       {renderedContent}
+      <TypographyBox />
     </div>
   );
 };

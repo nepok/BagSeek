@@ -13,11 +13,12 @@ interface ExportProps {
   onClose: () => void;
   searchMarks: { value: number; label: string }[];
   topicTypes: Record<string, string>;
+  selectedRosbag: string | null;
 }
 
-const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, isVisible, onClose, searchMarks, topicTypes }) => {
+const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, isVisible, onClose, searchMarks, topicTypes, selectedRosbag: selectedRosbagProp }) => {
 
-  // State for selected rosbag name
+  // State for selected rosbag name (fallback if prop not provided)
   const [selectedRosbag, setSelectedRosbag] = useState('');
   // State for new rosbag export name input
   const [newRosbagName, setNewRosbagName] = useState('');
@@ -30,7 +31,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
   // Range of timestamps selected for export (indices)
   const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
   // Export progress and status information
-  const [exportStatus, setExportStatus] = useState<{progress: number, status: string} | null>(null);
+  const [exportStatus, setExportStatus] = useState<{progress: number, status: string, message?: string} | null>(null);
   // Ref for Leaflet map instance
   const mapRef = useRef<L.Map | null>(null);
   // Ref for map container DOM element
@@ -133,14 +134,23 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
   }, [isVisible]);
   */
 
-  // Fetch currently selected rosbag on component mount
+  // Fetch currently selected rosbag when dialog becomes visible (fallback if prop not provided)
   useEffect(() => {
+    // Use prop if provided, otherwise fetch
+    if (selectedRosbagProp) {
+      setSelectedRosbag(selectedRosbagProp);
+      return;
+    }
+
+    // Only fetch if dialog is visible and prop is not provided
+    if (!isVisible) return;
+
     const fetchSelectedRosbag = async () => {
       try {
         const response = await fetch('/api/get-selected-rosbag');
         const result = await response.json();
         if (response.ok) {
-          setSelectedRosbag(result.selected_rosbag);
+          setSelectedRosbag(result.selected_rosbag || result.selectedRosbag || '');
         } else {
           console.error('Failed to fetch selected rosbag:', result.error);
         }
@@ -150,32 +160,109 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
     };
 
     fetchSelectedRosbag();
-  }, []);
+  }, [isVisible, selectedRosbagProp]);
+
+  // Poll export status periodically when running, stop after 3 failed fetches
+  useEffect(() => {
+    let retryCount = 0;
+    let interval: NodeJS.Timeout;
+
+    if (exportStatus?.status === 'running' || exportStatus?.status === 'starting') {
+      interval = setInterval(async () => {
+        try {
+          const response = await fetch('/api/export-status');
+          const data = await response.json();
+          setExportStatus(data);
+          retryCount = 0; // reset on success
+        } catch (err) {
+          console.error('Failed to fetch export status:', err);
+          retryCount++;
+          if (retryCount >= 3) {
+            console.warn('Stopping export status polling after 3 failed attempts');
+            clearInterval(interval);
+          }
+        }
+      }, 1000);
+    }
+
+    return () => clearInterval(interval);
+  }, [exportStatus?.status]);
 
   // Reset export status message after completion delay
   useEffect(() => {
-  if (exportStatus?.status === 'done') {
-    const timer = setTimeout(() => {
-      setExportStatus(null);
-    }, 3000);
-    return () => clearTimeout(timer);
-  }
-}, [exportStatus]);
+    if (exportStatus?.status === 'completed' || exportStatus?.status === 'done') {
+      const timer = setTimeout(() => {
+        setExportStatus(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [exportStatus]);
 
   // Handle export button click: send export request and poll for status
   const handleExport = async () => {
     if (timestamps.length === 0) return;
 
-    setExportStatus({status: 'starting', progress: -1});
+    // Don't set status here - backend will set it. We'll fetch it after sending the request.
+
+    // Get timestamp indices
+    const startIndex = Math.min(exportRange[0], timestamps.length - 1);
+    const endIndex = Math.min(exportRange[1], timestamps.length - 1);
+    const startTimestamp = timestamps[startIndex];
+    const endTimestamp = timestamps[endIndex];
+
+    // Fetch MCAP mapping to get MCAP IDs for the timestamps
+    let startMcapId: string | null = null;
+    let endMcapId: string | null = null;
+    
+    try {
+      // Fetch the MCAP mapping for the selected rosbag
+      const mappingResponse = await fetch(`/api/get-topic-mcap-mapping?relative_rosbag_path=${encodeURIComponent(selectedRosbag)}`);
+      if (mappingResponse.ok) {
+        const mappingData = await mappingResponse.json();
+        const ranges = mappingData.ranges || [];
+        
+        // Helper function to find MCAP ID for a given index
+        const findMcapIdForIndex = (index: number): string | null => {
+          for (let i = 0; i < ranges.length; i++) {
+            const range = ranges[i];
+            const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : mappingData.total;
+            
+            if (index >= range.startIndex && index < nextStart) {
+              return range.mcap_identifier;
+            }
+          }
+          return null;
+        };
+        
+        startMcapId = findMcapIdForIndex(startIndex);
+        endMcapId = findMcapIdForIndex(endIndex);
+      }
+    } catch (error) {
+      console.error('Error fetching MCAP mapping:', error);
+      alert('Failed to fetch MCAP mapping. Export cannot proceed without MCAP IDs.');
+      // Don't set status here - let backend handle it, or clear it since export didn't start
+      setExportStatus(null);
+      return;
+    }
 
     const exportData = {
-      new_rosbag_name: newRosbagName,
-      topics: selectedTopics,
-      start_timestamp: timestamps[Math.min(exportRange[0], timestamps.length - 1)],
-      end_timestamp: timestamps[Math.min(exportRange[1], timestamps.length - 1)],
+      new_rosbag_name: newRosbagName.trim(),
+      topics: selectedTopics, // Can be empty array (will export all topics if empty)
+      start_timestamp: startTimestamp, // nanoseconds
+      end_timestamp: endTimestamp, // nanoseconds
+      start_mcap_id: startMcapId, // string
+      end_mcap_id: endMcapId, // string
     };
 
+    // Set status to 'starting' BEFORE making API call to trigger polling immediately
+    // This matches the pattern used in GlobalSearch
+    setExportStatus({ progress: -1, status: 'starting', message: 'Starting export...' });
+
+    // Close dialog immediately so progress can be shown
+    onClose();
+
     try {
+      // Send export request (backend will update status to 'running' when it starts processing)
       const response = await fetch('/api/export-rosbag', {
         method: 'POST',
         headers: {
@@ -184,31 +271,65 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
         body: JSON.stringify(exportData),
       });
 
-      const result = await response.json();
+      // Check if response is JSON before parsing
+      const contentType = response.headers.get('content-type');
+      let result;
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const text = await response.text();
+          if (!text) {
+            console.error('Empty response from server');
+            setExportStatus({status: 'error', progress: -1, message: `Server returned empty response: ${response.status} ${response.statusText}`});
+            return;
+          }
+          result = JSON.parse(text);
+        } catch (jsonError) {
+          console.error('Failed to parse JSON response:', jsonError);
+          setExportStatus({status: 'error', progress: -1, message: `Server error: ${response.status} ${response.statusText}. Failed to parse JSON.`});
+          return;
+        }
+      } else {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        setExportStatus({status: 'error', progress: -1, message: `Server returned non-JSON response: ${response.status} ${response.statusText}`});
+        return;
+      }
+
       if (response.ok) {
-        // Start polling export status every second after successful request
-        const pollInterval = setInterval(async () => {
-          try {
-            const statusRes = await fetch("/api/export-status");
+        // Status polling is already running (triggered by 'starting' status above)
+        // Backend will update status to 'running' when it starts processing
+        // No need to fetch here - polling will pick it up automatically
+      } else {
+        console.error('Export failed:', result?.error || result);
+        // Backend should set error status, but if it didn't, fetch it
+        try {
+          const statusRes = await fetch('/api/export-status');
+          if (statusRes.ok) {
             const statusData = await statusRes.json();
             setExportStatus(statusData);
-
-            if (statusData.status === "done" || statusData.status === "idle") {
-              clearInterval(pollInterval);
-            }
-          } catch (err) {
-            console.error("Polling error:", err);
-            clearInterval(pollInterval);
+          } else {
+            // Fallback if backend doesn't have status
+            setExportStatus({status: 'error', progress: -1, message: result?.error || 'Unknown error'});
           }
-        }, 1000);
-      } else {
-        console.error('Export failed:', result.error);
+        } catch (err) {
+          setExportStatus({status: 'error', progress: -1, message: result?.error || 'Unknown error'});
+        }
       }
     } catch (error) {
       console.error('Error exporting rosbag:', error);
+      // Try to get status from backend first
+      try {
+        const statusRes = await fetch('/api/export-status');
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          setExportStatus(statusData);
+        } else {
+          setExportStatus({status: 'error', progress: -1, message: error instanceof Error ? error.message : 'Unknown error'});
+        }
+      } catch (err) {
+        setExportStatus({status: 'error', progress: -1, message: error instanceof Error ? error.message : 'Unknown error'});
+      }
     }
-
-    onClose();
   };
 
   // Handle slider value changes for export range
@@ -269,22 +390,30 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, i
             position: 'fixed',
             bottom: 80,
             left: 20,
-            backgroundColor: '#202020',
+            backgroundColor: exportStatus.status === 'error' ? '#d32f2f' : '#202020',
             color: 'white',
             padding: '8px 16px',
             borderRadius: '8px',
             zIndex: 9999,
-            boxShadow: '0px 0px 10px rgba(0,0,0,0.5)'
+            boxShadow: '0px 0px 10px rgba(0,0,0,0.5)',
+            maxWidth: '400px'
           }}>
-            <Typography variant="body2">
-              {exportStatus.progress === -1
-                ? "Loading Rosbag..."
-                : exportStatus.progress === 1
-                  ? "Finished exporting!"
-                  : `Export progress: ${(exportStatus.progress * 100).toFixed(0)}%`}
+            <Typography variant="body2" sx={{ 
+              color: exportStatus.status === 'error' ? '#fff' : 'inherit',
+              fontWeight: exportStatus.status === 'error' ? 'bold' : 'normal'
+            }}>
+              {exportStatus.status === 'error'
+                ? exportStatus.message || "Export failed!"
+                : exportStatus.progress === -1
+                  ? exportStatus.message || "Loading Rosbag..."
+                  : exportStatus.progress === 1 || exportStatus.status === "completed"
+                    ? exportStatus.message || "Finished exporting!"
+                    : exportStatus.message || `Export progress: ${(exportStatus.progress * 100).toFixed(0)}%`}
             </Typography>
             <Box sx={{ width: 200, mt: 1 }}>
-              {exportStatus.progress === -1 ? (
+              {exportStatus.status === 'error' ? (
+                <LinearProgress variant="determinate" value={100} color="error" />
+              ) : exportStatus.progress === -1 ? (
                 <LinearProgress />
               ) : (
                 <LinearProgress variant="determinate" value={exportStatus.progress * 100} />

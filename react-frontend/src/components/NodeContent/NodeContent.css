@@ -23,7 +23,6 @@
   object-fit: contain; /* Contain the image within the container */
 }
 
-
 .centered-text {
   display: flex;
   justify-content: center; /* Horizontally center the text */
@@ -46,6 +45,18 @@
   justify-content: space-between;
   align-items: center;
   max-height: 30px; /* Ensure it stays small */
+  font-size: 0.2rem;
+  overflow: hidden; /* Prevent content from overflowing */
+}
+
+.typography-box p {
+  font-size: 8pt;
+  white-space: nowrap; /* Keep text on one line */
+  overflow: hidden; /* Hide overflow */
+  text-overflow: ellipsis; /* Show ellipsis for truncated text */
+  margin: 0; /* Remove default margins */
+  flex: 0 1 auto; /* Don't grow, can shrink, auto basis */
+  min-width: 0; /* Allow shrinking below content size */
 }
 
 .gps-container {

@@ -9,7 +9,8 @@ from rosbag2_py import SequentialReader, SequentialWriter, StorageOptions, Conve
 from rclpy.serialization import deserialize_message, serialize_message
 from rosidl_runtime_py.utilities import get_message
 from mcap_ros2.reader import read_ros2_messages
-from mcap.reader import make_reader
+from mcap.reader import make_reader, SeekingReader
+from mcap.writer import Writer, CompressionType, IndexType
 from mcap_ros2.decoder import DecoderFactory
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory, send_file, abort # type: ignore
@@ -32,6 +33,9 @@ from collections import defaultdict, OrderedDict
 from dotenv import load_dotenv
 from time import time
 import sys
+import subprocess
+import re
+from typing import Optional, List, Dict
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -63,11 +67,13 @@ POINTCLOUDS_STR = os.getenv("POINTCLOUDS")
 POSITIONS_STR = os.getenv("POSITIONS")
 VIDEOS_STR = os.getenv("VIDEOS")
 
-REPRESENTATIVE_PREVIEWS_STR = os.getenv("REPRESENTATIVE_PREVIEWS")
+IMAGE_TOPIC_PREVIEWS_STR = os.getenv("IMAGE_TOPIC_PREVIEWS")
 
 LOOKUP_TABLES_STR = os.getenv("LOOKUP_TABLES")
 TOPICS_STR = os.getenv("TOPICS")
+
 CANVASES_FILE_STR = os.getenv("CANVASES_FILE")
+POLYGONS_DIR_STR = os.getenv("POLYGONS_DIR")
 
 ADJACENT_SIMILARITIES_STR = os.getenv("ADJACENT_SIMILARITIES")
 EMBEDDINGS_STR = os.getenv("EMBEDDINGS")
@@ -86,11 +92,13 @@ ODOM = Path(BASE_STR + ODOM_STR)
 POINTCLOUDS = Path(BASE_STR + POINTCLOUDS_STR)
 POSITIONS = Path(BASE_STR + POSITIONS_STR)
 VIDEOS = Path(BASE_STR + VIDEOS_STR)
-REPRESENTATIVE_PREVIEWS = Path(BASE_STR + REPRESENTATIVE_PREVIEWS_STR)
+IMAGE_TOPIC_PREVIEWS = Path(BASE_STR + IMAGE_TOPIC_PREVIEWS_STR)
 
 LOOKUP_TABLES = Path(BASE_STR + LOOKUP_TABLES_STR)
 TOPICS = Path(BASE_STR + TOPICS_STR)
+
 CANVASES_FILE = Path(BASE_STR + CANVASES_FILE_STR)
+POLYGONS_DIR = Path(BASE_STR + POLYGONS_DIR_STR)
 
 ADJACENT_SIMILARITIES = Path(BASE_STR + ADJACENT_SIMILARITIES_STR)
 EMBEDDINGS = Path(BASE_STR + EMBEDDINGS_STR)
@@ -104,17 +112,153 @@ OTHER_MODELS = Path(os.getenv("OTHER_MODELS"))
 
 SELECTED_ROSBAG = PRESELECTED_ROSBAG
 SELECTED_MODEL = PRESELECTED_MODEL
+MIN_BUFFER_IN_NS = 1000000000 # 1 second
+
+# Helper function to extract rosbag name from path (handles multipart rosbags)
+def get_camera_position_order(topic_name: str) -> int:
+    """
+    Get ordering for camera positions within the same priority level.
+    Returns order where lower order = appears first.
+    
+    Camera position order:
+    0: side left
+    1: side right
+    2: rear left
+    3: rear mid
+    4: rear right
+    5: everything else (will be sorted alphabetically)
+    """
+    topic_lower = topic_name.lower()
+    
+    # Check for camera position keywords (order matters - check more specific first)
+    if "side" in topic_lower and "left" in topic_lower:
+        return 0
+    elif "side" in topic_lower and "right" in topic_lower:
+        return 1
+    elif "rear" in topic_lower and "left" in topic_lower:
+        return 2
+    elif "rear" in topic_lower and "mid" in topic_lower:
+        return 3
+    elif "rear" in topic_lower and "right" in topic_lower:
+        return 4
+    else:
+        return 5
+
+def get_topic_sort_priority(topic_name: str, topic_type: str = None) -> int:
+    """
+    Get sorting priority for a topic.
+    Returns priority where lower priority = appears first.
+    
+    Priority order:
+    0: Topics containing "zed"
+    1: Image topics (sensor_msgs/msg/Image, sensor_msgs/msg/CompressedImage)
+    2: PointCloud topics (sensor_msgs/msg/PointCloud2)
+    3: Positional topics (NavSatFix, GPS, GNSS, TF, pose, position, odom)
+    4: Everything else (alphabetically)
+    """
+    topic_lower = topic_name.lower()
+    
+    # Priority 0: Topics containing "zed"
+    if "zed" in topic_lower:
+        return 0
+    
+    # Determine topic category
+    is_image = False
+    is_pointcloud = False
+    is_positional = False
+    
+    if topic_type:
+        # Use provided topic type
+        type_lower = topic_type.lower()
+        is_image = "image" in type_lower and ("sensor_msgs" in type_lower or "compressedimage" in type_lower)
+        is_pointcloud = "pointcloud" in type_lower or "point_cloud" in type_lower
+        is_positional = any(x in type_lower for x in ["navsatfix", "gps", "gnss", "tf", "odom", "pose"])
+    else:
+        # Infer from topic name
+        is_image = any(x in topic_lower for x in ["image", "camera", "rgb", "color"])
+        is_pointcloud = any(x in topic_lower for x in ["pointcloud", "point_cloud", "lidar", "pcl"])
+        is_positional = any(x in topic_lower for x in ["gps", "gnss", "navsat", "tf", "odom", "pose", "position"])
+    
+    if is_image:
+        return 1
+    elif is_pointcloud:
+        return 2
+    elif is_positional:
+        return 3
+    else:
+        return 4
+
+def sort_topics(topics: list[str], topic_types: dict[str, str] = None) -> list[str]:
+    """
+    Sort topics according to the default priority order.
+    Within image topics, camera positions are ordered: side left, side right, rear left, rear mid, rear right.
+    
+    Args:
+        topics: List of topic names
+        topic_types: Optional dict mapping topic names to their types
+    
+    Returns:
+        Sorted list of topics
+    """
+    if topic_types is None:
+        topic_types = {}
+    
+    def sort_key(topic: str) -> tuple[int, int, str]:
+        topic_type = topic_types.get(topic)
+        priority = get_topic_sort_priority(topic, topic_type)
+        
+        # For image topics (priority 1), apply camera position ordering
+        camera_order = 5  # Default (alphabetical)
+        if priority == 1:  # Image topics
+            camera_order = get_camera_position_order(topic)
+        
+        return (priority, camera_order, topic.lower())
+    
+    return sorted(topics, key=sort_key)
+
+def extract_rosbag_name_from_path(rosbag_path: str) -> str:
+    """Extract the correct rosbag name from a path, handling multipart rosbags.
+    
+    For multipart rosbags, the lookup tables are stored in a directory named after
+    the parent directory (e.g., 'rosbag2_xxx_multi_parts'), not the individual part.
+    
+    Args:
+        rosbag_path: Full path to the rosbag (can be a multipart rosbag part)
+    
+    Returns:
+        Rosbag name to use for lookup tables (parent directory name for multipart, basename for regular)
+    
+    Examples:
+        - Regular: '/path/to/rosbag2_2025_07_25-12_17_25' -> 'rosbag2_2025_07_25-12_17_25'
+        - Multipart: '/path/to/rosbag2_xxx_multi_parts/Part_1' -> 'rosbag2_xxx_multi_parts/Part_1'
+    """
+    path_obj = Path(rosbag_path)
+    basename = path_obj.name
+    parent_name = path_obj.parent.name
+    
+    # Check if this is a multipart rosbag (parent ends with _multi_parts and current is Part_N)
+    if parent_name.endswith("_multi_parts") and basename.startswith("Part_"):
+        # For multipart rosbags, return parent_name/Part_N (e.g., 'rosbag2_xxx_multi_parts/Part_1')
+        return f"{parent_name}/{basename}"
+    else:
+        # For regular rosbags, use the directory name itself
+        return basename
+
+# Cache for lookup tables to avoid reloading on every request
+_lookup_table_cache: dict[str, tuple[pd.DataFrame, float]] = {}
 
 # Helper function for loading lookup tables (defined below, initialized after)
-def load_lookup_tables_for_rosbag(rosbag_name: str) -> pd.DataFrame:
+def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> pd.DataFrame:
     """Load and combine all mcap CSV files for a rosbag.
     
     Args:
         rosbag_name: Name of the rosbag (directory name, not full path)
+        use_cache: Whether to use cached data if available
     
     Returns:
         Combined DataFrame with all lookup table data, or empty DataFrame if none found.
     """
+
     if not LOOKUP_TABLES:
         return pd.DataFrame()
     
@@ -122,14 +266,27 @@ def load_lookup_tables_for_rosbag(rosbag_name: str) -> pd.DataFrame:
     if not lookup_rosbag_dir.exists():
         return pd.DataFrame()
     
+    # Check cache
+    if use_cache and rosbag_name in _lookup_table_cache:
+        cached_df, cached_mtime = _lookup_table_cache[rosbag_name]
+        # Check if any CSV file was modified
+        csv_files = sorted(lookup_rosbag_dir.glob("*.csv"))
+        if csv_files:
+            latest_mtime = max(f.stat().st_mtime for f in csv_files)
+            if latest_mtime <= cached_mtime:
+                return cached_df
+    
     csv_files = sorted(lookup_rosbag_dir.glob("*.csv"))
     if not csv_files:
         return pd.DataFrame()
     
     all_dfs = []
+    latest_mtime = 0.0
     for csv_path in sorted(csv_files):
         mcap_id = csv_path.stem  # Extract mcap_id from filename (without .csv extension)
         try:
+            stat = csv_path.stat()
+            latest_mtime = max(latest_mtime, stat.st_mtime)
             df = pd.read_csv(csv_path, dtype=str)
             if len(df) > 0:
                 # Add mcap_id as a column to track which mcap this row came from
@@ -142,16 +299,22 @@ def load_lookup_tables_for_rosbag(rosbag_name: str) -> pd.DataFrame:
     if not all_dfs:
         return pd.DataFrame()
     
-    return pd.concat(all_dfs, ignore_index=True)
+    result_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Cache the result
+    if use_cache:
+        _lookup_table_cache[rosbag_name] = (result_df, latest_mtime)
+    
+    return result_df
 
 # ALIGNED_DATA: DataFrame mapping reference timestamps to per-topic timestamps for alignment
 
-ALIGNED_DATA = load_lookup_tables_for_rosbag(os.path.basename(SELECTED_ROSBAG))
+ALIGNED_DATA = load_lookup_tables_for_rosbag(extract_rosbag_name_from_path(str(SELECTED_ROSBAG)))
 
 
 # EXPORT_PROGRESS: Dictionary to track progress and status of export jobs
-EXPORT_PROGRESS = {"status": "idle", "progress": -1}
-SEARCH_PROGRESS = {"status": "idle", "progress": -1, "message": "idle"}
+EXPORT_PROGRESS = {"status": "idle", "progress": -1, "message": "Waiting for export..."}
+SEARCH_PROGRESS = {"status": "idle", "progress": -1, "message": "Waiting for search..."}
 
 SEARCHED_ROSBAGS = []
 
@@ -164,6 +327,7 @@ _matching_rosbag_cache = {"paths": [], "timestamp": 0.0}
 _file_path_cache_lock = Lock()
 
 _positional_lookup_cache: dict[str, dict[str, dict[str, int]]] = {"data": None, "mtime": None}  # type: ignore[assignment]
+
 CUSTOM_MODEL_DEFAULTS = {
     "agriclip": OTHER_MODELS / "agriclip.pt",
     "epoch32": OTHER_MODELS / "epoch_32.pt",
@@ -514,8 +678,17 @@ def tokenize_texts(texts: Sequence[str], context_length: int, device: str) -> to
 # Canvas config utility functions (UI state persistence)
 def load_canvases():
     if os.path.exists(CANVASES_FILE):
-        with open(CANVASES_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(CANVASES_FILE, "r") as f:
+                content = f.read().strip()
+                # If file is empty or only whitespace, return empty dict
+                if not content:
+                    return {}
+                return json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            # If JSON is invalid, return empty dict and log warning
+            logging.warning(f"Invalid JSON in {CANVASES_FILE}, returning empty dict")
+            return {}
     return {}
 
 def save_canvases(data):
@@ -524,6 +697,11 @@ def save_canvases(data):
 
 # Copy messages from one Rosbag to another within a timestamp range and selected topics
 def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timestamp, end_timestamp) -> None:
+    global EXPORT_PROGRESS
+    
+    # Reset export status at the beginning
+    EXPORT_PROGRESS = {"status": "idle", "progress": -1, "message": "Waiting for export..."}
+    
     reader = SequentialReader()
     writer = SequentialWriter()
     
@@ -531,12 +709,6 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
         # Open reader
         reader.open(
             StorageOptions(uri=str(src), storage_id="mcap"),
-            ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr")
-        )
-        
-        # Open writer
-        writer.open(
-            StorageOptions(uri=str(dst), storage_id="mcap"),
             ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr")
         )
         
@@ -553,6 +725,29 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
                 topic_map[topic_meta.name] = True
                 topics_to_create[topic_meta.name] = topic_meta.type
         
+        # Count total messages for progress tracking using MCAP summary
+        # This is much faster than iterating through all messages
+        total_msgs = 0
+        with open(src, "rb") as mcap_file:
+            mcap_reader = SeekingReader(mcap_file, decoder_factories=[DecoderFactory()])
+            summary = mcap_reader.get_summary()
+            
+            if summary and summary.channels and summary.statistics:
+                channels = summary.channels
+                channel_message_counts = summary.statistics.channel_message_counts
+                
+                # Sum message counts for included topics
+                for channel_id, channel in channels.items():
+                    if channel.topic in topic_map:
+                        message_count = channel_message_counts.get(channel_id, 0)
+                        total_msgs += message_count
+        
+        # Open writer
+        writer.open(
+            StorageOptions(uri=str(dst), storage_id="mcap"),
+            ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr")
+        )
+        
         # Create topics in writer
         for topic_name, topic_type in topics_to_create.items():
             writer.create_topic(
@@ -562,19 +757,6 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
                     serialization_format="cdr"
                 )
             )
-        
-        # First pass: count total messages for progress tracking
-        total_msgs = 0
-        reader2 = SequentialReader()
-        reader2.open(
-            StorageOptions(uri=str(src), storage_id="mcap"),
-            ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr")
-        )
-        while reader2.has_next():
-            read_topic, _, _ = reader2.read_next()
-            if read_topic in topic_map:
-                total_msgs += 1
-        del reader2
         
         EXPORT_PROGRESS["status"] = "starting"
         EXPORT_PROGRESS["progress"] = -1
@@ -657,25 +839,6 @@ def export_rosbag_with_topics(src: Path, dst: Path, includedTopics, start_timest
 def get_export_status():
     return jsonify(EXPORT_PROGRESS)
 
-# Set the model for performing semantic search
-@app.route('/api/set-model', methods=['POST'])
-def post_model():
-    """
-    Set the current CLIP model for semantic search.
-    """
-    try:
-        data = request.get_json()  # Get the JSON payload
-        model_value = data.get('model')  # The path value from the JSON
-
-        global SELECTED_MODEL
-        SELECTED_MODEL = model_value
-
-        # Model reload is handled on demand in the search endpoint
-        return jsonify({"message": f"Model {model_value} successfully posted."}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 # Get all available models for semantisch searching    
 @app.route('/api/get-models', methods=['GET'])
 def get_models():
@@ -706,7 +869,7 @@ def post_file_paths():
         SELECTED_ROSBAG = path_value
 
         global ALIGNED_DATA
-        rosbag_name = os.path.basename(SELECTED_ROSBAG)
+        rosbag_name = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
         ALIGNED_DATA = load_lookup_tables_for_rosbag(rosbag_name)
 
         global SEARCHED_ROSBAGS
@@ -759,7 +922,7 @@ def get_positions_rosbags():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/positions/rosbags/<string:rosbag_name>', methods=['GET'])
+@app.route('/api/positions/rosbags/<path:rosbag_name>', methods=['GET'])
 def get_positional_rosbag_entries(rosbag_name: str):
     """
     Return the positional lookup entries for a specific rosbag.
@@ -796,7 +959,7 @@ def get_positional_rosbag_entries(rosbag_name: str):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/positions/rosbags/<string:rosbag_name>/mcaps', methods=['GET'])
+@app.route('/api/positions/rosbags/<path:rosbag_name>/mcaps', methods=['GET'])
 def get_positional_rosbag_mcaps(rosbag_name: str):
     """
     Return positional lookup entries for a specific rosbag grouped by location with per-mcap breakdown.
@@ -833,7 +996,7 @@ def get_positional_rosbag_mcaps(rosbag_name: str):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/positions/rosbags/<string:rosbag_name>/mcap-list', methods=['GET'])
+@app.route('/api/positions/rosbags/<path:rosbag_name>/mcap-list', methods=['GET'])
 def get_positional_rosbag_mcap_list(rosbag_name: str):
     """
     Return positional lookup entries for a specific rosbag grouped by location with per-mcap breakdown.
@@ -872,10 +1035,6 @@ def get_positional_rosbag_mcap_list(rosbag_name: str):
         return jsonify({"error": "Positional lookup file not available"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-# Polygon endpoints
-POLYGONS_DIR = Path("/mnt/data/ongoing_projects/positional_filter/polygons")
 
 @app.route('/api/polygons/list', methods=['GET'])
 def get_polygon_files():
@@ -973,7 +1132,7 @@ def get_positions_all():
 def get_file_paths():
     """
     Return all available Rosbag file paths (excluding those in EXCLUDED).
-    Simplified: Just scans ROSBAGS directory, no IMAGES scan.
+    Recursively scans ROSBAGS directory and collects all leaf directories.
     """
     try:
         now = time()
@@ -981,66 +1140,83 @@ def get_file_paths():
             cached_paths = list(_matching_rosbag_cache["paths"])
             cached_timestamp = _matching_rosbag_cache["timestamp"]
 
+        cache_age = now - cached_timestamp
+        #logging.warning(f"[FILTER] Cache check: cached_paths count={len(cached_paths)}, cache_age={cache_age:.2f}s, TTL={FILE_PATH_CACHE_TTL_SECONDS}s")
+        
         if (
             cached_paths
-            and (now - cached_timestamp) < FILE_PATH_CACHE_TTL_SECONDS
+            and cache_age < FILE_PATH_CACHE_TTL_SECONDS
         ):
+            #logging.warning(f"[FILTER] Returning cached paths (age: {cache_age:.2f}s < TTL: {FILE_PATH_CACHE_TTL_SECONDS}s)")
             return jsonify({"paths": cached_paths}), 200
+        
+        #logging.warning(f"[FILTER] Cache expired or empty, rebuilding...")
 
         rosbag_paths: list[str] = []
-        for base_dir in [ROSBAGS]:
-            if not base_dir or not base_dir.exists():
+        base_path = Path(ROSBAGS)
+        
+        if not base_path.exists():
+            return jsonify({"paths": []}), 200
+        
+        # Recursively walk through all directories
+        for root, dirs, files in os.walk(str(base_path), topdown=True):
+            # Skip EXCLUDED and EXPORTED directories
+            if "EXCLUDED" in root or "EXPORTED" in root:
+                dirs[:] = []  # Don't recurse into excluded directories
                 continue
             
-            base_path = Path(base_dir)
-            stack = [base_path]
+            # Remove excluded subdirectories from dirs list to skip them
+            dirs[:] = [d for d in dirs if "EXCLUDED" not in d and "EXPORTED" not in d]
             
-            while stack:
-                current_dir = stack.pop()
-                
-                # Skip EXCLUDED and EXPORTED directories early
-                if "EXCLUDED" in current_dir.parts or "EXPORTED" in current_dir.parts:
-                    continue
-                
-                # Skip the base "rosbags" parent folder itself
-                if current_dir == base_path:
-                    # Just add its subdirectories to stack, don't add base_path to results
-                    try:
-                        with os.scandir(str(current_dir)) as entries:
-                            subdirs = []
-                            for entry in entries:
-                                if entry.is_dir():
-                                    # Skip EXCLUDED and EXPORTED subdirectories immediately
-                                    if "EXCLUDED" not in entry.name and "EXPORTED" not in entry.name:
-                                        subdirs.append(Path(entry.path))
-                            stack.extend(subdirs)
-                    except (PermissionError, OSError) as e:
-                        logging.warning(f"Cannot access directory {current_dir}: {e}")
-                    continue
-                
-                try:
-                    # Fast: Just list directories, like 'ls'
-                    with os.scandir(str(current_dir)) as entries:
-                        subdirs = []
-                        
-                        for entry in entries:
-                            if entry.is_dir():
-                                # Skip EXCLUDED and EXPORTED subdirectories immediately
-                                if "EXCLUDED" not in entry.name and "EXPORTED" not in entry.name:
-                                    subdirs.append(Path(entry.path))
-                        
-                        # Add this directory as a potential rosbag path
-                        rosbag_paths.append(str(current_dir))
-                        
-                        # Recurse into subdirectories
-                        stack.extend(subdirs)
-                            
-                except (PermissionError, OSError) as e:
-                    # Skip directories we can't access
-                    logging.warning(f"Cannot access directory {current_dir}: {e}")
-                    continue
+            # If this directory has no subdirectories (or only excluded ones), it's a leaf
+            if not dirs:
+                root_path = Path(root)
+                # Skip the base directory itself
+                if root_path != base_path:
+                    relative_path = root_path.relative_to(base_path)
+                    rosbag_paths.append(str(relative_path))
         
         rosbag_paths.sort()
+        
+        # Filter rosbags to only include those that have embeddings in at least one model
+        #logging.warning(f"[FILTER] Starting filtering: EMBEDDINGS={EMBEDDINGS}, exists={EMBEDDINGS.exists() if EMBEDDINGS else False}")
+        #logging.warning(f"[FILTER] ROSBAGS={ROSBAGS}, total rosbag_paths before filtering: {len(rosbag_paths)}")
+        
+        if EMBEDDINGS and EMBEDDINGS.exists():
+            rosbags_base_path = Path(ROSBAGS)
+            #logging.warning(f"[FILTER] rosbags_base_path={rosbags_base_path}")
+            
+            # Filter: check if rosbag exists in ROSBAGS AND in EMBEDDINGS (any model)
+            original_count = len(rosbag_paths)
+            filtered_paths = []
+            
+            for relative_path in rosbag_paths:
+                # Check if rosbag exists in ROSBAGS
+                rosbag_full_path = rosbags_base_path / relative_path
+                rosbag_exists = rosbag_full_path.exists() and rosbag_full_path.is_dir()
+                #logging.warning(f"[FILTER] Checking rosbag: {relative_path}")
+                #logging.warning(f"[FILTER]   ROSBAGS path: {rosbag_full_path}, exists: {rosbag_exists}")
+                
+                if not rosbag_exists:
+                    #logging.warning(f"[FILTER]   Filtering out: {relative_path} - doesn't exist in ROSBAGS")
+                    continue
+                
+                # Check if this rosbag exists in EMBEDDINGS for any model
+                found_in_embeddings = False
+                for model_dir in EMBEDDINGS.iterdir():
+                    if not model_dir.is_dir():
+                        continue
+                    
+                    embeddings_rosbag_path = model_dir / relative_path
+                    if embeddings_rosbag_path.exists() and embeddings_rosbag_path.is_dir():
+                        #logging.warning(f"[FILTER]   Found in EMBEDDINGS: {model_dir.name}/{relative_path}")
+                        found_in_embeddings = True
+                        break
+                
+                if found_in_embeddings:
+                    filtered_paths.append(relative_path)
+            
+            rosbag_paths = filtered_paths
 
         with _file_path_cache_lock:
             _matching_rosbag_cache["paths"] = list(rosbag_paths)
@@ -1050,45 +1226,6 @@ def get_file_paths():
     except Exception as e:
         logging.error(f"Error in get_file_paths: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/refresh-file-paths', methods=['POST'])
-def refresh_file_paths():
-    """Force refresh of the cached Rosbag file paths."""
-    try:
-        rosbag_paths: list[str] = []
-        for base_dir in [ROSBAGS]: #ROSBAGS_DIR_MNT, ROSBAGS_DIR_NAS):
-            if not base_dir:
-                continue
-            for root, dirs, files in os.walk(str(base_dir), topdown=True):
-                if "metadata.yaml" in files:
-                    if "EXCLUDED" in root:
-                        dirs[:] = []
-                        continue
-                    rosbag_paths.append(root)
-                    dirs[:] = []
-        rosbag_paths.sort()
-
-        image_basenames: set[str] = set()
-        if IMAGES and IMAGES.exists() and IMAGES.is_dir():
-            for entry in os.scandir(str(IMAGES)):
-                if entry.is_dir():
-                    image_basenames.add(entry.name)
-
-        matching_paths = [
-            path
-            for path in rosbag_paths
-            if os.path.basename(os.path.normpath(path)) in image_basenames
-        ]
-
-        now = time()
-        with _file_path_cache_lock:
-            _matching_rosbag_cache["paths"] = list(matching_paths)
-            _matching_rosbag_cache["timestamp"] = now
-
-        return jsonify({"paths": matching_paths, "message": "Rosbag file paths refreshed."}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
     
 # Get the currently selected rosbag
 @app.route('/api/get-selected-rosbag', methods=['GET'])
@@ -1097,38 +1234,17 @@ def get_selected_rosbag():
     Return the currently selected Rosbag file name.
     """
     try:
-        selectedRosbag = os.path.basename(SELECTED_ROSBAG)
+        selectedRosbag = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
         return jsonify({"selectedRosbag": selectedRosbag}), 200
     except Exception as e:
         # Handle any errors that occur (e.g., directory not found, permission issues)
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/set-searched-rosbags', methods=['POST'])
-def set_searched_rosbags():
-    """
-    Set the currently searched Rosbag file name.
-    This is used to filter available topics and images based on the selected Rosbag.
-    """
-    try:
-        data = request.get_json()  # Get the JSON payload
-        searchedRosbags = data.get('searchedRosbags')  # The list of searched Rosbags
-
-        if not isinstance(searchedRosbags, list):
-            return jsonify({"error": "searchedRosbags must be a list"}), 400
-
-        global SEARCHED_ROSBAGS
-        SEARCHED_ROSBAGS = searchedRosbags
-
-        return jsonify({"message": "Searched Rosbags updated successfully."}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500 
-    
 # Get available topics from pre-generated JSON file for the current Rosbag
 @app.route('/api/get-available-topics', methods=['GET'])
 def get_available_rosbag_topics():
     try:
-        rosbag_name = os.path.basename(SELECTED_ROSBAG)
+        rosbag_name = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
@@ -1137,7 +1253,20 @@ def get_available_rosbag_topics():
         with open(topics_json_path, 'r') as f:
             topics_data = json.load(f)
 
-        topics = topics_data.get("topics", [])
+        # Topics is now a dict mapping topic names to types
+        # Extract the topic names (keys) as a list
+        topics_dict = topics_data.get("topics", {})
+        if isinstance(topics_dict, dict):
+            topics = list(topics_dict.keys())
+            topic_types = topics_dict  # Use the dict itself as topic_types mapping
+        else:
+            # Fallback for old format where topics was a list
+            topics = topics_dict if isinstance(topics_dict, list) else []
+            topic_types = {}
+        
+        # Sort topics using the default priority order
+        topics = sort_topics(topics, topic_types)
+        
         return jsonify({'availableTopics': topics}), 200
 
     except Exception as e:
@@ -1163,7 +1292,7 @@ def get_available_image_topics():
 
             model_entry = {}
             for rosbag_param in rosbag_params:
-                rosbag_name = os.path.basename(rosbag_param)
+                rosbag_name = extract_rosbag_name_from_path(rosbag_param)
                 rosbag_path = os.path.join(model_path, rosbag_name)
                 if not os.path.isdir(rosbag_path):
                     continue
@@ -1172,7 +1301,21 @@ def get_available_image_topics():
                 for topic in os.listdir(rosbag_path):
                     topics.append(topic.replace("__", "/"))
 
-                model_entry[rosbag_name] = sorted(topics)
+                # Try to load topic types from topics JSON file
+                topic_types = {}
+                try:
+                    topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
+                    if os.path.exists(topics_json_path):
+                        with open(topics_json_path, 'r') as f:
+                            topics_data = json.load(f)
+                            topics_dict = topics_data.get("topics", {})
+                            if isinstance(topics_dict, dict):
+                                topic_types = topics_dict
+                except Exception as e:
+                    logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
+
+                # Sort topics using the default priority order
+                model_entry[rosbag_name] = sort_topics(topics, topic_types)
 
             if model_entry:
                 results[model_param] = model_entry
@@ -1187,21 +1330,29 @@ def get_available_image_topics():
 @app.route('/api/get-available-topic-types', methods=['GET'])
 def get_available_rosbag_topic_types():
     try:
-        rosbag_name = os.path.basename(SELECTED_ROSBAG)
+        rosbag_name = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
-            return jsonify({'availableTopicTypes': []}), 200
+            return jsonify({'availableTopicTypes': {}}), 200
 
         with open(topics_json_path, 'r') as f:
             topics_data = json.load(f)
 
-        availableTopicTypes = topics_data.get("types", [])
+        # Topics is now a dict mapping topic names to types
+        # Return the topics dict directly as it contains the mapping
+        topics_dict = topics_data.get("topics", {})
+        if isinstance(topics_dict, dict):
+            availableTopicTypes = topics_dict
+        else:
+            # Fallback for old format where types was in a separate "types" field
+            availableTopicTypes = topics_data.get("types", {})
+        
         return jsonify({'availableTopicTypes': availableTopicTypes}), 200
 
     except Exception as e:
         logging.error(f"Error reading topics JSON: {e}")
-        return jsonify({'availableTopicTypes': []}), 200
+        return jsonify({'availableTopicTypes': {}}), 200
     
 # Returns list of all reference timestamps used for data alignment
 @app.route('/api/get-available-timestamps', methods=['GET'])
@@ -1216,7 +1367,7 @@ def get_timestamp_lengths():
     timestampLengths = {}
 
     for rosbag in rosbags:
-        rosbag_name = os.path.basename(rosbag)
+        rosbag_name = extract_rosbag_name_from_path(rosbag)
         try:
             df = load_lookup_tables_for_rosbag(rosbag_name)
             if df.empty:
@@ -1252,6 +1403,179 @@ def get_timestamp_lengths():
 def get_timestamp_density():
     density_array = ALIGNED_DATA.drop(columns=["Reference Timestamp"]).notnull().sum(axis=1).tolist()
     return jsonify({'timestampDensity': density_array})
+
+@app.route('/api/get-topic-mcap-mapping', methods=['GET'])
+def get_topic_mcap_mapping():
+    """Get mcap_identifier ranges for Reference Timestamp indices.
+    
+    Returns ranges for ALL topics in the rosbag (mcap_id ranges are the same for all topics).
+    Only requires relative_rosbag_path parameter.
+    
+    Returns contiguous ranges where each range has the same mcap_identifier.
+    Each range contains only startIndex and mcap_identifier (endIndex can be derived from next range's startIndex - 1).
+    
+    Optimized for speed:
+    - Cached dataframe loading
+    - Minimal data returned (no topicTimestamp, no endIndex)
+    - Efficient single-pass iteration
+    - One call returns ranges for all topics
+    """
+    try:
+        relative_rosbag_path = request.args.get('relative_rosbag_path')
+        
+        if not relative_rosbag_path:
+            return jsonify({'error': 'Missing required parameter: relative_rosbag_path'}), 400
+        
+        # Convert relative path to full path, then extract rosbag name
+        full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
+        rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
+        
+        # Load lookup tables for this rosbag (cached)
+        df = load_lookup_tables_for_rosbag(rosbag_name, use_cache=True)
+        if df.empty:
+            return jsonify({'error': 'No lookup table data found'}), 404
+        
+        # Sort by Reference Timestamp to ensure consistent ordering (only if not already sorted)
+        if 'Reference Timestamp' in df.columns:
+            # Check if already sorted by checking if first < last
+            if len(df) > 1:
+                first_ts = df.iloc[0]['Reference Timestamp']
+                last_ts = df.iloc[-1]['Reference Timestamp']
+                try:
+                    if float(first_ts) > float(last_ts):
+                        df = df.sort_values('Reference Timestamp').reset_index(drop=True)
+                except (ValueError, TypeError):
+                    df = df.sort_values('Reference Timestamp').reset_index(drop=True)
+        
+        total = len(df)  # Number of Reference Timestamps (rows)
+        
+        if total == 0:
+            return jsonify({'ranges': [], 'total': 0}), 200
+        
+        # Build ranges: group contiguous indices with the same mcap_identifier
+        # The mcap_id ranges are the same for all topics (based on _mcap_id column)
+        ranges = []
+        current_range_start = 0
+        current_mcap_id = df.iloc[0].get('_mcap_id')
+        
+        # Single pass: iterate through dataframe and detect mcap_id changes
+        for idx in range(1, total):
+            mcap_id = df.iloc[idx].get('_mcap_id')
+            
+            # If mcap_id changed, close current range and start new one
+            if mcap_id != current_mcap_id:
+                ranges.append({
+                    'startIndex': current_range_start,
+                    'mcap_identifier': current_mcap_id
+                })
+                current_range_start = idx
+                current_mcap_id = mcap_id
+        
+        # Close the last range
+        ranges.append({
+            'startIndex': current_range_start,
+            'mcap_identifier': current_mcap_id
+        })
+        
+        # Sort ranges by numeric MCAP ID (not alphabetically)
+        def get_mcap_id_numeric(mcap_id):
+            """Extract numeric value from MCAP ID for sorting."""
+            if mcap_id is None:
+                return float('inf')
+            try:
+                # Try to convert directly to int
+                return int(mcap_id)
+            except (ValueError, TypeError):
+                # If it's a string, try to extract number from it
+                try:
+                    # Handle cases like "mcap_10" or "10_mcap"
+                    numbers = re.findall(r'\d+', str(mcap_id))
+                    if numbers:
+                        return int(numbers[0])
+                    return float('inf')
+                except:
+                    return float('inf')
+        
+        ranges.sort(key=lambda r: (get_mcap_id_numeric(r['mcap_identifier']), r['startIndex']))
+        
+        return jsonify({
+            'ranges': ranges,
+            'total': total
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error in get_topic_mcap_mapping: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get-topic-timestamp-at-index', methods=['GET'])
+def get_topic_timestamp_at_index():
+    """Get topic timestamp for a specific index. Lightweight endpoint for hover previews."""
+    try:
+        relative_rosbag_path = request.args.get('relative_rosbag_path')
+        topic = request.args.get('topic')
+        index = request.args.get('index', type=int)
+        
+        if not relative_rosbag_path or not topic or index is None:
+            return jsonify({'error': 'Missing required parameters: relative_rosbag_path, topic, index'}), 400
+        
+        # Convert relative path to full path, then extract rosbag name
+        full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
+        rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
+        df = load_lookup_tables_for_rosbag(rosbag_name, use_cache=True)
+        
+        if df.empty or index < 0 or index >= len(df):
+            return jsonify({'error': 'Index out of range'}), 404
+        
+        # Sort if needed
+        if 'Reference Timestamp' in df.columns and len(df) > 1:
+            first_ts = df.iloc[0]['Reference Timestamp']
+            last_ts = df.iloc[-1]['Reference Timestamp']
+            try:
+                if float(first_ts) > float(last_ts):
+                    df = df.sort_values('Reference Timestamp').reset_index(drop=True)
+            except (ValueError, TypeError):
+                df = df.sort_values('Reference Timestamp').reset_index(drop=True)
+        
+        if topic not in df.columns:
+            return jsonify({'error': f'Topic column "{topic}" not found'}), 404
+        
+        topic_ts = df.iloc[index][topic]
+        
+        # Helper to check if value is non-nan
+        def non_nan(v):
+            if v is None:
+                return False
+            if isinstance(v, float):
+                return not math.isnan(v)
+            s = str(v)
+            return s.lower() != 'nan' and s != '' and s != 'None'
+        
+        # If empty, search nearby (up to 100 rows)
+        if not non_nan(topic_ts):
+            radius = min(100, len(df) - 1)
+            for off in range(1, radius + 1):
+                for candidate_idx in [index - off, index + off]:
+                    if 0 <= candidate_idx < len(df):
+                        candidate_ts = df.iloc[candidate_idx][topic]
+                        if non_nan(candidate_ts):
+                            topic_ts = candidate_ts
+                            break
+                if non_nan(topic_ts):
+                    break
+        
+        if not non_nan(topic_ts):
+            return jsonify({'error': 'No valid timestamp found'}), 404
+        
+        try:
+            timestamp_ns = topic_ts
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid timestamp value'}), 400
+        
+        return jsonify({'topicTimestamp': timestamp_ns}), 200
+        
+    except Exception as e:
+        logging.error(f"Error in get_topic_timestamp_at_index: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
     
 @app.route('/images/<path:image_path>')
 def serve_image(image_path):
@@ -1290,168 +1614,14 @@ def serve_adjacency_image(adjacency_image_path):
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
 
-@app.route('/representative-image/<path:representative_image_path>')
-def serve_representative_image(representative_image_path):
+@app.route('/image-topic-preview/<path:image_topic_preview_path>')
+def serve_image_topic_preview(image_topic_preview_path):
     """
     Serve an extracted image file from the backend image directory.
     """
-    response = send_from_directory(REPRESENTATIVE_PREVIEWS, representative_image_path)
+    response = send_from_directory(IMAGE_TOPIC_PREVIEWS, image_topic_preview_path)
     response.headers["Cache-Control"] = "public, max-age=86400"  # Cache for 1 day
     return response
-
-# Return preview image URL for a topic at a given reference index within a rosbag
-# The HeatBar represents all reference timestamps for the rosbag
-# This endpoint takes the index (position in reference timestamps array) and returns the corresponding image
-@app.route('/api/get-topic-image-preview', methods=['GET'])
-def get_topic_image_preview():
-    try:
-        rosbag_name = request.args.get('rosbag', type=str)
-        topic = request.args.get('topic', type=str)
-        index = request.args.get('index', type=int)
-
-        if not rosbag_name or not topic:
-            return jsonify({'error': 'Missing rosbag or topic'}), 400
-        
-        if index is None:
-            return jsonify({'error': 'Missing index parameter'}), 400
-
-        # Helper function to check if value is non-nan
-        def non_nan(v):
-            if v is None:
-                return False
-            if isinstance(v, float):
-                return not math.isnan(v)
-            s = str(v)
-            return s.lower() != 'nan' and s != '' and s != 'None'
-
-        # Load all mcap lookup tables for this rosbag and combine them
-        # Structure: lookup_tables/rosbag_name/mcap_id.csv
-        lookup_rosbag_dir = LOOKUP_TABLES / rosbag_name
-        if not lookup_rosbag_dir.exists():
-            return jsonify({'error': 'Lookup table directory not found'}), 404
-
-        # Find all mcap CSV files for this rosbag
-        csv_files = sorted(lookup_rosbag_dir.glob("*.csv"))
-        if not csv_files:
-            return jsonify({'error': 'No lookup table CSV files found'}), 404
-
-        # Load all mcap CSVs and combine them, tracking which mcap each row came from
-        all_dfs = []
-        for csv_path in csv_files:
-            mcap_id = csv_path.stem  # Extract mcap_id from filename (without .csv extension)
-            try:
-                df = pd.read_csv(csv_path, dtype=str)
-                if len(df) > 0:
-                    # Add mcap_id as a column to track which mcap this row came from
-                    df['_mcap_id'] = mcap_id
-                    all_dfs.append(df)
-            except Exception as e:
-                logging.warning(f"Failed to load CSV {csv_path}: {e}")
-                continue
-
-        if not all_dfs:
-            return jsonify({'error': 'No valid lookup table data found'}), 404
-
-        # Combine all dataframes
-        combined_df = pd.concat(all_dfs, ignore_index=True)
-        
-        # Sort by Reference Timestamp to ensure consistent ordering
-        if 'Reference Timestamp' in combined_df.columns:
-            combined_df = combined_df.sort_values('Reference Timestamp').reset_index(drop=True)
-        
-        total = len(combined_df)
-        
-        if total == 0:
-            return jsonify({'error': 'No timestamps available'}), 404
-
-        # Validate index
-        if index < 0 or index >= total:
-            return jsonify({'error': f'Index {index} out of range [0, {total-1}]'}), 400
-
-        # Check if topic exists in the combined dataframe
-        if topic not in combined_df.columns:
-            return jsonify({'error': f'Topic column "{topic}" not found in lookup tables'}), 404
-
-        # Get the row at the specified index
-        row = combined_df.iloc[index]
-        
-        # Get the original timestamp for this topic at this reference timestamp index
-        topic_ts = row[topic]
-        mcap_id = row['_mcap_id']
-        
-        # If the topic timestamp is empty at this index, search nearby for a valid value
-        if not non_nan(topic_ts):
-            # Search within a reasonable radius
-            radius = min(500, total - 1)
-            found = False
-            
-            for off in range(1, radius + 1):
-                # Check left and right
-                for candidate_idx in [index - off, index + off]:
-                    if 0 <= candidate_idx < total:
-                        candidate_row = combined_df.iloc[candidate_idx]
-                        candidate_ts = candidate_row[topic]
-                        if non_nan(candidate_ts):
-                            topic_ts = candidate_ts
-                            mcap_id = candidate_row['_mcap_id']
-                            found = True
-                            break
-                if found:
-                    break
-            
-            if not found:
-                return jsonify({'error': f'No valid timestamp found for topic "{topic}" near index {index}'}), 404
-
-        # Build the image path: images/rosbag_name/topic_name/mcap_id/timestamp.png
-        # Normalize topic name: replace / with _ and remove leading _
-        topic_safe = topic.replace('/', '_').lstrip('_')
-        file_path = IMAGES / rosbag_name / topic_safe / mcap_id / f"{topic_ts}.png"
-        
-        # If the exact file doesn't exist, search nearby for an existing image
-        if not file_path.exists():
-            radius = min(500, total - 1)
-            best_path = None
-            best_ts = topic_ts
-            best_mcap = mcap_id
-            
-            # Search nearby indices for an existing image file
-            for off in range(1, radius + 1):
-                for candidate_idx in [index - off, index + off]:
-                    if 0 <= candidate_idx < total:
-                        candidate_row = combined_df.iloc[candidate_idx]
-                        candidate_ts = candidate_row[topic]
-                        candidate_mcap = candidate_row['_mcap_id']
-                        
-                        if non_nan(candidate_ts):
-                            candidate_path = IMAGES / rosbag_name / topic_safe / candidate_mcap / f"{candidate_ts}.png"
-                            if candidate_path.exists():
-                                best_path = candidate_path
-                                best_ts = candidate_ts
-                                best_mcap = candidate_mcap
-                                break
-                if best_path:
-                    break
-            
-            if best_path:
-                file_path = best_path
-                topic_ts = best_ts
-                mcap_id = best_mcap
-            else:
-                return jsonify({'error': f'Image not found for topic "{topic}" at index {index} or nearby'}), 404
-
-        # Construct relative URL: /images/rosbag_name/topic_safe/mcap_id/timestamp.png
-        rel_url = f"/images/{rosbag_name}/{topic_safe}/{mcap_id}/{topic_ts}.png"
-        return jsonify({
-            'imageUrl': rel_url,
-            'timestamp': topic_ts,
-            'index': index,
-            'total': total,
-            'mcap_id': mcap_id
-        }), 200
-
-    except Exception as e:
-        logging.error(f"Error in get_topic_image_preview: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
 
 def normalize_topic(topic: str) -> str:
     """Normalize topic name: replace / with _ and remove leading _"""
@@ -1692,311 +1862,62 @@ def format_message_response(msg, topic_type: str, timestamp: str):
             # Fallback for unsupported or unknown message types: return string representation
             return jsonify({'type': 'text', 'text': str(msg), 'timestamp': timestamp})
 
-# Return deserialized message content (image, TF, IMU, etc.) for currently selected topic and reference timestamp
-@app.route('/api/content', methods=['GET'])
-def get_ros():
-    """
-    Return deserialized message content (image, TF, IMU, etc.) for the currently selected topic and reference timestamp.
-    The logic:
-      - Uses the mapped_timestamps for the current reference timestamp to get the aligned topic timestamp.
-      - Opens the Rosbag and iterates messages for the topic, looking for the exact timestamp.
-      - Deserializes the message and returns a JSON structure based on the message type (point cloud, position, tf, imu, etc).
-    """
-    global mapped_timestamps
-    topic = request.args.get('topic', default=None, type=str)
-    mcap_identifier = request.args.get('mcap_identifier', default=None, type=str)
-    timestamp = mapped_timestamps.get(topic) if topic and mcap_identifier else None
-
-    logging.warning(f"{SELECTED_ROSBAG}/{os.path.basename(SELECTED_ROSBAG)}_{mcap_identifier}.mcap")
-    if not timestamp:
-        return jsonify({'error': 'No mapped timestamp found for the provided topic'})
-
-    # Open the rosbag to find the message at the requested timestamp and topic
-    reader = SequentialReader()
-    try:
-        reader.open(
-            StorageOptions(uri=f"{SELECTED_ROSBAG}/{os.path.basename(SELECTED_ROSBAG)}_{mcap_identifier}.mcap", storage_id="mcap"),
-            ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr")
-        )
-        
-        # Get topic types for message deserialization
-        all_topics = reader.get_all_topics_and_types()
-        topic_type_map = {topic_meta.name: topic_meta.type for topic_meta in all_topics}
-        
-        # Match normalized input topic against rosbag topics
-        # The input topic is normalized (e.g., "camera_side_right_image_raw_compressed")
-        # but rosbag topics are original (e.g., "/camera/side_right/image_raw/compressed")
-        normalized_input = normalize_topic(topic)
-        matched_original_topic = None
-        
-        for topic_meta in all_topics:
-            normalized_rosbag_topic = normalize_topic(topic_meta.name)
-            if normalized_rosbag_topic == normalized_input:
-                matched_original_topic = topic_meta.name
-                break
-        
-        if not matched_original_topic:
-            return jsonify({'error': f'Topic {topic} (normalized: {normalized_input}) not found in rosbag'}), 404
-        
-        # Get the topic type for the matched original topic
-        topic_type = topic_type_map.get(matched_original_topic)
-        if not topic_type:
-            return jsonify({'error': f'Topic type not found for {matched_original_topic}'}), 404
-        
-        msg_type = get_message(topic_type)
-        
-        # Iterate through messages to find the one matching the timestamp
-        while reader.has_next():
-            read_topic, data, log_time = reader.read_next()
-            
-            # Only process messages from the requested topic (use original topic name)
-            if read_topic != matched_original_topic:
-                continue
-            
-            # Deserialize message to extract header timestamp
-            # Special cases: TF messages and ouster topics use relative timestamps (time since boot),
-            # so we use log_time instead of header timestamp to match the preprocessing alignment
-            if topic_type == 'tf2_msgs/msg/TFMessage' or matched_original_topic in ['/ouster/imu', '/ouster/points', '/tf', '/tf_static']:
-                msg = deserialize_message(data, msg_type)
-                header_timestamp = log_time
-            else:
-                try:
-                    msg = deserialize_message(data, msg_type)
-                    # Extract header timestamp (not log_time)
-                    header_timestamp = msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
-                except Exception as e:
-                    # If header extraction fails, fallback to log_time
-                    logging.warning(f"Could not extract header timestamp from {matched_original_topic}: {e}")
-                    header_timestamp = log_time
-            
-            # Match against the requested timestamp (from CSV alignment table, uses header stamps)
-            if str(header_timestamp) == timestamp:
-                # Deserialization already done above, now match message type
-                match topic_type:
-                    case 'sensor_msgs/msg/PointCloud2':
-                        # Extract point cloud data, filtering out NaNs, Infs, and zeros
-                        pointCloud = []
-                        colors = []
-                        point_step = msg.point_step
-                        is_bigendian = msg.is_bigendian
-                        
-                        # Check fields to find color data
-                        has_rgb = False
-                        has_separate_rgb = False
-                        rgb_offset = None
-                        r_offset = None
-                        g_offset = None
-                        b_offset = None
-                        rgb_datatype = None
-                        r_datatype = None
-                        g_datatype = None
-                        b_datatype = None
-                        
-                        for field in msg.fields:
-                            # Debug: log all fields to understand structure
-                            logging.debug(f"PointCloud2 field: name={field.name}, offset={field.offset}, datatype={field.datatype}, count={field.count}")
-                            if field.name == 'rgb' or field.name == 'rgba':
-                                rgb_offset = field.offset
-                                rgb_datatype = field.datatype
-                                has_rgb = True
-                                logging.debug(f"Found RGB field: offset={rgb_offset}, datatype={rgb_datatype}")
-                                break
-                            elif field.name == 'r':
-                                r_offset = field.offset
-                                r_datatype = field.datatype
-                                has_separate_rgb = True
-                            elif field.name == 'g':
-                                g_offset = field.offset
-                                g_datatype = field.datatype
-                            elif field.name == 'b':
-                                b_offset = field.offset
-                                b_datatype = field.datatype
-                        
-                        logging.debug(f"Color detection: has_rgb={has_rgb}, has_separate_rgb={has_separate_rgb}, rgb_datatype={rgb_datatype}")
-                        
-                        # Extract points and colors
-                        for i in range(0, len(msg.data), point_step):
-                            # Extract x, y, z coordinates
-                            if is_bigendian:
-                                x, y, z = struct.unpack_from('>fff', msg.data, i)
-                            else:
-                                x, y, z = struct.unpack_from('<fff', msg.data, i)
-                            
-                            if all(np.isfinite([x, y, z])) and not (x == 0 and y == 0 and z == 0):
-                                pointCloud.extend([x, y, z])
-                                
-                                # Extract RGB colors if available
-                                if has_rgb and rgb_offset is not None:
-                                    try:
-                                        # Extract RGB as uint32 (4 bytes) - most common format
-                                        if is_bigendian:
-                                            rgb = struct.unpack_from('>I', msg.data, i + rgb_offset)[0]
-                                            # Big-endian: RRGGBBAA format
-                                            r = (rgb >> 24) & 0xFF
-                                            g = (rgb >> 16) & 0xFF
-                                            b = (rgb >> 8) & 0xFF
-                                        else:
-                                            rgb = struct.unpack_from('<I', msg.data, i + rgb_offset)[0]
-                                            # Little-endian: Try different formats
-                                            b = rgb & 0xFF
-                                            g = (rgb >> 8) & 0xFF
-                                            r = (rgb >> 16) & 0xFF
-                                        colors.extend([r, g, b])
-                                    except Exception as e:
-                                        logging.warning(f"Failed to extract RGB color at offset {i + rgb_offset}: {e}")
-                                        pass
-                                elif has_separate_rgb and r_offset is not None and g_offset is not None and b_offset is not None:
-                                    # Extract separate r, g, b fields
-                                    try:
-                                        if r_datatype == 7:  # FLOAT32
-                                            if is_bigendian:
-                                                r_val = struct.unpack_from('>f', msg.data, i + r_offset)[0]
-                                                g_val = struct.unpack_from('>f', msg.data, i + g_offset)[0]
-                                                b_val = struct.unpack_from('>f', msg.data, i + b_offset)[0]
-                                            else:
-                                                r_val = struct.unpack_from('<f', msg.data, i + r_offset)[0]
-                                                g_val = struct.unpack_from('<f', msg.data, i + g_offset)[0]
-                                                b_val = struct.unpack_from('<f', msg.data, i + b_offset)[0]
-                                            # Convert float (0.0-1.0) to uint8 (0-255)
-                                            r = int(r_val * 255) if r_val <= 1.0 else int(r_val)
-                                            g = int(g_val * 255) if g_val <= 1.0 else int(g_val)
-                                            b = int(b_val * 255) if b_val <= 1.0 else int(b_val)
-                                        else:  # Assume uint8
-                                            r = struct.unpack_from('B', msg.data, i + r_offset)[0]
-                                            g = struct.unpack_from('B', msg.data, i + g_offset)[0]
-                                            b = struct.unpack_from('B', msg.data, i + b_offset)[0]
-                                        colors.extend([r, g, b])
-                                    except Exception as e:
-                                        logging.warning(f"Failed to extract separate RGB: {e}")
-                                        pass
-                        
-                        # Return with colors if available, otherwise just positions
-                        if colors:
-                            return jsonify({
-                                'type': 'pointCloud',
-                                'pointCloud': {'positions': pointCloud, 'colors': colors},
-                                'timestamp': timestamp
-                            })
-                        else:
-                            return jsonify({
-                                'type': 'pointCloud',
-                                'pointCloud': {'positions': pointCloud, 'colors': []},
-                                'timestamp': timestamp
-                            })
-                    case 'sensor_msgs/msg/NavSatFix':
-                        return jsonify({'type': 'position', 'position': {'latitude': msg.latitude, 'longitude': msg.longitude, 'altitude': msg.altitude}, 'timestamp': timestamp})
-                    case 'novatel_oem7_msgs/msg/BESTPOS':
-                        return jsonify({'type': 'position', 'position': {'latitude': msg.lat, 'longitude': msg.lon, 'altitude': msg.hgt}, 'timestamp': timestamp})
-                    case 'tf2_msgs/msg/TFMessage':
-                        # Assume single transform for simplicity
-                        if len(msg.transforms) > 0:
-                            transform = msg.transforms[0]
-                            translation = transform.transform.translation
-                            rotation = transform.transform.rotation
-                            tf_data = {
-                                'translation': {
-                                    'x': translation.x,
-                                    'y': translation.y,
-                                    'z': translation.z
-                                },
-                                'rotation': {
-                                    'x': rotation.x,
-                                    'y': rotation.y,
-                                    'z': rotation.z,
-                                    'w': rotation.w
-                                }
-                            }
-                            return jsonify({'type': 'tf', 'tf': tf_data, 'timestamp': timestamp})
-                    case 'sensor_msgs/msg/Imu':
-                        imu_data = {
-                            "orientation": {
-                                "x": msg.orientation.x,
-                                "y": msg.orientation.y,
-                                "z": msg.orientation.z,
-                                "w": msg.orientation.w
-                            },
-                            "angular_velocity": {
-                                "x": msg.angular_velocity.x,
-                                "y": msg.angular_velocity.y,
-                                "z": msg.angular_velocity.z
-                            },
-                            "linear_acceleration": {
-                                "x": msg.linear_acceleration.x,
-                                "y": msg.linear_acceleration.y,
-                                "z": msg.linear_acceleration.z
-                            }
-                        }
-                        return jsonify({'type': 'imu', 'imu': imu_data, 'timestamp': timestamp})
-                    case 'nav_msgs/msg/Odometry':
-                        # Extract odometry data: pose (position + orientation) and twist (linear + angular velocity)
-                        odometry_data = {
-                            "header": {
-                                "frame_id": msg.header.frame_id,
-                                "stamp": {
-                                    "sec": msg.header.stamp.sec,
-                                    "nanosec": msg.header.stamp.nanosec
-                                }
-                            },
-                            "child_frame_id": msg.child_frame_id,
-                            "pose": {
-                                "position": {
-                                    "x": msg.pose.pose.position.x,
-                                    "y": msg.pose.pose.position.y,
-                                    "z": msg.pose.pose.position.z
-                                },
-                                "orientation": {
-                                    "x": msg.pose.pose.orientation.x,
-                                    "y": msg.pose.pose.orientation.y,
-                                    "z": msg.pose.pose.orientation.z,
-                                    "w": msg.pose.pose.orientation.w
-                                },
-                                "covariance": list(msg.pose.covariance) if hasattr(msg.pose, 'covariance') else []
-                            },
-                            "twist": {
-                                "linear": {
-                                    "x": msg.twist.twist.linear.x,
-                                    "y": msg.twist.twist.linear.y,
-                                    "z": msg.twist.twist.linear.z
-                                },
-                                "angular": {
-                                    "x": msg.twist.twist.angular.x,
-                                    "y": msg.twist.twist.angular.y,
-                                    "z": msg.twist.twist.angular.z
-                                },
-                                "covariance": list(msg.twist.covariance) if hasattr(msg.twist, 'covariance') else []
-                            }
-                        }
-                        return jsonify({'type': 'odometry', 'odometry': odometry_data, 'timestamp': timestamp})
-                    case _:
-                        # Fallback for unsupported or unknown message types: return string representation
-                        return jsonify({'type': 'text', 'text': str(msg), 'timestamp': timestamp})
-        
-        # Clean up reader
-        del reader
-        return jsonify({'error': 'No message found for the provided timestamp and topic'})
-    except Exception as e:
-        # Clean up reader on error
-        try:
-            del reader
-        except:
-            pass
-        return jsonify({'error': f'Error reading rosbag: {str(e)}'})
-
 @app.route('/api/content-mcap', methods=['GET', 'POST'])
 def get_content_mcap():
+    relative_rosbag_path = request.args.get('relative_rosbag_path')
     topic = request.args.get('topic')
     mcap_identifier = request.args.get('mcap_identifier')
     timestamp = request.args.get('timestamp', type=int)
     
-    mcap_path = f"{SELECTED_ROSBAG}/{os.path.basename(SELECTED_ROSBAG)}_{mcap_identifier}.mcap"
+    # Validate required parameters
+    if not topic or not mcap_identifier or timestamp is None:
+        return jsonify({'error': 'Missing required parameters: topic, mcap_identifier, and timestamp are required'}), 400
+    
+    # Handle missing relative_rosbag_path - use SELECTED_ROSBAG as fallback
+    if not relative_rosbag_path:
+        if not SELECTED_ROSBAG:
+            return jsonify({'error': 'No rosbag selected and relative_rosbag_path not provided'}), 400
+        # Get relative path from SELECTED_ROSBAG
+        # SELECTED_ROSBAG might be a string or Path, and might be absolute or relative
+        selected_rosbag_str = str(SELECTED_ROSBAG)
+        selected_rosbag_path = Path(selected_rosbag_str)
+        
+        # Check if it's an absolute path (starts with /) or relative
+        if selected_rosbag_path.is_absolute():
+            # Absolute path - get relative path from ROSBAGS
+            try:
+                relative_rosbag_path = str(selected_rosbag_path.relative_to(ROSBAGS))
+            except ValueError:
+                # If not a subpath, try to construct it from the basename
+                relative_rosbag_path = selected_rosbag_path.name
+        else:
+            # Already a relative path - use it directly
+            relative_rosbag_path = selected_rosbag_str
+    
+    # Extract base rosbag name for MCAP filename
+    # For multipart rosbags like "rosbag2_2025_07_23-07_29_39_multi_parts/Part_2",
+    # we need to get the base name (before _multi_parts) for the MCAP filename
+    # MCAP files are named like: rosbag2_2025_07_23-07_29_39_669.mcap
+    if '_multi_parts' in relative_rosbag_path:
+        # Extract base name before _multi_parts
+        base_rosbag_name = relative_rosbag_path.split('_multi_parts')[0]
+    else:
+        # For regular rosbags, use the full path as base name
+        base_rosbag_name = relative_rosbag_path
+    
+    # Construct MCAP path using Path objects for proper handling
+    # MCAP files are in the rosbag directory, named: {base_rosbag_name}_{mcap_identifier}.mcap
+    mcap_path = ROSBAGS / relative_rosbag_path / f"{base_rosbag_name}_{mcap_identifier}.mcap"
+    
+    logging.warning(f"[CONTENT_MCAP] MCAP path: {mcap_path}")
     
     try:        
         with open(mcap_path, "rb") as f:
-            reader = make_reader(f, decoder_factories=[DecoderFactory()])
+            reader = SeekingReader(f, decoder_factories=[DecoderFactory()])
             for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
                 topics=[topic],
                 start_time=timestamp,
-                end_time=timestamp+1,
+                end_time=timestamp + 1,
                 log_time_order=True,
                 reverse=False
             ):
@@ -2010,6 +1931,87 @@ def get_content_mcap():
                 return format_message_response(ros2_msg, schema_name, str(timestamp))
         
         return jsonify({'error': 'No message found for the provided timestamp and topic'}), 404
+        
+    except Exception as e:
+        logging.exception("[C] Failed to read mcap file")
+        return jsonify({'error': f'Error reading mcap file: {str(e)}'}), 500
+
+
+@app.route('/api/content-mcap-with-buffer', methods=['GET', 'POST'])
+def get_content_mcap_with_buffer():
+    relative_rosbag_path = request.args.get('relative_rosbag_path')
+    topic = request.args.get('topic')
+    mcap_identifier = request.args.get('mcap_identifier')
+    timestamp = request.args.get('timestamp', type=int)
+    
+    # Validate required parameters
+    if not topic or not mcap_identifier or timestamp is None:
+        return jsonify({'error': 'Missing required parameters: topic, mcap_identifier, and timestamp are required'}), 400
+    
+    # Handle missing relative_rosbag_path - use SELECTED_ROSBAG as fallback
+    if not relative_rosbag_path:
+        if not SELECTED_ROSBAG:
+            return jsonify({'error': 'No rosbag selected and relative_rosbag_path not provided'}), 400
+        # Get relative path from SELECTED_ROSBAG
+        # SELECTED_ROSBAG might be a string or Path, and might be absolute or relative
+        selected_rosbag_str = str(SELECTED_ROSBAG)
+        selected_rosbag_path = Path(selected_rosbag_str)
+        
+        # Check if it's an absolute path (starts with /) or relative
+        if selected_rosbag_path.is_absolute():
+            # Absolute path - get relative path from ROSBAGS
+            try:
+                relative_rosbag_path = str(selected_rosbag_path.relative_to(ROSBAGS))
+            except ValueError:
+                # If not a subpath, try to construct it from the basename
+                relative_rosbag_path = selected_rosbag_path.name
+        else:
+            # Already a relative path - use it directly
+            relative_rosbag_path = selected_rosbag_str
+    
+    # Extract base rosbag name for MCAP filename
+    # For multipart rosbags like "rosbag2_2025_07_23-07_29_39_multi_parts/Part_2",
+    # we need to get the base name (before _multi_parts) for the MCAP filename
+    # MCAP files are named like: rosbag2_2025_07_23-07_29_39_669.mcap
+    if '_multi_parts' in relative_rosbag_path:
+        # Extract base name before _multi_parts
+        base_rosbag_name = relative_rosbag_path.split('_multi_parts')[0]
+    else:
+        # For regular rosbags, use the full path as base name
+        base_rosbag_name = relative_rosbag_path
+    
+    # Construct MCAP path using Path objects for proper handling
+    # MCAP files are in the rosbag directory, named: {base_rosbag_name}_{mcap_identifier}.mcap
+    mcap_path = ROSBAGS / relative_rosbag_path / f"{base_rosbag_name}_{mcap_identifier}.mcap"
+    
+    logging.warning(f"[CONTENT_MCAP] MCAP path: {mcap_path}")
+    
+    responses = []
+    try:        
+        with open(mcap_path, "rb") as f:
+            reader = SeekingReader(f, decoder_factories=[DecoderFactory()])
+            for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
+                topics=[topic],
+                start_time=timestamp,
+                end_time=timestamp + MIN_BUFFER_IN_NS,
+                log_time_order=True,
+                reverse=False
+            ):
+                # Get schema name for message type
+                schema_name = schema.name if schema else None
+                if not schema_name:
+                    return jsonify({'error': 'No schema found for message'}), 404
+                    
+                response = format_message_response(ros2_msg, schema_name, str(timestamp))
+                responses.append(response)
+
+                # Use the shared format_message_response function
+                # Convert timestamp to string to match the function signature
+
+        logging.warning(f"[CONTENT_MCAP] Responses: {responses}")      
+        return jsonify(responses)
+        
+        #return jsonify({'error': 'No message found for the provided timestamp and topic'}), 404
         
     except Exception as e:
         logging.exception("[C] Failed to read mcap file")
@@ -2092,7 +2094,7 @@ def search():
     # ---- Parse inputs
     try:
         models_list = [m.strip() for m in models.split(",") if m.strip()]  # Filter out empty model names
-        rosbags_list = [os.path.basename(r) for r in rosbags.split(",") if r.strip()]
+        rosbags_list = [extract_rosbag_name_from_path(r.strip()) for r in rosbags.split(",") if r.strip()]
         time_start, time_end = map(int, timeRange.split(","))
         k_subsample = max(1, int(accuracy))
     except Exception as e:
@@ -2447,34 +2449,412 @@ def search():
 @app.route('/api/export-rosbag', methods=['POST'])
 def export_rosbag():
     """
-    Export a portion of a Rosbag containing selected topics and time range.
-    Starts a background thread to perform the export and updates EXPORT_PROGRESS.
+    Export MCAP files from a rosbag based on MCAP ID range and time filtering.
+    
+    Request body:
+    {
+        "new_rosbag_name": str,
+        "topics": List[str],
+        "start_timestamp": int (nanoseconds),
+        "end_timestamp": int (nanoseconds),
+        "start_mcap_id": int,
+        "end_mcap_id": int
+    }
     """
+    global SELECTED_ROSBAG, EXPORT_PROGRESS
+    
+    # Reset export status at the beginning
+    EXPORT_PROGRESS = {"status": "idle", "progress": -1, "message": "Waiting for export..."}
+    
     try:
         data = request.json
-        new_rosbag_name = data.get('new_rosbag_name')
-        topics = data.get('topics')
-        start_timestamp = int(data.get('start_timestamp'))
-        end_timestamp = int(data.get('end_timestamp'))
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        # Extract parameters from request
+        new_rosbag_name = data.get("new_rosbag_name")
+        topics = data.get("topics", [])
+        start_timestamp_raw = data.get("start_timestamp")
+        end_timestamp_raw = data.get("end_timestamp")
+        start_mcap_id_raw = data.get("start_mcap_id")
+        end_mcap_id_raw = data.get("end_mcap_id")
+        
+        # Validate required parameters
+        if not new_rosbag_name:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": "new_rosbag_name is required"}
+            return jsonify({"error": "new_rosbag_name is required"}), 400
+        if start_timestamp_raw is None or end_timestamp_raw is None:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": "start_timestamp and end_timestamp are required"}
+            return jsonify({"error": "start_timestamp and end_timestamp are required"}), 400
+        if start_mcap_id_raw is None or end_mcap_id_raw is None:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": "start_mcap_id and end_mcap_id are required"}
+            return jsonify({"error": "start_mcap_id and end_mcap_id are required"}), 400
+        
+        # Convert to integers (after validation to allow 0 values)
+        try:
+            start_timestamp = int(start_timestamp_raw)
+            end_timestamp = int(end_timestamp_raw)
+            start_mcap_id = int(start_mcap_id_raw)
+            end_mcap_id = int(end_mcap_id_raw)
+        except (ValueError, TypeError) as e:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": f"Invalid number format: {e}"}
+            return jsonify({"error": f"Invalid number format: {e}"}), 400
 
-        if not new_rosbag_name or not topics:
-            return jsonify({"error": "Rosbag name and topics are required"}), 400
+        # Set status to starting - export is beginning
+        EXPORT_PROGRESS = {"status": "starting", "progress": -1, "message": "Validating export parameters..."}
 
-        if not os.path.exists(SELECTED_ROSBAG):
-            return jsonify({"error": "Rosbag not found"}), 404
-
-        EXPORT_PATH = os.path.join(EXPORT, new_rosbag_name)
-        EXPORT_PROGRESS["status"] = "starting"
-        EXPORT_PROGRESS["progress"] = -1
-
-        def run_export():
-            export_rosbag_with_topics(SELECTED_ROSBAG, EXPORT_PATH, topics, start_timestamp, end_timestamp)
-
-        Thread(target=run_export).start()
-        return jsonify({"message": "Export started", "exported_path": str(EXPORT_PATH)})
-
+        # Set paths
+        # SELECTED_ROSBAG might be absolute or relative, handle both cases
+        selected_rosbag_str = str(SELECTED_ROSBAG)
+        selected_rosbag_path = Path(selected_rosbag_str)
+        
+        # Check if it's an absolute path or relative
+        if selected_rosbag_path.is_absolute():
+            # Absolute path - get relative path from ROSBAGS
+            try:
+                relative_rosbag_path = str(selected_rosbag_path.relative_to(ROSBAGS))
+            except ValueError:
+                # If not a subpath, use the path as-is (might be outside ROSBAGS)
+                relative_rosbag_path = selected_rosbag_str
+            input_rosbag_dir = ROSBAGS / relative_rosbag_path
+        else:
+            # Already a relative path - use it directly
+            input_rosbag_dir = ROSBAGS / selected_rosbag_str
+        
+        output_rosbag_base = EXPORT
+        output_rosbag_dir = output_rosbag_base / new_rosbag_name
+        
+        # Update export progress
+        EXPORT_PROGRESS = {"status": "running", "progress": 0.0, "message": "Starting export..."}
+        
+        # Helper function to extract MCAP ID from filename
+        def extract_mcap_id(mcap_path: Path) -> str:
+            """Extract MCAP ID from filename (e.g., 'rosbag2_2025_07_25-10_14_58_1.mcap' -> '1')."""
+            stem = mcap_path.stem  # filename without extension
+            parts = stem.rsplit('_', 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                return parts[1]
+            return "0"  # Fallback
+        
+        # Get all MCAP files from input rosbag, sorted numerically by MCAP ID
+        def get_all_mcaps(rosbag_dir: Path) -> List[Path]:
+            """Get all MCAP files from a rosbag, sorted numerically by MCAP ID."""
+            if not rosbag_dir.exists():
+                raise FileNotFoundError(f"Rosbag directory not found: {rosbag_dir}")
+            
+            mcaps = list(rosbag_dir.glob("*.mcap"))
+            
+            def extract_number(path: Path) -> int:
+                """Extract the number from the mcap filename for sorting."""
+                mcap_id = extract_mcap_id(path)
+                try:
+                    return int(mcap_id)
+                except ValueError:
+                    return float('inf')
+            
+            mcaps.sort(key=extract_number)
+            return mcaps
+        
+        # Export a single MCAP file
+        def export_mcap(
+            input_mcap_path: Path,
+            output_mcap_path: Path,
+            mcap_id: str,
+            start_time_ns: Optional[int],
+            end_time_ns: Optional[int],
+            topics: Optional[List[str]],
+            compression: CompressionType,
+            include_attachments: bool,
+            include_metadata: bool,
+        ):
+            """
+            Export messages from an MCAP file with optional time filtering.
+            """
+            app.logger.info(f"  Processing MCAP {mcap_id}: {input_mcap_path.name}")
+            if start_time_ns is not None and end_time_ns is not None:
+                app.logger.info(f"    Time range: {start_time_ns} to {end_time_ns}")
+            elif start_time_ns is not None:
+                app.logger.info(f"    Time range: {start_time_ns} to end of MCAP")
+            elif end_time_ns is not None:
+                app.logger.info(f"    Time range: beginning of MCAP to {end_time_ns}")
+            else:
+                app.logger.info(f"    Time range: entire MCAP (no time filtering)")
+            
+            # Ensure output directory exists
+            output_mcap_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Open input file and create reader
+            with open(input_mcap_path, "rb") as input_file:
+                reader = SeekingReader(input_file, decoder_factories=[DecoderFactory()])
+                
+                # Get summary information
+                summary = reader.get_summary()
+                if not summary:
+                    app.logger.warning(f"    No summary found in MCAP {mcap_id}, skipping")
+                    return
+                
+                # Open output file and create writer
+                with open(output_mcap_path, "wb") as output_file:
+                    writer = Writer(
+                        output=output_file,
+                        compression=compression,
+                        index_types=IndexType.ALL,
+                        use_chunking=True,
+                        use_statistics=True,
+                    )
+                    
+                    # Start writing
+                    writer.start(profile="ros2", library="mcap-exporter")
+                    
+                    # Register schemas from input file
+                    schema_map = {}  # Map old schema_id -> new schema_id
+                    if summary.schemas:
+                        for schema_id, schema in summary.schemas.items():
+                            new_schema_id = writer.register_schema(
+                                name=schema.name,
+                                encoding=schema.encoding,
+                                data=schema.data,
+                            )
+                            schema_map[schema_id] = new_schema_id
+                    
+                    # Register channels from input file (only those we want to export)
+                    channel_map = {}  # Map old channel_id -> new channel_id
+                    if summary.channels:
+                        for channel_id, channel in summary.channels.items():
+                            # Filter by topics if specified
+                            if topics and channel.topic not in topics:
+                                continue
+                            
+                            # Get new schema_id (or 0 if no schema)
+                            new_schema_id = schema_map.get(channel.schema_id, 0)
+                            
+                            new_channel_id = writer.register_channel(
+                                topic=channel.topic,
+                                message_encoding=channel.message_encoding,
+                                schema_id=new_schema_id,
+                                metadata=dict(channel.metadata) if channel.metadata else {},
+                            )
+                            channel_map[channel_id] = new_channel_id
+                    
+                    if not channel_map:
+                        app.logger.warning(f"    No matching channels found for MCAP {mcap_id}")
+                        writer.finish()
+                        return
+                    
+                    # Copy messages with optional time filtering
+                    message_count = 0
+                    skipped_count = 0
+                    
+                    for schema, channel, message in reader.iter_messages(
+                        topics=topics,
+                        start_time=start_time_ns,
+                        end_time=end_time_ns,
+                        log_time_order=True,
+                        reverse=False,
+                    ):
+                        # Get new channel_id
+                        new_channel_id = channel_map.get(channel.id)
+                        if new_channel_id is None:
+                            skipped_count += 1
+                            continue
+                        
+                        # Write message
+                        writer.add_message(
+                            channel_id=new_channel_id,
+                            log_time=message.log_time,
+                            data=message.data,
+                            publish_time=message.publish_time,
+                            sequence=message.sequence,
+                        )
+                        message_count += 1
+                    
+                    app.logger.info(f"    Copied {message_count} messages (skipped {skipped_count})")
+                    
+                    # Copy attachments if requested
+                    if include_attachments:
+                        attachment_count = 0
+                        for attachment in reader.iter_attachments():
+                            # Filter attachments by time range (if specified)
+                            include_attachment = True
+                            if start_time_ns is not None and attachment.log_time < start_time_ns:
+                                include_attachment = False
+                            if end_time_ns is not None and attachment.log_time > end_time_ns:
+                                include_attachment = False
+                            
+                            if include_attachment:
+                                writer.add_attachment(
+                                    create_time=attachment.create_time,
+                                    log_time=attachment.log_time,
+                                    name=attachment.name,
+                                    media_type=attachment.media_type,
+                                    data=attachment.data,
+                                )
+                                attachment_count += 1
+                        if attachment_count > 0:
+                            app.logger.info(f"    Copied {attachment_count} attachment(s)")
+                    
+                    # Copy metadata if requested
+                    if include_metadata:
+                        metadata_count = 0
+                        for metadata in reader.iter_metadata():
+                            writer.add_metadata(
+                                name=metadata.name,
+                                data=dict(metadata.metadata) if metadata.metadata else {},
+                            )
+                            metadata_count += 1
+                        if metadata_count > 0:
+                            app.logger.info(f"    Copied {metadata_count} metadata record(s)")
+                    
+                    # Finish writing
+                    writer.finish()
+            
+            app.logger.info(f"    Export complete: {output_mcap_path.name}")
+        
+        # Main export logic
+        app.logger.info("=" * 80)
+        app.logger.info("MCAP Rosbag Exporter")
+        app.logger.info("=" * 80)
+        app.logger.info(f"Input rosbag: {input_rosbag_dir}")
+        app.logger.info(f"Output directory: {output_rosbag_base}")
+        app.logger.info(f"New rosbag name: {new_rosbag_name}")
+        app.logger.info(f"Topics: {len(topics) if topics else 'all'}")
+        
+        # Get all MCAP files from input rosbag
+        app.logger.info(f"\nScanning MCAP files in {input_rosbag_dir}...")
+        input_mcaps = get_all_mcaps(input_rosbag_dir)
+        app.logger.info(f"Found {len(input_mcaps)} MCAP file(s)")
+        
+        # Create output directory
+        output_rosbag_dir.mkdir(parents=True, exist_ok=True)
+        app.logger.info(f"Output directory: {output_rosbag_dir}")
+        
+        # Convert MCAP IDs to integers for range calculation
+        try:
+            start_mcap_num = int(start_mcap_id)
+            end_mcap_num = int(end_mcap_id)
+        except ValueError:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1}
+            return jsonify({"error": f"Invalid MCAP IDs: start={start_mcap_id}, end={end_mcap_id}"}), 400
+        
+        if start_mcap_num > end_mcap_num:
+            EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": f"Start MCAP ID ({start_mcap_num}) must be <= End MCAP ID ({end_mcap_num})"}
+            return jsonify({"error": f"Start MCAP ID ({start_mcap_num}) must be <= End MCAP ID ({end_mcap_num})"}), 400
+        
+        # Calculate total number of MCAPs to process (after validation)
+        total_mcaps_to_process = end_mcap_num - start_mcap_num + 1
+        
+        app.logger.info(f"  Exporting MCAPs {start_mcap_id} to {end_mcap_id} (inclusive)")
+        app.logger.info(f"  Start MCAP {start_mcap_id}: from timestamp {start_timestamp} to end")
+        app.logger.info(f"  End MCAP {end_mcap_id}: from beginning to timestamp {end_timestamp}")
+        if end_mcap_num > start_mcap_num + 1:
+            app.logger.info(f"  Middle MCAPs: complete export (no time filtering)")
+        
+        # Export all MCAPs in the range
+        total_mcaps_exported = 0
+        for mcap_index, mcap_num in enumerate(range(start_mcap_num, end_mcap_num + 1)):
+            mcap_id = str(mcap_num)
+            
+            # Update progress: calculate percentage based on MCAP index
+            progress = (mcap_index / total_mcaps_to_process) if total_mcaps_to_process > 0 else 0.0
+            EXPORT_PROGRESS["progress"] = round(progress, 2)
+            EXPORT_PROGRESS["message"] = f"Processing MCAP {mcap_id} ({mcap_index + 1}/{total_mcaps_to_process})"
+            
+            # Find the MCAP file with this ID
+            input_mcap = None
+            for mcap_path in input_mcaps:
+                if extract_mcap_id(mcap_path) == mcap_id:
+                    input_mcap = mcap_path
+                    break
+            
+            if input_mcap is None:
+                app.logger.warning(f"  MCAP {mcap_id} not found in input rosbag, skipping")
+                continue
+            
+            # Build output path: OUTPUT_ROSBAG / new_rosbag_name / new_rosbag_name_mcap_id.mcap
+            output_mcap_name = f"{new_rosbag_name}_{mcap_id}.mcap"
+            output_mcap_path = output_rosbag_dir / output_mcap_name
+            
+            # Update message with filename
+            EXPORT_PROGRESS["message"] = f"Writing {output_mcap_name} ({mcap_index + 1}/{total_mcaps_to_process})"
+            
+            # Determine time filtering based on MCAP position
+            if mcap_num == start_mcap_num:
+                # Start MCAP: from start_timestamp to end (no upper bound)
+                mcap_start_time = start_timestamp
+                mcap_end_time = None
+            elif mcap_num == end_mcap_num:
+                # End MCAP: from beginning to end_timestamp (no lower bound)
+                mcap_start_time = None
+                mcap_end_time = end_timestamp
+            else:
+                # Middle MCAPs: no time filtering (export completely)
+                mcap_start_time = None
+                mcap_end_time = None
+            
+            # Export this MCAP with appropriate time filtering
+            try:
+                export_mcap(
+                    input_mcap_path=input_mcap,
+                    output_mcap_path=output_mcap_path,
+                    mcap_id=mcap_id,
+                    start_time_ns=mcap_start_time,
+                    end_time_ns=mcap_end_time,
+                    topics=topics if topics else None,
+                    compression=CompressionType.ZSTD,
+                    include_attachments=True,
+                    include_metadata=True,
+                )
+                total_mcaps_exported += 1
+                
+                # Update progress after successful export
+                progress = ((mcap_index + 1) / total_mcaps_to_process) if total_mcaps_to_process > 0 else 1.0
+                EXPORT_PROGRESS["progress"] = round(progress, 2)
+            except Exception as e:
+                app.logger.error(f"  Failed to export MCAP {mcap_id}: {e}", exc_info=True)
+        
+        app.logger.info(f"\n{'=' * 80}")
+        app.logger.info(f"Export complete!")
+        app.logger.info(f"  Exported {total_mcaps_exported} MCAP file(s)")
+        app.logger.info(f"  Output directory: {output_rosbag_dir}")
+        
+        # Reindex the exported rosbag using ros2 bag reindex
+        if total_mcaps_exported > 0:
+            app.logger.info(f"\nReindexing rosbag: {output_rosbag_dir}")
+            try:
+                result = subprocess.run(
+                    ["ros2", "bag", "reindex", str(output_rosbag_dir), "-s", "mcap"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                app.logger.info("Reindexing completed successfully")
+                if result.stdout:
+                    app.logger.debug(f"Reindex output: {result.stdout}")
+            except subprocess.CalledProcessError as e:
+                app.logger.error(f"Reindexing failed: {e}")
+                if e.stderr:
+                    app.logger.error(f"Error output: {e.stderr}")
+            except FileNotFoundError:
+                app.logger.warning("ros2 command not found. Skipping reindexing. Make sure ROS2 is installed and in PATH.")
+            except Exception as e:
+                app.logger.error(f"Unexpected error during reindexing: {e}", exc_info=True)
+        
+        app.logger.info(f"{'=' * 80}")
+        
+        # Update export progress
+        EXPORT_PROGRESS = {"status": "completed", "progress": 1.0, "message": f"Export completed! Exported {total_mcaps_exported} MCAP file(s)"}
+        
+        return jsonify({
+            "message": "Export completed successfully",
+            "exported_mcaps": total_mcaps_exported,
+            "output_directory": str(output_rosbag_dir)
+        }), 200
+        
     except Exception as e:
+        app.logger.error(f"Export failed: {e}", exc_info=True)
+        EXPORT_PROGRESS = {"status": "error", "progress": -1, "message": f"Export failed: {str(e)}"}
         return jsonify({"error": str(e)}), 500
+
     
 # Canvas configuration endpoints for restoring panel layouts
 @app.route("/api/load-canvases", methods=["GET"])

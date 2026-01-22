@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Box } from '@mui/material';
 import Header from './components/Header/Header';
 import TimestampPlayer from './components/TimestampPlayer/TimestampPlayer';
 import './App.css';
@@ -189,34 +190,44 @@ function App() {
   useEffect(() => {
     // If timestamps are available, select the first one by default
     if (availableTimestamps.length > 0) {
-      // If a timestamp is pending from URL, let that effect apply it
-      if (pendingTsRef.current === null) {
+      // Check if there's a timestamp in the URL params first
+      const tsParam = searchParams.get('ts');
+      const tsFromUrl = tsParam ? Number(tsParam) : null;
+      
+      // If there's a timestamp in the URL, set it as pending so the other effect can apply it
+      if (tsFromUrl !== null && !Number.isNaN(tsFromUrl) && pendingTsRef.current === null) {
+        pendingTsRef.current = tsFromUrl;
+      }
+      
+      // If a timestamp is pending from URL (either in ref or URL params), let that effect apply it
+      if (pendingTsRef.current === null && (tsFromUrl === null || Number.isNaN(tsFromUrl))) {
         setSelectedTimestamp(availableTimestamps[0]); // Use first timestamp
         handleSliderChange(availableTimestamps[0]); // Sync mapped timestamps on change
       }
     } else {
       setSelectedTimestamp(null); // Clear selection if no timestamps
     }
-  }, [availableTimestamps]);
+  }, [availableTimestamps, searchParams]);
+
+  // Function to refresh canvas list from backend
+  const refreshCanvasList = useCallback(async () => {
+    try {
+      const response = await fetch('/api/load-canvases');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load canvases');
+      }
+      setCanvasList(data); // Populate canvas list with saved canvases
+    } catch (error) {
+      setError('Error loading canvases');
+      console.error('Error loading all canvases:', error);
+    }
+  }, [setError]);
 
   // Effect to load all saved canvases once on component mount
   useEffect(() => {
-    const loadAllCanvases = async () => {
-      try {
-        const response = await fetch('/api/load-canvases');
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error || 'Failed to load canvases');
-        }
-        setCanvasList(data); // Populate canvas list with saved canvases
-      } catch (error) {
-        setError('Error loading canvases');
-        console.error('Error loading all canvases:', error);
-      }
-    };
-
-    loadAllCanvases();
-  }, []);
+    refreshCanvasList();
+  }, [refreshCanvasList]);
 
   // Handler for when user changes the timestamp slider
   const handleSliderChange = async (value: number) => {
@@ -280,11 +291,8 @@ function App() {
       if (!response.ok) {
         throw new Error(data.error || 'Failed to save canvas');
       }
-      // Update local canvas list with newly saved canvas
-      setCanvasList(prev => ({
-        ...prev,
-        [name]: newCanvas
-      }));
+      // Refresh canvas list from backend to get full data structure
+      await refreshCanvasList();
     } catch (error) {
       setError('Error saving canvas');
       console.error('Error saving canvas:', error);
@@ -517,6 +525,7 @@ function App() {
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
         searchMarks={[]} // COMMENTED OUT: Search functionality disabled
+        selectedRosbag={selectedRosbag}
       />
       {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -529,39 +538,43 @@ function App() {
           handleAddCanvas={handleAddCanvas}
           handleResetCanvas={handleResetCanvas}
           availableTopics={availableTopics}
+          canvasList={canvasList}
+          refreshCanvasList={refreshCanvasList}
         />
-        <Routes>
-          <Route path="/" element={<Navigate to="/explore" replace />} />
-          <Route
-            path="/explore"
-            element={
-              <>
-                <SplittableCanvas
-                  availableTopics={availableTopics}
-                  availableTopicTypes={availableTopicTypes}
-                  mappedTimestamps={mappedTimestamps}
-                  selectedRosbag={selectedRosbag}
-                  mcapIdentifier={mcapIdentifier}
-                  onCanvasChange={handleCanvasChange}
-                  currentRoot={currentRoot}
-                  currentMetadata={currentMetadata}
-                />
-                <TimestampPlayer
-                  availableTimestamps={availableTimestamps}
-                  timestampDensity={timestampDensity}
-                  selectedTimestamp={selectedTimestamp}
-                  onSliderChange={handleSliderChange}
-                  selectedRosbag={selectedRosbag}
-                  searchMarks={[]} // COMMENTED OUT: Search functionality disabled
-                  setSearchMarks={() => {}} // COMMENTED OUT: Search functionality disabled
-                />
-              </>
-            }
-          />
-          <Route path="/search" element={<GlobalSearch />} />
-          <Route path="/positional-overview" element={<PositionalOverview />} />
-          <Route path="*" element={<Navigate to="/explore" replace />} />
-        </Routes>
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/explore" replace />} />
+            <Route
+              path="/explore"
+              element={
+                <>
+                  <SplittableCanvas
+                    availableTopics={availableTopics}
+                    availableTopicTypes={availableTopicTypes}
+                    mappedTimestamps={mappedTimestamps}
+                    selectedRosbag={selectedRosbag}
+                    mcapIdentifier={mcapIdentifier}
+                    onCanvasChange={handleCanvasChange}
+                    currentRoot={currentRoot}
+                    currentMetadata={currentMetadata}
+                  />
+                  <TimestampPlayer
+                    availableTimestamps={availableTimestamps}
+                    timestampDensity={timestampDensity}
+                    selectedTimestamp={selectedTimestamp}
+                    onSliderChange={handleSliderChange}
+                    selectedRosbag={selectedRosbag}
+                    searchMarks={[]} // COMMENTED OUT: Search functionality disabled
+                    setSearchMarks={() => {}} // COMMENTED OUT: Search functionality disabled
+                  />
+                </>
+              }
+            />
+            <Route path="/search" element={<GlobalSearch />} />
+            <Route path="/positional-overview" element={<PositionalOverview />} />
+            <Route path="*" element={<Navigate to="/explore" replace />} />
+          </Routes>
+        </Box>
       </div>
     </>
   );

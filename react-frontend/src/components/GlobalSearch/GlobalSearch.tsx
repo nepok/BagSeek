@@ -1,4 +1,4 @@
-import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemText, OutlinedInput, IconButton, SelectChangeEvent, Box, Typography, Popper, Paper, TextField, LinearProgress, ButtonGroup, Button, Chip, Tabs, Tab, FormControlLabel } from '@mui/material';
+import { Select, MenuItem, Slider, InputLabel, FormControl, Checkbox, ListItemText, OutlinedInput, IconButton, SelectChangeEvent, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel } from '@mui/material';
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
@@ -93,7 +93,7 @@ function ResultImageCard({
       try {
         setIsLoading(true);
         const response = await fetch(
-          `/api/content-mcap?topic=${encodeURIComponent(result.topic)}&mcap_identifier=${result.mcap_identifier}&timestamp=${result.timestamp}`
+          `/api/content-mcap?relative_rosbag_path=${result.rosbag}&topic=${encodeURIComponent(result.topic)}&mcap_identifier=${result.mcap_identifier}&timestamp=${result.timestamp}`
         );
         const data = await response.json();
 
@@ -321,7 +321,8 @@ const GlobalSearch: React.FC = () => {
       20, 30, 40, 50, 60, 70, 80, 90, 100,
       200, 300, 400, 500, 600, 700, 800, 900, 1000
     ];
-    const render_limit = 12; // Max images to show in grid
+    const initial_render_limit = 12; // Initial images to show in grid
+    const [displayedResultsCount, setDisplayedResultsCount] = useState<number>(initial_render_limit);
 
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
@@ -398,7 +399,12 @@ const GlobalSearch: React.FC = () => {
             if (raw) {
               const saved = JSON.parse(raw);
               if (saved) {
-                if (saved.query) setSearch(saved.query);
+                // Restore the query (which may be enhanced)
+                if (saved.query) {
+                  setSearch(saved.query);
+                  // If query was enhanced, set enhancedPrompt to match
+                  setEnhancedPrompt(saved.query);
+                }
                 if (Array.isArray(saved.results)) setSearchResults(saved.results);
                 if (saved.marksPerTopic) setMarksPerTopic(saved.marksPerTopic);
                 if (Array.isArray(saved.confirmedModels)) setConfirmedModels(saved.confirmedModels);
@@ -548,6 +554,7 @@ const GlobalSearch: React.FC = () => {
             setConfirmedModels(models);
             setConfirmedRosbags(rosbags);
             setSearchDone(false);
+            setDisplayedResultsCount(initial_render_limit); // Reset displayed results count
             setSearchStatus({ progress: 0, status: 'running', message: 'Starting search...' });
             try {
                 // Wait for enhancement if enhancePrompt is enabled
@@ -558,6 +565,8 @@ const GlobalSearch: React.FC = () => {
                         const enhanceData = await enhanceResponse.json();
                         if (enhanceData.enhanced) {
                             queryToUse = enhanceData.enhanced;
+                            // Overwrite search text completely with enhanced version
+                            setSearch(enhanceData.enhanced);
                             setEnhancedPrompt(enhanceData.enhanced);
                         }
                     } catch (error) {
@@ -587,7 +596,7 @@ const GlobalSearch: React.FC = () => {
                 // Persist successful response to session so results survive navigation
                 try {
                     sessionStorage.setItem(GS_SESSION_KEY, JSON.stringify({
-                      query: search,
+                      query: queryToUse, // Save the actual query used (enhanced if applicable)
                       results: data.results || [],
                       marksPerTopic: data.marksPerTopic || {},
                       confirmedModels: models,
@@ -677,7 +686,18 @@ const GlobalSearch: React.FC = () => {
 
     return (
         <>
-        <Box sx={{ width: '80%', mx: 'auto', mt: 4 }}>
+        <Box sx={{ 
+            height: '100vh', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            overflow: 'hidden',
+            width: '80%', 
+            mx: 'auto',
+            pt: 2,
+            pb: 2,
+        }}>
+            {/* Fixed header section - filters, search, tabs */}
+            <Box sx={{ flexShrink: 0 }}>
             <Box sx={{ display: 'flex', gap: 1, mb: 1, width: '100%' }}>
                 {/* Positional Filter */}
                 <Button
@@ -783,7 +803,7 @@ const GlobalSearch: React.FC = () => {
                                     }}
                                 >
                                     <Checkbox checked={rosbags.includes(name)} disabled={!isInFilteredList} />
-                                    <ListItemText primary={getBasename(name)} />
+                                    <ListItemText primary={name} />
                                 </MenuItem>
                             );
                         })}
@@ -957,7 +977,7 @@ const GlobalSearch: React.FC = () => {
                         fullWidth
                         label="Search"
                         variant="outlined"
-                        value={enhancePrompt && enhancedPrompt && !isEnhancing ? enhancedPrompt : search}
+                        value={search}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                             setSearch(e.target.value);
                             // Clear enhanced prompt when user starts typing
@@ -1000,10 +1020,32 @@ const GlobalSearch: React.FC = () => {
                 <Tab label="Rosbags" {...a11yProps(1)} />
               </Tabs>
             </Box>
+            </Box>
 
+            {/* Scrollable results section */}
+            <Box sx={{ 
+                flex: 1, 
+                overflowY: 'auto', 
+                overflowX: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+            }}>
             {searchStatus.status !== 'idle' && searchResults.length === 0 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column', mt: 4, mb: 4 }}>
-                <Box sx={{ width: '50%' }}>
+              <Box
+                sx={{
+                  flex: 1,
+                  padding: 4,
+                  background: '#121212',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  flexDirection: 'column',
+                  mt: 2,
+                  mb: 2,
+                }}
+              >
+                <Box sx={{ width: '100%', maxWidth: '600px' }}>
                   {searchStatus.status !== 'done' && (
                     <LinearProgress variant="determinate" value={searchStatus.progress * 100} />
                   )}
@@ -1019,18 +1061,17 @@ const GlobalSearch: React.FC = () => {
               searchResults.length > 0 && (
                 <Box
                   sx={{
-                    padding: '8px',
+                    padding: 0,
                     background: '#121212',
                     borderRadius: '8px',
                     display: 'grid',
                     gridTemplateColumns: 'repeat(auto-fill, minmax(30%, 1fr))',
                     gap: 2,
-                    maxHeight: 'calc(100vh - 200px)',
-                    overflowY: 'auto',
                     mt: 2,
+                    mb: 2,
                   }}
                 >
-                  {searchResults.slice(0, render_limit).map((result, index) => {
+                  {searchResults.slice(0, displayedResultsCount).map((result, index) => {
                     const hasRequiredFields = result.topic && result.timestamp && result.rosbag && result.mcap_identifier;
 
                     return (
@@ -1052,11 +1093,32 @@ const GlobalSearch: React.FC = () => {
                       </Box>
                     );
                   })}
+                  {displayedResultsCount < searchResults.length && (
+                    <Button
+                      variant="outlined"
+                      onClick={() => setDisplayedResultsCount(prev => Math.min(prev + initial_render_limit, searchResults.length))}
+                      sx={{
+                        gridColumn: '1 / -1', // Span full width of grid
+                        mt: 2,
+                        py: 1.5,
+                        color: 'white',
+                        borderColor: 'rgba(255, 255, 255, 0.23)',
+                        textTransform: 'none',
+                        fontSize: '1rem',
+                        '&:hover': {
+                          borderColor: 'rgba(255, 255, 255, 0.5)',
+                          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                        },
+                      }}
+                    >
+                      LOAD MORE
+                    </Button>
+                  )}
                 </Box>
               )
             )}
             {viewMode === 'rosbags' && (
-              <Box sx={{ mt: 4 }}>
+              <Box sx={{ mt: 2, mb: 2 }}>
                 <Box>
                   {searchDone && (
                     <RosbagOverview
@@ -1069,6 +1131,7 @@ const GlobalSearch: React.FC = () => {
                 </Box>
               </Box>
             )}
+            </Box>
         </Box>
         </>
     );

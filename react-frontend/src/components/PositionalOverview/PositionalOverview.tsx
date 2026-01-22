@@ -1,4 +1,4 @@
-import { Alert, Box, Button, CircularProgress, IconButton, MenuItem, Select, Slider, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, MenuItem, Select, Slider, TextField, Tooltip, Typography } from '@mui/material';
 import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import Switch from '@mui/material/Switch';
@@ -50,7 +50,7 @@ const TILE_LAYER_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/co
 const HEATMAP_BASE_RADIUS = 30;
 const HEATMAP_BASE_BLUR = 30;
 const HEATMAP_MAX_ZOOM = 18;
-const HEATMAP_MIN_ZOOM_FACTOR = 0.3;
+const HEATMAP_MIN_ZOOM_FACTOR = 0.6;
 
 // Calculate zoom factor for heatmap scaling
 const calculateHeatmapZoomFactor = (currentZoom: number): number => {
@@ -60,7 +60,32 @@ const calculateHeatmapZoomFactor = (currentZoom: number): number => {
 const ROSBAG_TIMESTAMP_REGEX = /^rosbag2_(\d{4})_(\d{2})_(\d{2})-(\d{2})_(\d{2})_(\d{2})(?:_short)?$/;
 
 const parseRosbagTimestamp = (name: string): number | null => {
-  const match = ROSBAG_TIMESTAMP_REGEX.exec(name.trim());
+  // Handle multipart rosbags: extract base name before _multi_parts or /Part_
+  let baseName = name.trim();
+  
+  // If it contains _multi_parts, extract the part before it
+  if (baseName.includes('_multi_parts')) {
+    baseName = baseName.split('_multi_parts')[0];
+  }
+  // If it contains /Part_, extract the part before it (for paths like "rosbag2_.../Part_2")
+  else if (baseName.includes('/Part_')) {
+    baseName = baseName.split('/Part_')[0];
+  }
+  // If it's just a path with slashes, use the last part (e.g., "rosbag2_.../Part_2" -> "Part_2")
+  // But we want the base name, so check if the last part starts with "Part_"
+  else if (baseName.includes('/')) {
+    const parts = baseName.split('/');
+    const lastPart = parts[parts.length - 1];
+    // If last part is "Part_X", go up one level
+    if (lastPart.startsWith('Part_')) {
+      baseName = parts[parts.length - 2] || baseName;
+    } else {
+      // Otherwise use the last part (leaf name)
+      baseName = lastPart;
+    }
+  }
+  
+  const match = ROSBAG_TIMESTAMP_REGEX.exec(baseName);
   if (!match) {
     return null;
   }
@@ -510,6 +535,7 @@ const PositionalOverview: React.FC = () => {
   const polygonLayersRef = useRef<Map<string, { markers: L.Marker[]; polyline: L.Polyline | null; polygon: L.Polygon | null }>>(new Map());
   const offsetPolygonLayersRef = useRef<Map<string, L.Polyline>>(new Map());
   const isRestoringRef = useRef(false);
+  const prevPointsRef = useRef<RosbagPoint[]>([]);
 
   const handleBack = () => {
     if (window.history.length > 1) {
@@ -663,8 +689,8 @@ const PositionalOverview: React.FC = () => {
         console.error('Failed to save polygons to cache:', e);
       }
 
-      // Reset selection
-      setSelectedPolygonFile('');
+      // Keep the selected file name in the dropdown
+      setSelectedPolygonFile(filename);
     } catch (fetchError) {
       const errorMessage = fetchError instanceof Error ? fetchError.message : 'Failed to import polygon';
       setError(errorMessage);
@@ -1019,7 +1045,7 @@ const PositionalOverview: React.FC = () => {
         const currentZoom = map.getZoom();
         const zoomFactor = calculateHeatmapZoomFactor(currentZoom);
         const allLayer = allLayerFactory(allHeatmapData, {
-          minOpacity: 0.08,
+          minOpacity: 0.2,
           maxZoom: 18,
           radius: HEATMAP_BASE_RADIUS * zoomFactor,
           blur: HEATMAP_BASE_BLUR * zoomFactor,
@@ -1088,12 +1114,23 @@ const PositionalOverview: React.FC = () => {
       }, 0);
     }
 
-    const latLngs: L.LatLngTuple[] = points.map((point) => [point.lat, point.lon]);
+    // Only reset zoom when points actually change, not when showAllRosbags toggles
+    const pointsChanged = prevPointsRef.current.length === 0 || 
+      points.length !== prevPointsRef.current.length || 
+      points.some((p, i) => !prevPointsRef.current[i] || 
+        p.lat !== prevPointsRef.current[i].lat || 
+        p.lon !== prevPointsRef.current[i].lon);
+    
+    if (pointsChanged && points.length > 0) {
+      const latLngs: L.LatLngTuple[] = points.map((point) => [point.lat, point.lon]);
 
-    if (latLngs.length === 1) {
-      map.setView(latLngs[0], 15);
-    } else {
-      map.fitBounds(L.latLngBounds(latLngs), { padding: [32, 32] });
+      if (latLngs.length === 1) {
+        map.setView(latLngs[0], 15);
+      } else {
+        map.fitBounds(L.latLngBounds(latLngs), { padding: [32, 32] });
+      }
+      
+      prevPointsRef.current = [...points];
     }
 
     map.invalidateSize();
@@ -1846,12 +1883,13 @@ const PositionalOverview: React.FC = () => {
   return (
     <Box
       sx={{
-        minHeight: '100vh',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
         backgroundColor: '#121212',
         color: '#ffffff',
         fontFamily: 'inherit',
+        overflow: 'hidden',
       }}
     >
       <Box
@@ -1860,6 +1898,7 @@ const PositionalOverview: React.FC = () => {
           flex: 1,
           minHeight: 0,
           position: 'relative',
+          overflow: 'hidden',
         }}
       >
         <Box
@@ -1995,7 +2034,7 @@ const PositionalOverview: React.FC = () => {
             sx={{
               position: 'absolute',
               left: '50%',
-              bottom: 140,
+              bottom: 74,
               transform: 'translateX(-50%)',
               display: 'flex',
               alignItems: 'center',
@@ -2011,7 +2050,7 @@ const PositionalOverview: React.FC = () => {
                 borderRadius: 999,
                 boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
                 px: 4,
-                py: 1.5,
+                py: 0.3,
                 backdropFilter: 'blur(8px)',
                 display: 'flex',
                 alignItems: 'center',
@@ -2043,11 +2082,11 @@ const PositionalOverview: React.FC = () => {
                   zIndex: 1,
                   pointerEvents: 'auto',
                   '& .MuiSlider-thumb': {
-                    width: 18,
-                    height: 18,
-                    boxShadow: (theme) => `0 0 0 8px ${theme.palette.primary.main}40`,
+                    width: 12,
+                    height: 12,
+                    boxShadow: (theme) => `0 0 0 3px ${theme.palette.primary.main}40`,
                     '&:hover, &.Mui-focusVisible': {
-                      boxShadow: (theme) => `0 0 0 12px ${theme.palette.primary.main}55`,
+                      boxShadow: (theme) => `0 0 0 5px ${theme.palette.primary.main}55`,
                     },
                   },
                   '& .MuiSlider-rail': {
@@ -2056,7 +2095,7 @@ const PositionalOverview: React.FC = () => {
                   '& .MuiSlider-valueLabel': {
                     background: (theme) => theme.palette.background.paper,
                     borderRadius: 5,
-                    fontSize: '0.75rem',
+                    fontSize: '8pt',
                     fontWeight: 600,
                     color: (theme) => theme.palette.text.primary,
                   },
@@ -2071,7 +2110,7 @@ const PositionalOverview: React.FC = () => {
             sx={{
               position: 'absolute',
               left: '50%',
-              bottom: 72,
+              bottom: 32,
               transform: 'translateX(-50%)',
               display: 'flex',
               alignItems: 'center',
@@ -2082,12 +2121,12 @@ const PositionalOverview: React.FC = () => {
           >
             <Box
               sx={{
-                width: 'min(620px, 70vw)',
+                width: 'min(820px, 70vw)',
                 backgroundColor: 'rgba(18, 18, 18, 0.9)',
                 borderRadius: 999,
                 boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
                 px: 4,
-                py: 1.5,
+                py: 0.3,
                 backdropFilter: 'blur(8px)',
                 display: 'flex',
                 alignItems: 'center',
@@ -2155,11 +2194,11 @@ const PositionalOverview: React.FC = () => {
                   zIndex: 1,
                   pointerEvents: 'auto',
                   '& .MuiSlider-thumb': {
-                    width: 18,
-                    height: 18,
-                    boxShadow: (theme) => `0 0 0 8px ${theme.palette.primary.main}40`,
+                    width: 12,
+                    height: 12,
+                    boxShadow: (theme) => `0 0 0 3px ${theme.palette.primary.main}40`,
                     '&:hover, &.Mui-focusVisible': {
-                      boxShadow: (theme) => `0 0 0 12px ${theme.palette.primary.main}55`,
+                      boxShadow: (theme) => `0 0 0 5px ${theme.palette.primary.main}55`,
                     },
                   },
                   '& .MuiSlider-rail': {
@@ -2168,69 +2207,11 @@ const PositionalOverview: React.FC = () => {
                   '& .MuiSlider-valueLabel': {
                     background: (theme) => theme.palette.background.paper,
                     borderRadius: 5,
-                    fontSize: '0.75rem',
+                    fontSize: '8pt',
                     fontWeight: 600,
                     color: (theme) => theme.palette.text.primary,
                   },
                 }}
-              />
-            </Box>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                padding: '10px 18px',
-                borderRadius: 999,
-                backgroundColor: 'rgba(18, 18, 18, 0.92)',
-                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                backdropFilter: 'blur(8px)',
-                pointerEvents: 'auto', // Enable pointer events for this container
-              }}
-            >
-              <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 500 }}>
-                Show all
-              </Typography>
-              <Switch
-                checked={showAllRosbags}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setShowAllRosbags(checked);
-                  if (checked) {
-                    fetchAllPoints();
-                  }
-                }}
-                color="primary"
-                disabled={loadingAllPoints}
-                size="small"
-              />
-            </Box>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                padding: '10px 18px',
-                borderRadius: 999,
-                backgroundColor: 'rgba(18, 18, 18, 0.92)',
-                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                backdropFilter: 'blur(8px)',
-                pointerEvents: 'auto', // Enable pointer events for this container
-              }}
-            >
-              <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 500 }}>
-                Show mcaps
-              </Typography>
-              <Switch
-                checked={showMcaps}
-                onChange={(event) => {
-                  setShowMcaps(event.target.checked);
-                }}
-                color="primary"
-                disabled={loadingMcaps}
-                size="small"
               />
             </Box>
           </Box>
@@ -2240,9 +2221,9 @@ const PositionalOverview: React.FC = () => {
           sx={{
             position: 'absolute',
             left: 32,
-            bottom: 72,
+            bottom: 32,
             zIndex: 1100,
-            backgroundColor: 'rgba(18, 18, 18, 0.92)',
+            backgroundColor: 'rgba(18, 18, 18, 0.8)',
             borderRadius: 2,
             padding: '16px',
             boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
@@ -2250,68 +2231,31 @@ const PositionalOverview: React.FC = () => {
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
-            maxWidth: '400px',
+            width: '430px',
             color: '#fff',
           }}
         >
-          {/* Offset Section */}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-            }}
-          >
-            <Typography variant="body2" sx={{ fontSize: '0.85rem', color: '#ffffff', whiteSpace: 'nowrap' }}>
-              Offset (m):
-            </Typography>
-            <TextField
-              type="number"
-              value={offsetDistance}
-              onChange={(e) => {
-                const value = parseFloat(e.target.value) || 0;
-                setOffsetDistance(value);
-              }}
-              size="small"
-              inputProps={{
-                step: 1,
-                min: -1000,
-                max: 1000,
-                style: { color: '#ffffff', fontSize: '0.85rem', width: '80px' },
-              }}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  backgroundColor: 'rgba(30, 30, 30, 0.8)',
-                  '& fieldset': {
-                    borderColor: 'rgba(255, 255, 255, 0.23)',
-                  },
-                  '&:hover fieldset': {
-                    borderColor: 'rgba(255, 255, 255, 0.4)',
-                  },
-                  '&.Mui-focused fieldset': {
-                    borderColor: '#2196f3',
-                  },
-                },
-              }}
-            />
-          </Box>
-
-          {/* Separator */}
-          <Box sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
-
-          {/* Selected Rosbag Section */}
+          {/* First Part: Selected Rosbag Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               Selected Rosbag
             </Typography>
             {selectedRosbag ? (
               <>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {selectedRosbag.name}
-                </Typography>
-                <Typography variant="body2" sx={{ opacity: 0.7 }}>
-                  {formatTimestampLabel(selectedRosbag.timestamp, 'Timestamp unavailable')}
-                </Typography>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '8pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    {selectedRosbag.name}
+                  </Typography>
+                  {selectedRosbag.timestamp ? (
+                    <Typography variant="body2" sx={{ opacity: 0.7, fontSize: '8pt', whiteSpace: 'nowrap', marginLeft: 'auto' }}>
+                      {new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(selectedRosbag.timestamp))}
+                    </Typography>
+                  ) : (
+                    <Typography variant="body2" sx={{ opacity: 0.5, fontStyle: 'italic', whiteSpace: 'nowrap', marginLeft: 'auto' }}>
+                      Timestamp unavailable
+                    </Typography>
+                  )}
+                </Box>
               </>
             ) : (
               <>
@@ -2323,41 +2267,214 @@ const PositionalOverview: React.FC = () => {
                 </Typography>
               </>
             )}
-            <Typography variant="body2" sx={{ opacity: 0.7 }}>
-              {showAllRosbags ? 'Overlay: All rosbags (yellow)' : 'Overlay: Off'}
+          </Box>
+
+          {/* Separator */}
+          <Box sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
+
+          {/* Display Options Section */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Options
             </Typography>
-            {showAllRosbags && loadingAllPoints && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                <CircularProgress size={14} color="inherit" />
-                <Typography variant="caption">Loading overlay…</Typography>
+            <Box sx={{ display: 'flex', gap: 1, width: '100%' }}>
+              {/* Show all toggle - half width */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  px: 1.5,
+                  py: 0.75,
+                  borderRadius: 1,
+                  backgroundColor: 'rgba(30, 30, 30, 0.6)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  flex: 1,
+                }}
+              >
+                <Typography variant="body2" sx={{ fontSize: '8pt', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                  Show all
+                </Typography>
+                <Switch
+                  checked={showAllRosbags}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setShowAllRosbags(checked);
+                    if (checked) {
+                      fetchAllPoints();
+                    }
+                  }}
+                  color="primary"
+                  disabled={loadingAllPoints}
+                  size="small"
+                />
               </Box>
-            )}
-            {!loadingAllPoints && !showAllRosbags && allPointsLoaded && (
-              <Typography variant="caption" sx={{ opacity: 0.6 }}>
-                Overlay data cached
-              </Typography>
-            )}
-            <Box sx={{ mt: 0.5 }}>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                Polygons: {polygons.length}
-                {polygons.filter((p) => !p.isClosed).length > 0 && (
-                  <span> ({polygons.filter((p) => !p.isClosed).length} active)</span>
-                )}
-              </Typography>
+              {/* Show mcaps toggle - half width */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  px: 1.5,
+                  py: 0.75,
+                  borderRadius: 1,
+                  backgroundColor: 'rgba(30, 30, 30, 0.6)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  flex: 1,
+                }}
+              >
+                <Typography variant="body2" sx={{ fontSize: '8pt', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                  Show mcaps
+                </Typography>
+                <Switch
+                  checked={showMcaps}
+                  onChange={(event) => {
+                    setShowMcaps(event.target.checked);
+                  }}
+                  color="primary"
+                  disabled={loadingMcaps}
+                  size="small"
+                />
+              </Box>
             </Box>
           </Box>
 
           {/* Separator */}
           <Box sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
 
-          {/* Polygon Controls Section */}
+          {/* Second Part: Polygons Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-              <Button
-                size="small"
-                variant="contained"
-                color="primary"
-                disabled={polygons.filter((p) => p.isClosed).length === 0}
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Area Restrictions
+            </Typography>
+            
+            {/* Count */}
+            {/*}
+            <Box>
+              <Typography variant="body2" sx={{ opacity: 0.8 }}>
+                count: {polygons.length}
+              </Typography>
+            </Box>
+            */}
+
+            {/* Filter: Import Polygons, Offset, Apply to Search, Clear All */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {/* First row: Select and TextField */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <Select
+                  value={selectedPolygonFile}
+                  onChange={(e) => {
+                    const filename = e.target.value as string;
+                    setSelectedPolygonFile(filename);
+                    if (filename) {
+                      handleImportPolygon(filename);
+                    } else {
+                      // Clear polygons when "None" is selected (same as Clear All)
+                      setPolygons([]);
+                      setActivePolygonId(null);
+                      setSelectedPolygonId(null);
+                      // Clear positional filter and polygons from sessionStorage
+                      try {
+                        sessionStorage.removeItem('__BagSeekPositionalFilter');
+                        sessionStorage.removeItem('__BagSeekPositionalPolygons');
+                      } catch (e) {
+                        console.error('Failed to clear positional filter:', e);
+                      }
+                    }
+                  }}
+                  displayEmpty
+                  size="small"
+                  disabled={loadingPolygonFiles || importingPolygon || polygonFiles.length === 0}
+                  sx={{
+                    fontSize: '8pt',
+                    flex: 1,
+                    backgroundColor: 'rgba(30, 30, 30, 0.8)',
+                    color: '#ffffff',
+                    overflow: 'hidden',
+                    borderRadius: 1,
+                    '& .MuiSelect-select': {
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    },
+                    '& .MuiOutlinedInput-notchedOutline': {
+                      borderColor: 'rgba(255, 255, 255, 0.23)',
+                    },
+                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                      borderColor: 'rgba(255, 255, 255, 0.4)',
+                    },
+                    '& .MuiSvgIcon-root': {
+                      color: '#ffffff',
+                    },
+                  }}
+                >
+                  <MenuItem value="">
+                    None
+                  </MenuItem>
+                  {polygonFiles.map((filename) => (
+                    <MenuItem key={filename} value={filename}>
+                      {filename.replace('.json', '')}
+                    </MenuItem>
+                  ))}
+                </Select>
+                <TextField
+                  type="number"
+                  value={offsetDistance}
+                  onChange={(e) => {
+                    const value = parseFloat(e.target.value) || 0;
+                    setOffsetDistance(value);
+                  }}
+                  size="small"
+                  disabled={polygons.length === 0}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Typography sx={{ fontSize: '8pt', color: '#cccccc' }}>
+                          Offset
+                        </Typography>
+                      </InputAdornment>
+                    ),
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <Typography sx={{ fontSize: '8pt', color: '#cccccc' }}>
+                          m
+                        </Typography>
+                      </InputAdornment>
+                    ),
+                  }}
+                  inputProps={{
+                    step: 1,
+                    min: -1000,
+                    max: 1000,
+                    style: { color: '#ffffff', fontSize: '8pt' },
+                  }}
+                  sx={{
+                    flex: 1,
+                    '& .MuiOutlinedInput-root': {
+                      backgroundColor: 'rgba(30, 30, 30, 0.8)',
+                      borderRadius: 1,
+                      '& fieldset': {
+                        borderColor: 'rgba(255, 255, 255, 0.23)',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: 'rgba(255, 255, 255, 0.4)',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#2196f3',
+                      },
+                    },
+                  }}
+                />
+              </Box>
+              {/* Second row: Buttons with equal spacing */}
+              <Box sx={{ display: 'flex', gap: 1, width: '100%' }}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="primary"
+                  disabled={polygons.filter((p) => p.isClosed).length === 0}
                 onClick={async () => {
                   // Get rosbags that overlap with closed polygons (using offset if applicable)
                   const closedPolygons = polygons.filter((p) => p.isClosed);
@@ -2384,78 +2501,32 @@ const PositionalOverview: React.FC = () => {
                   // Navigate to GlobalSearch
                   navigate('/search');
                 }}
-                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
               >
                 Apply to Search
               </Button>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Select
-                value={selectedPolygonFile}
-                onChange={(e) => {
-                  const filename = e.target.value as string;
-                  setSelectedPolygonFile(filename);
-                  if (filename) {
-                    handleImportPolygon(filename);
-                  }
-                }}
-                displayEmpty
-                size="small"
-                disabled={loadingPolygonFiles || importingPolygon || polygonFiles.length === 0}
-                sx={{
-                  fontSize: '0.7rem',
-                  minWidth: 150,
-                  backgroundColor: 'rgba(30, 30, 30, 0.8)',
-                  color: '#ffffff',
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'rgba(255, 255, 255, 0.23)',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'rgba(255, 255, 255, 0.4)',
-                  },
-                  '& .MuiSvgIcon-root': {
-                    color: '#ffffff',
-                  },
-                }}
-              >
-                <MenuItem value="" disabled>
-                  <em>Import Polygon</em>
-                </MenuItem>
-                {polygonFiles.map((filename) => (
-                  <MenuItem key={filename} value={filename}>
-                    {filename.replace('.json', '')}
-                  </MenuItem>
-                ))}
-              </Select>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={polygons.filter((p) => p.isClosed).length === 0 || exportingList}
-                onClick={handleExportList}
-                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
-              >
-                {exportingList ? 'Exporting...' : 'Export list'}
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={polygons.length === 0}
-                onClick={() => {
-                  setPolygons([]);
-                  setActivePolygonId(null);
-                  setSelectedPolygonId(null);
-                  // Clear positional filter and polygons from sessionStorage
-                  try {
-                    sessionStorage.removeItem('__BagSeekPositionalFilter');
-                    sessionStorage.removeItem('__BagSeekPositionalPolygons');
-                  } catch (e) {
-                    console.error('Failed to clear positional filter:', e);
-                  }
-                }}
-                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
-              >
-                Clear All
-              </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={polygons.length === 0}
+                  onClick={() => {
+                    setPolygons([]);
+                    setActivePolygonId(null);
+                    setSelectedPolygonId(null);
+                    setSelectedPolygonFile(''); // Reset the selected file so it can be reselected
+                    // Clear positional filter and polygons from sessionStorage
+                    try {
+                      sessionStorage.removeItem('__BagSeekPositionalFilter');
+                      sessionStorage.removeItem('__BagSeekPositionalPolygons');
+                    } catch (e) {
+                      console.error('Failed to clear positional filter:', e);
+                    }
+                  }}
+                  sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
+                >
+                  Clear All
+                </Button>
+              </Box>
             </Box>
           </Box>
         </Box>
@@ -2466,10 +2537,10 @@ const PositionalOverview: React.FC = () => {
             color="primary"
             sx={{
               position: 'absolute',
-              bottom: 84,
+              bottom: 32,
               right: 32,
               zIndex: 1100,
-              backgroundColor: 'rgba(18, 18, 18, 0.92)',
+              backgroundColor: 'rgba(18, 18, 18, 0.8)',
               borderRadius: 2,
               boxShadow: '0 10px 24px rgba(0, 0, 0, 0.4)',
               width: 52,
