@@ -77,13 +77,6 @@ class Config:
         self.adjacent_similarities_dir = Path(os.getenv("BASE") + os.getenv("ADJACENT_SIMILARITIES"))
         self.embeddings_dir = Path(os.getenv("BASE") + os.getenv("EMBEDDINGS"))
         
-        # Extracted data paths
-        self.images_dir = Path(os.getenv("BASE") + os.getenv("IMAGES"))
-        self.odom_dir = Path(os.getenv("BASE") + os.getenv("ODOM"))
-        self.pointclouds_dir = Path(os.getenv("BASE") + os.getenv("POINTCLOUDS"))
-        self.positions_dir = Path(os.getenv("BASE") + os.getenv("POSITIONS"))
-        self.videos_dir = Path(os.getenv("BASE") + os.getenv("VIDEOS"))
-        
         # Export path
         self.export_dir = Path(os.getenv("BASE") + os.getenv("EXPORT"))
         
@@ -151,7 +144,7 @@ class Config:
         if env_file is None:
             # Get path relative to this config.py file
             config_dir = Path(__file__).parent
-            env_file = config_dir / ".." / ".." / ".env"
+            env_file = config_dir / ".." / ".env"
         
         # Load .env file if it exists (doesn't raise error if missing)
         load_dotenv(env_file)
