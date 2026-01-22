@@ -25,3 +25,5 @@ preprocessing/mcap_*
 
 *.pyc
 __pycache__/
+
+old_preprocessing/
