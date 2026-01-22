@@ -87,7 +87,7 @@ bagseek/
 
 ## 🔗 Linking up your infrastructure
 
-You have to create your own `.env` file and link up your own infrastructure using the following template. Note that 
+You have to create your own `.env` file and link up your own infrastructure using the following template. Note that you only have to insert the marked directories.
 
 ```
 BASE= ---insert base dir for preprocessing here---
@@ -97,8 +97,6 @@ PRESELECTED_ROSBAG= ---insert preselected rosbag name here---
 PRESELECTED_MODEL= ---insert preselected model name---
 OPEN_CLIP_MODELS= ---insert dir of open_clip models---
 OTHER_MODELS= ---insert dir of other models without the open_clip infrastructure---
-
-POSITIONAL_GRID_RESOLUTION=0.0001
 
 IMAGE_TOPIC_PREVIEWS=/frontend/image_topic_previews
 POSITIONAL_LOOKUP_TABLE=/frontend/positional_lookup_table/positional_lookup_table.json
