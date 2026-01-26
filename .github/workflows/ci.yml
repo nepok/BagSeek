@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flask-backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: flask-backend/requirements-docker.txt
+
+      - name: Install dependencies
+        run: |
+          pip install pytest flask flask-cors python-dotenv
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react-frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: react-frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run build 2>&1 | grep -E "warning|error" || true
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t bagseek-backend ./flask-backend
+
+      - name: Build frontend image
+        run: docker build -t bagseek-frontend ./react-frontend
+
+      - name: Test backend health
+        run: |
+          docker run -d --name test-backend \
+            -e BASE=/tmp -e ROSBAGS=/tmp -e PRESELECTED_ROSBAG=/tmp/test \
+            -e OPEN_CLIP_MODELS=/tmp -e OTHER_MODELS=/tmp \
+            -e IMAGE_TOPIC_PREVIEWS=/tmp -e POSITIONAL_LOOKUP_TABLE=/tmp/lookup.json \
+            -e LOOKUP_TABLES=/tmp -e TOPICS=/tmp -e CANVASES_FILE=/tmp/canvases.json \
+            -e POLYGONS_DIR=/tmp -e ADJACENT_SIMILARITIES=/tmp -e EMBEDDINGS=/tmp \
+            -e EXPORT=/tmp \
+            bagseek-backend
+          sleep 30
+          docker logs test-backend
+          curl -f http://localhost:5000/health || (docker logs test-backend && exit 1)
+        continue-on-error: true

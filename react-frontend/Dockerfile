@@ -1,20 +1,24 @@
-# Use an official Node.js runtime as a parent image
-FROM node:22
+# Build stage
+FROM node:20-alpine AS build
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy package.json and package-lock.json (if available)
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm install
 
-# Copy the rest of the application source code
 COPY . .
+RUN npm run build
 
-# Expose port 3000 (React's default port)
-EXPOSE 3000
+# Production stage
+FROM nginx:alpine
 
-# Start the React development server
-CMD ["npm", "start"]
+# Copy built assets from build stage
+COPY --from=build /app/build /usr/share/nginx/html
+
+# Optional: Custom nginx config for React Router
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
