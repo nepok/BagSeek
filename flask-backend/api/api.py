@@ -2,18 +2,17 @@ from csv import reader
 import json
 import base64
 import os
-import glob
 from pathlib import Path
 from prompt_toolkit import prompt
 from rosbag2_py import SequentialReader, SequentialWriter, StorageOptions, ConverterOptions, TopicMetadata
 from rclpy.serialization import deserialize_message, serialize_message
 from rosidl_runtime_py.utilities import get_message
 from mcap_ros2.reader import read_ros2_messages
-from mcap.reader import make_reader, SeekingReader
+from mcap.reader import SeekingReader
 from mcap.writer import Writer, CompressionType, IndexType
 from mcap_ros2.decoder import DecoderFactory
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory, send_file, abort # type: ignore
+from flask import Flask, jsonify, request, send_from_directory # type: ignore
 from flask_cors import CORS  # type: ignore
 import logging
 import pandas as pd
@@ -22,20 +21,18 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import faiss
-from typing import TYPE_CHECKING, Iterable, Sequence, cast
+from typing import Iterable, Sequence
 import open_clip
 import math
 from threading import Thread, Lock
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-import gc
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 from dotenv import load_dotenv
 from time import time
-import sys
 import subprocess
 import re
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -56,8 +53,16 @@ app = Flask(__name__)
 CORS(app)  # Allow cross-origin requests from the frontend (e.g., React)
 
 
-gemma_tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
-gemma_model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b-it")
+# Gemma model for prompt enhancement (optional - requires HuggingFace auth)
+try:
+    gemma_tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    gemma_model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b-it")
+    GEMMA_AVAILABLE = True
+except Exception as e:
+    print(f"Warning: Gemma model not available ({e}). Prompt enhancement disabled.")
+    gemma_tokenizer = None
+    gemma_model = None
+    GEMMA_AVAILABLE = False
 
 BASE_STR = os.getenv("BASE")
 
@@ -346,6 +351,10 @@ def resolve_custom_checkpoint(model_name: str) -> Path:
     raise FileNotFoundError(
         f"Could not locate checkpoint for custom model '{model_name}'. Tried: {', '.join(tried) or 'no candidates'}"
     )
+
+@app.route('/health')
+def health():
+    return {'status': 'healthy'}, 200
 
 # Endpoint to set the current reference timestamp and retrieve its aligned mappings
 @app.route('/api/set-reference-timestamp', methods=['POST'])
@@ -1900,6 +1909,9 @@ def get_content_mcap():
 @app.route('/api/enhance-prompt', methods=['GET'])
 def enhance_prompt_endpoint():
     """Enhance a user prompt using the gemma model."""
+    if not GEMMA_AVAILABLE:
+        return jsonify({'error': 'Prompt enhancement not available (Gemma model not loaded)'}), 503
+
     user_prompt = request.args.get('prompt', default=None, type=str)
     if not user_prompt:
         return jsonify({'error': 'No prompt provided'}), 400
