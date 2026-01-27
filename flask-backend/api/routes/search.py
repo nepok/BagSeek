@@ -12,7 +12,7 @@ from flask import Blueprint, jsonify, request
 import open_clip
 from ..config import EMBEDDINGS, LOOKUP_TABLES, OPEN_CLIP_MODELS, MAX_K, GEMMA_AVAILABLE, gemma_tokenizer, gemma_model
 from ..state import SEARCH_PROGRESS
-from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
+from ..utils.rosbag import load_lookup_tables_for_rosbag
 from ..utils.clip import get_text_embedding, load_agriclip, resolve_custom_checkpoint, tokenize_texts
 
 search_bp = Blueprint('search', __name__)
@@ -93,7 +93,8 @@ def search():
     # ---- Parse inputs
     try:
         models_list = [m.strip() for m in models.split(",") if m.strip()]  # Filter out empty model names
-        rosbags_list = [extract_rosbag_name_from_path(r.strip()) for r in rosbags.split(",") if r.strip()]
+        # Use rosbag paths directly - frontend sends relative paths that match preprocessing output
+        rosbags_list = [r.strip() for r in rosbags.split(",") if r.strip()]
         time_start, time_end = map(int, timeRange.split(","))
         k_subsample = max(1, int(accuracy))
     except Exception as e:
