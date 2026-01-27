@@ -5,6 +5,7 @@ import Switch from '@mui/material/Switch';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
+import './PositionalOverview.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { inflatePathsD, PathsD, PathD, JoinType, EndType } from 'clipper2-ts';
@@ -55,6 +56,14 @@ const HEATMAP_MIN_ZOOM_FACTOR = 0.6;
 // Calculate zoom factor for heatmap scaling
 const calculateHeatmapZoomFactor = (currentZoom: number): number => {
   return Math.max(HEATMAP_MIN_ZOOM_FACTOR, currentZoom / HEATMAP_MAX_ZOOM);
+};
+
+// HTML escape helper to prevent XSS in Leaflet popups and labels
+const escapeHtml = (str: string | number): string => {
+  const s = String(str);
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
 };
 
 const ROSBAG_TIMESTAMP_REGEX = /^rosbag2_(\d{4})_(\d{2})_(\d{2})-(\d{2})_(\d{2})_(\d{2})(?:_short)?$/;
@@ -127,7 +136,7 @@ const pointInPolygon = (point: { lat: number; lon: number }, polygon: PolygonPoi
     const yj = polygon[j].lat;
 
     const intersect =
-      yi > point.lat !== yj > point.lat &&
+      (yi > point.lat) !== (yj > point.lat) &&
       point.lon < ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi;
     if (intersect) {
       inside = !inside;
@@ -1087,10 +1096,9 @@ const PositionalOverview: React.FC = () => {
     if (heatLayerFactory) {
       const currentZoom = map.getZoom();
       const zoomFactor = calculateHeatmapZoomFactor(currentZoom);
-      // Reduce opacity when "Show All" is active to prevent excessive layering
-      const minOpacity = showAllRosbags ? 0.1 : 0.2;
+      // Keep current rosbag at full opacity so it overlays on top of "all rosbags" layer
       const heatLayer = heatLayerFactory(heatmapData, {
-        minOpacity: minOpacity,
+        minOpacity: 0.2,
         maxZoom: 18,
         radius: HEATMAP_BASE_RADIUS * zoomFactor,
         blur: HEATMAP_BASE_BLUR * zoomFactor,
@@ -1314,15 +1322,15 @@ const PositionalOverview: React.FC = () => {
       className: 'mcap-label',
       html: `<div style="
         background-color: rgba(0, 0, 0, 0.8);
-        color: ${color};
+        color: ${escapeHtml(color)};
         padding: 4px 8px;
         border-radius: 4px;
         font-weight: bold;
         font-size: 12px;
-        border: 2px solid ${color};
+        border: 2px solid ${escapeHtml(color)};
         white-space: nowrap;
         text-align: center;
-      ">${mcapId}</div>`,
+      ">${escapeHtml(mcapId)}</div>`,
       iconSize: [100, 30],
       iconAnchor: [50, 15],
     });
@@ -1395,8 +1403,9 @@ const PositionalOverview: React.FC = () => {
       // Show tooltip if we found a nearby point
       if (nearestPoint) {
         const mcapEntries = Object.entries(nearestPoint.mcaps).sort((a, b) => (b[1] as number) - (a[1] as number));
-        const mcapList = mcapEntries.map(([id, count]) => `${id} (${count})`).join('<br>');
-        
+        // Escape each entry to prevent XSS before joining with <br>
+        const mcapList = mcapEntries.map(([id, count]) => `${escapeHtml(id)} (${escapeHtml(count)})`).join('<br>');
+
         const popup = L.popup({
           closeButton: false,
           className: 'mcap-hover-popup',
@@ -1417,7 +1426,7 @@ const PositionalOverview: React.FC = () => {
             </div>
           `)
           .openOn(map);
-        
+
         hoverTooltipRef.current = popup;
       }
     };

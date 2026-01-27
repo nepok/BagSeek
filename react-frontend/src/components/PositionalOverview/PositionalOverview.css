@@ -1,0 +1,17 @@
+/* Remove white border from mcap hover popup */
+.mcap-hover-popup .leaflet-popup-content-wrapper {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.mcap-hover-popup .leaflet-popup-content {
+  margin: 0 !important;
+}
+
+.mcap-hover-popup .leaflet-popup-tip {
+  background: rgba(0, 0, 0, 0.7) !important;
+  border: none !important;
+  box-shadow: none !important;
+}
