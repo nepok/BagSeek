@@ -304,6 +304,7 @@ const GlobalSearch: React.FC = () => {
 
     const searchIconRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
     const [models, setModels] = useState<string[]>([]);
     const [rosbags, setRosbags] = useState<string[]>([]);
@@ -513,31 +514,50 @@ const GlobalSearch: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [positionallyFilteredRosbags]);
 
-    // Poll search status periodically when running, stop after 3 failed fetches
-    useEffect(() => {
-        let retryCount = 0;
-        let interval: NodeJS.Timeout;
-
-        if (searchStatus.status === 'running') {
-            interval = setInterval(async () => {
-                try {
-                    const response = await fetch('/api/search-status');
-                    const data = await response.json();
-                    setSearchStatus(data);
-                    retryCount = 0; // reset on success
-                } catch (err) {
-                    console.error('Failed to fetch search status:', err);
-                    retryCount++;
-                    if (retryCount >= 3) {
-                        console.warn('Stopping search status polling after 3 failed attempts');
-                        clearInterval(interval);
-                    }
-                }
-            }, 1000);
+    // Helper function to start polling - called directly from search handler
+    const startStatusPolling = () => {
+        // Clear any existing polling
+        if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
         }
 
-        return () => clearInterval(interval);
-    }, [searchStatus.status]);
+        let retryCount = 0;
+        pollingIntervalRef.current = setInterval(async () => {
+            try {
+                const response = await fetch('/api/search-status');
+                const data = await response.json();
+                setSearchStatus(data);
+                retryCount = 0;
+
+                // Stop polling when search is done or errored
+                if (data.status === 'done' || data.status === 'error') {
+                    if (pollingIntervalRef.current) {
+                        clearInterval(pollingIntervalRef.current);
+                        pollingIntervalRef.current = null;
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to fetch search status:', err);
+                retryCount++;
+                if (retryCount >= 3) {
+                    console.warn('Stopping search status polling after 3 failed attempts');
+                    if (pollingIntervalRef.current) {
+                        clearInterval(pollingIntervalRef.current);
+                        pollingIntervalRef.current = null;
+                    }
+                }
+            }
+        }, 500); // Poll every 500ms for more responsive updates
+    };
+
+    // Cleanup polling on unmount
+    useEffect(() => {
+        return () => {
+            if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+            }
+        };
+    }, []);
 
 
     const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -556,6 +576,8 @@ const GlobalSearch: React.FC = () => {
             setSearchDone(false);
             setDisplayedResultsCount(initial_render_limit); // Reset displayed results count
             setSearchStatus({ progress: 0, status: 'running', message: 'Starting search...' });
+            // Start polling immediately - don't rely on useEffect timing
+            startStatusPolling();
             try {
                 // Wait for enhancement if enhancePrompt is enabled
                 let queryToUse = search;
