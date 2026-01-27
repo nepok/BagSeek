@@ -150,9 +150,9 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
               }}
             >
               {/* Render dropdown menu items with colored dot and truncated path */}
-              {filePaths.map((path, index) => (
+              {filePaths.map((path) => (
                 <MenuItem
-                  key={index}
+                  key={path}
                   value={path}
                   sx={{
                     display: 'flex',
