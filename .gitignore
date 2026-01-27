@@ -4,6 +4,7 @@
 flask-backend/src/*
 !flask-backend/src/rosbags
 flask-backend/Dockerfile
+flask-backend/api-old
 
 # Frontend
 react-frontend/node_modules
