@@ -8,7 +8,29 @@ ls /home/nepomuk/sflnas/DataReadOnly334/tractor_data/autorecord > /dev/null 2>&1
 
 echo "Starting containers..."
 docker compose down 2>/dev/null
-docker compose up -d
+
+# Check if --build flag is passed (in any position)
+BUILD_FLAG=false
+SHOW_LOGS=false
+
+for arg in "$@"; do
+    if [[ "$arg" == "--build" ]]; then
+        BUILD_FLAG=true
+    elif [[ "$arg" == "--logs" ]]; then
+        SHOW_LOGS=true
+    fi
+done
+
+if [[ "$BUILD_FLAG" == "true" ]]; then
+    docker compose up -d --build
+else
+    docker compose up -d
+fi
 
 echo "Waiting for healthy status..."
 docker compose ps
+
+echo "Showing logs..."
+if [[ "$SHOW_LOGS" == "true" ]]; then
+    docker compose logs -f
+fi
