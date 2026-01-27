@@ -1,5 +1,6 @@
 """Flask application factory."""
 import os
+import logging
 from flask import Flask
 from flask_cors import CORS
 from .routes import (
@@ -19,6 +20,13 @@ from .routes import (
 def create_app():
     """Create and configure the Flask application."""
     app = Flask(__name__)
+
+    # Configure logging to show INFO level messages
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
     # Configure CORS with allowed origins from environment variable
     # Default to localhost for development; set CORS_ORIGINS in production
