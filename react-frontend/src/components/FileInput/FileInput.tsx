@@ -92,7 +92,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       fullWidth
       maxWidth="md" // Dialog width control
     >
-      <DialogTitle id="form-dialog-title">Select RosBag File</DialogTitle>
+      <DialogTitle id="form-dialog-title">Select Rosbag Folder</DialogTitle>
       <DialogContent>
         <FormControl sx={{ width: '100%', overflow: 'hidden' }}>
           <InputLabel id="rosbag-select-label"></InputLabel>
