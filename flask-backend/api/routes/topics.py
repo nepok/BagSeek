@@ -253,26 +253,10 @@ def get_topic_mcap_mapping():
             'mcap_identifier': current_mcap_id
         })
         
-        # Sort ranges by numeric MCAP ID (not alphabetically)
-        def get_mcap_id_numeric(mcap_id):
-            """Extract numeric value from MCAP ID for sorting."""
-            if mcap_id is None:
-                return float('inf')
-            try:
-                # Try to convert directly to int
-                return int(mcap_id)
-            except (ValueError, TypeError):
-                # If it's a string, try to extract number from it
-                try:
-                    # Handle cases like "mcap_10" or "10_mcap"
-                    numbers = re.findall(r'\d+', str(mcap_id))
-                    if numbers:
-                        return int(numbers[0])
-                    return float('inf')
-                except (ValueError, TypeError):
-                    return float('inf')
-        
-        ranges.sort(key=lambda r: (get_mcap_id_numeric(r['mcap_identifier']), r['startIndex']))
+        # Sort ranges by startIndex ONLY - this is critical for correct lookup
+        # The frontend iterates through ranges sequentially to find which range contains a given index
+        # If sorted by mcap_identifier, the lookup will fail because ranges won't be in index order
+        ranges.sort(key=lambda r: r['startIndex'])
         
         return jsonify({
             'ranges': ranges,

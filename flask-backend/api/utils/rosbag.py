@@ -60,19 +60,30 @@ def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> p
     if use_cache and rosbag_name in _lookup_table_cache:
         cached_df, cached_mtime = _lookup_table_cache[rosbag_name]
         # Check if any CSV file was modified
-        csv_files = sorted(lookup_rosbag_dir.glob("*.csv"))
+        csv_files = list(lookup_rosbag_dir.glob("*.csv"))
         if csv_files:
             latest_mtime = max(f.stat().st_mtime for f in csv_files)
             if latest_mtime <= cached_mtime:
                 return cached_df
     
-    csv_files = sorted(lookup_rosbag_dir.glob("*.csv"))
+    csv_files = list(lookup_rosbag_dir.glob("*.csv"))
     if not csv_files:
         return pd.DataFrame()
     
+    # Sort CSV files numerically by mcap_id (filename stem), not alphabetically
+    def get_mcap_id_numeric(csv_path: Path) -> int:
+        """Extract numeric mcap_id from CSV filename for sorting."""
+        try:
+            return int(csv_path.stem)
+        except (ValueError, TypeError):
+            # If not numeric, sort alphabetically as fallback
+            return float('inf')
+    
+    csv_files.sort(key=get_mcap_id_numeric)
+    
     all_dfs = []
     latest_mtime = 0.0
-    for csv_path in sorted(csv_files):
+    for csv_path in csv_files:
         mcap_id = csv_path.stem  # Extract mcap_id from filename (without .csv extension)
         try:
             stat = csv_path.stat()
@@ -90,6 +101,14 @@ def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> p
         return pd.DataFrame()
     
     result_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Sort by Reference Timestamp to ensure consistent ordering
+    # This is critical for correct mcap_id assignment in ranges
+    if 'Reference Timestamp' in result_df.columns and len(result_df) > 0:
+        try:
+            result_df = result_df.sort_values('Reference Timestamp').reset_index(drop=True)
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Failed to sort DataFrame by Reference Timestamp: {e}")
     
     # Cache the result
     if use_cache:
