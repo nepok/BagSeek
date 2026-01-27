@@ -23,7 +23,7 @@ def create_app():
     # Configure CORS with allowed origins from environment variable
     # Default to localhost for development; set CORS_ORIGINS in production
     # Example: CORS_ORIGINS=https://example.com,https://www.example.com
-    cors_origins = os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(',')
+    cors_origins = os.getenv('CORS_ORIGINS')
     CORS(app, origins=cors_origins, supports_credentials=True)
     
     # Register blueprints
