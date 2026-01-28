@@ -1,6 +1,7 @@
 """Search routes."""
 import uuid
 import logging
+import time
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -157,15 +158,36 @@ def search():
             query_embedding = query_embedding.astype("float32", copy=False)
 
             for rosbag_name in rosbags_list:
-                step_count += 1
+                # Progress tracking: each (model, rosbag) pair gets a slice of 0-99%
+                base_progress = (step_count / total_steps) * 0.99
+                step_range = 0.99 / total_steps
+
+                def update_progress(embeddings_processed: int, total_embeddings: int, message_suffix: str = ""):
+                    """Update progress within the current rosbag's range."""
+                    if total_embeddings > 0:
+                        within_step = (embeddings_processed / total_embeddings) * step_range
+                    else:
+                        within_step = 0
+                    SEARCH_PROGRESS["status"] = "running"
+                    SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
+                    SEARCH_PROGRESS["message"] = (
+                        f"Searching embeddings...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}\n"
+                        f"Progress: {embeddings_processed:,} / {total_embeddings:,} embeddings\n"
+                        f"(Sampling every {k_subsample}th embedding)"
+                        + (f"\n{message_suffix}" if message_suffix else "")
+                    )
+
+                # Initial progress update for this rosbag (before we know total)
                 SEARCH_PROGRESS["status"] = "running"
-                SEARCH_PROGRESS["progress"] = round((step_count / total_steps) * 0.95, 3)
+                SEARCH_PROGRESS["progress"] = round(base_progress, 3)
                 SEARCH_PROGRESS["message"] = (
-                    "Searching consolidated shards...\n\n"
+                    f"Loading manifest...\n\n"
                     f"Model: {model_name}\n"
-                    f"Rosbag: {rosbag_name}\n\n"
-                    f"(Sampling every {k_subsample}th embedding)"
+                    f"Rosbag: {rosbag_name}"
                 )
+                step_count += 1
 
                 # ---- Consolidated base
                 base = EMBEDDINGS / model_name / rosbag_name
@@ -180,7 +202,7 @@ def search():
                     continue
 
                 # ---- Manifest schema check
-                needed_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier"]
+                needed_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp"]
                 try:
                     import pyarrow.parquet as pq
                     available_cols = set(pq.read_schema(manifest_path).names)
@@ -190,19 +212,34 @@ def search():
                     available_cols = set(head_df.columns)
                     logging.debug("[SEARCH] Manifest columns (fallback): %s", sorted(available_cols))
 
-                missing = [c for c in needed_cols if c not in available_cols]
+                # reference_timestamp and reference_timestamp_index are optional (for backwards compatibility)
+                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier"]
+                missing = [c for c in required_cols if c not in available_cols]
                 if missing:
                     msg = f"[SEARCH] Manifest missing columns {missing}; present={sorted(available_cols)}"
                     logging.debug(msg)
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
+                has_reference_timestamp = "reference_timestamp" in available_cols
+                has_reference_timestamp_index = "reference_timestamp_index" in available_cols
+                cols_to_read = required_cols.copy()
+                if has_reference_timestamp:
+                    cols_to_read.append("reference_timestamp")
+                if has_reference_timestamp_index:
+                    cols_to_read.append("reference_timestamp_index")
+
                 # ---- Read needed columns
-                mf = pd.read_parquet(manifest_path, columns=needed_cols)
+                t_manifest_start = time.perf_counter()
+                mf = pd.read_parquet(manifest_path, columns=cols_to_read)
+                t_manifest_read = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] Manifest read took %.3fs, rows: %d", t_manifest_read - t_manifest_start, len(mf))
 
                 # ---- Filter by time window
                 pre_count = len(mf)
                 mf = mf.loc[(mf["minute_of_day"] >= time_start) & (mf["minute_of_day"] <= time_end)]
+                t_time_filter = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] Time filter took %.3fs, rows: %d -> %d", t_time_filter - t_manifest_read, pre_count, len(mf))
                 if mf.empty:
                     logging.debug("[SEARCH] SKIP: No rows in time window for %s/%s", model_name, rosbag_name)
                     continue
@@ -218,25 +255,56 @@ def search():
                 mf_sel = pd.concat(parts, ignore_index=True) if parts else mf.iloc[0:0]
                 for topic, df_t in mf_sel.groupby("topic", sort=False):
                     per_topic_counts_after[topic] = len(df_t)
+                t_subsample = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] Subsample took %.3fs, rows: %d -> %d (k=%d)",
+                            t_subsample - t_time_filter, len(mf), len(mf_sel), k_subsample)
 
                 if mf_sel.empty:
                     logging.debug("[SEARCH] SKIP: No rows after subsample for %s/%s", model_name, rosbag_name)
                     continue
 
-                # ---- Load aligned CSV for marks
-                lookup_dir = (LOOKUP_TABLES / rosbag_name) if LOOKUP_TABLES else None
-                logging.debug("[SEARCH] LOOKUP_TABLES dir for %s: %s (exists=%s)", rosbag_name, lookup_dir, lookup_dir.exists() if lookup_dir else False)
-                aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
-                logging.debug("[SEARCH] Loaded lookup tables for %s: shape=%s, columns=%s", rosbag_name, aligned_data.shape if not aligned_data.empty else "empty", list(aligned_data.columns) if not aligned_data.empty else [])
-                if aligned_data.empty:
-                    logging.debug("[SEARCH] WARN: no lookup tables found for %s (marks will be empty)", rosbag_name)
+                # ---- Load aligned CSV for marks (only if manifest lacks reference_timestamp_index)
+                aligned_data = pd.DataFrame()  # Default empty
+                if not has_reference_timestamp_index:
+                    SEARCH_PROGRESS["message"] = (
+                        f"Loading lookup tables (legacy mode)...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}"
+                    )
+                    t_lookup_start = time.perf_counter()
+                    lookup_dir = (LOOKUP_TABLES / rosbag_name) if LOOKUP_TABLES else None
+                    logging.debug("[SEARCH] LOOKUP_TABLES dir for %s: %s (exists=%s)", rosbag_name, lookup_dir, lookup_dir.exists() if lookup_dir else False)
+                    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
+                    t_lookup_end = time.perf_counter()
+                    logging.info("[SEARCH-DEBUG] Lookup tables load took %.3fs, shape=%s",
+                                t_lookup_end - t_lookup_start,
+                                aligned_data.shape if not aligned_data.empty else "empty")
+                    if aligned_data.empty:
+                        logging.debug("[SEARCH] WARN: no lookup tables found for %s (marks will be empty)", rosbag_name)
+                else:
+                    logging.info("[SEARCH-DEBUG] Manifest has reference_timestamp_index, skipping lookup tables load")
 
                 # ---- Gather vectors by shard
+                t_rosbag_start = time.perf_counter()
+
                 chunks: list[np.ndarray] = []
                 meta_for_row: list[dict] = []
                 shards_touched = 0
                 bytes_read = 0
                 shard_ids = sorted(mf_sel["shard_id"].unique().tolist())
+
+                # Progress tracking for this rosbag
+                total_embeddings = len(mf_sel)
+                embeddings_processed = 0
+                last_progress_update = 0
+                progress_update_interval = 1000  # Update every N embeddings
+
+                logging.info("[SEARCH-DEBUG] === Processing rosbag: %s ===", rosbag_name)
+                logging.info("[SEARCH-DEBUG] Manifest rows after filter: %d, unique shards: %d",
+                            total_embeddings, len(shard_ids))
+
+                update_progress(embeddings_processed, total_embeddings)
+                t_chunks_start = time.perf_counter()
 
                 for shard_id, df_s in mf_sel.groupby("shard_id", sort=False):
                     shard_path = shards_dir / shard_id
@@ -252,7 +320,7 @@ def search():
                     for r in df_s.itertuples(index=False):
                         topic_str = r.topic
                         topic_folder = topic_str.replace("/", "__")
-                        meta_map[int(r.row_in_shard)] = {
+                        meta_entry = {
                             "timestamp_ns": int(r.timestamp_ns),
                             "topic": topic_str.replace("__", "/"),
                             "topic_folder": topic_folder,
@@ -261,6 +329,15 @@ def search():
                             "shard_id": shard_id,
                             "row_in_shard": int(r.row_in_shard),
                         }
+                        # Add reference_timestamp if available
+                        if has_reference_timestamp and hasattr(r, 'reference_timestamp'):
+                            ref_ts = r.reference_timestamp
+                            meta_entry["reference_timestamp"] = str(ref_ts) if pd.notna(ref_ts) else None
+                        # Add reference_timestamp_index if available
+                        if has_reference_timestamp_index and hasattr(r, 'reference_timestamp_index'):
+                            ref_ts_idx = r.reference_timestamp_index
+                            meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
+                        meta_map[int(r.row_in_shard)] = meta_entry
 
                     arr = np.load(shard_path, mmap_mode="r")  # expect float32 shards
                     if arr.dtype != np.float32:
@@ -286,28 +363,117 @@ def search():
                         for i in range(a, b + 1):
                             meta_for_row.append(meta_map[i])
 
+                        # Update progress tracking
+                        embeddings_processed += (b - a + 1)
+                        if embeddings_processed - last_progress_update >= progress_update_interval:
+                            update_progress(embeddings_processed, total_embeddings)
+                            last_progress_update = embeddings_processed
+
+                t_chunks_end = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] Chunk collection took %.3fs", t_chunks_end - t_chunks_start)
+                logging.info("[SEARCH-DEBUG] Shards touched: %d, total bytes read: %.2f MB, chunks count: %d",
+                            shards_touched, bytes_read / 1024 / 1024, len(chunks))
+
                 if not chunks:
                     msg = f"[SEARCH] No chunks loaded (missing shards/files?) for {model_name}/{rosbag_name}"
                     logging.debug(msg)
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
+                # Final progress update for embeddings loading phase
+                update_progress(total_embeddings, total_embeddings, "Running FAISS search...")
+
+                t0 = time.perf_counter()
+
                 X = np.vstack(chunks).astype("float32", copy=False)
+                t_vstack = time.perf_counter()
+                logging.info("[FAISS-DEBUG] np.vstack took %.3fs", t_vstack - t0)
+                logging.info("[FAISS-DEBUG] X shape: %s, dtype: %s, size: %.2f MB",
+                            X.shape, X.dtype, X.nbytes / 1024 / 1024)
+                logging.info("[FAISS-DEBUG] Query embedding shape: %s, dtype: %s",
+                            query_embedding.shape, query_embedding.dtype)
+
                 if X.shape[0] != len(meta_for_row):
                     msg = f"[SEARCH] Row/meta mismatch: X={X.shape[0]} vs meta={len(meta_for_row)}"
                     logging.debug(msg)
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
-                # ---- FAISS search
-                index = faiss.IndexFlatL2(X.shape[1])
+                # ---- FAISS search (HNSW - fast approximate search)
+                t1 = time.perf_counter()
+                dim = X.shape[1]
+                M = 32  # edges per node
+                logging.info("[FAISS-DEBUG] Creating IndexHNSWFlat with dim=%d, M=%d", dim, M)
+
+                index = faiss.IndexHNSWFlat(dim, M)
+                index.hnsw.efSearch = 64
+                index.hnsw.efConstruction = 40  # default, but explicit
+                t_create = time.perf_counter()
+                logging.info("[FAISS-DEBUG] Index creation took %.3fs", t_create - t1)
+                logging.info("[FAISS-DEBUG] Index properties: ntotal=%d, is_trained=%s, efSearch=%d, efConstruction=%d",
+                            index.ntotal, index.is_trained, index.hnsw.efSearch, index.hnsw.efConstruction)
+
+                t2 = time.perf_counter()
                 index.add(X)
-                D, I = index.search(query_embedding.reshape(1, -1), MAX_K)
+                t_add = time.perf_counter()
+                logging.info("[FAISS-DEBUG] index.add() took %.3fs for %d vectors", t_add - t2, X.shape[0])
+                logging.info("[FAISS-DEBUG] Index after add: ntotal=%d", index.ntotal)
+
+                t3 = time.perf_counter()
+                q = query_embedding.reshape(1, -1)
+                logging.info("[FAISS-DEBUG] Starting search for k=%d neighbors", MAX_K)
+                D, I = index.search(q, MAX_K)
+                t_search = time.perf_counter()
+                logging.info("[FAISS-DEBUG] index.search() took %.3fs", t_search - t3)
+                logging.info("[FAISS-DEBUG] Results: D.shape=%s, I.shape=%s", D.shape, I.shape)
+                logging.info("[FAISS-DEBUG] Distance range: min=%.4f, max=%.4f", D.min(), D.max())
+                logging.info("[FAISS-DEBUG] Index range: min=%d, max=%d", I.min(), I.max())
+                logging.info("[FAISS-DEBUG] TOTAL FAISS pipeline: %.3fs (vstack=%.3fs, create=%.3fs, add=%.3fs, search=%.3fs)",
+                            t_search - t0, t_vstack - t0, t_create - t1, t_add - t2, t_search - t3)
+
                 if D.size == 0 or I.size == 0:
-                    logging.debug("[SEARCH] Empty FAISS result for %s/%s", model_name, rosbag_name)
+                    logging.info("[FAISS-DEBUG] Empty FAISS result for %s/%s", model_name, rosbag_name)
                     continue
 
                 # ---- Build API-like results
+                t_results_start = time.perf_counter()
+
+                # Build ref_ts_to_indices for marks (only needed for legacy mode without reference_timestamp_index)
+                ref_ts_to_indices: dict[str, list[int]] = {}
+                value_to_ref_ts: dict[str, set[str]] = {}
+
+                if has_reference_timestamp_index:
+                    # FAST PATH: reference_timestamp_index is in manifest, no index building needed
+                    logging.info("[SEARCH-DEBUG] Using reference_timestamp_index from manifest (fast path)")
+                elif not aligned_data.empty and 'Reference Timestamp' in aligned_data.columns:
+                    # LEGACY PATH: Build indices from lookup tables (slow)
+                    t_index_start = time.perf_counter()
+                    SEARCH_PROGRESS["message"] = (
+                        f"Building marks index (legacy)...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}\n"
+                        f"Aligned data: {len(aligned_data):,} rows × {len(aligned_data.columns)} cols"
+                    )
+
+                    # Build ref_ts_to_indices using pandas groupby
+                    ref_ts_col = aligned_data['Reference Timestamp'].astype(str)
+                    for ref_ts, group in aligned_data.groupby(ref_ts_col, sort=False):
+                        ref_ts_to_indices[ref_ts] = group.index.tolist()
+
+                    # Build value_to_ref_ts using pandas stack + groupby
+                    stacked = aligned_data.astype(str).stack()
+                    idx_to_ref = ref_ts_col.to_dict()
+                    stacked_with_ref = pd.DataFrame({
+                        'value': stacked.values,
+                        'ref_ts': [idx_to_ref[idx[0]] for idx in stacked.index]
+                    })
+                    for val, group in stacked_with_ref.groupby('value', sort=False):
+                        value_to_ref_ts[val] = set(group['ref_ts'].unique())
+
+                    t_index_end = time.perf_counter()
+                    logging.info("[SEARCH-DEBUG] Legacy marks index build: %.3fs (%d value mappings, %d ref_ts groups)",
+                                t_index_end - t_index_start, len(value_to_ref_ts), len(ref_ts_to_indices))
+
                 model_results: list[dict] = []
                 for i, (dist, idx) in enumerate(zip(D[0], I[0]), start=1):
                     if idx < 0 or idx >= len(meta_for_row):
@@ -318,17 +484,10 @@ def search():
                     # Convert UTC timestamp to Europe/Berlin timezone
                     berlin_tz = ZoneInfo("Europe/Berlin")
                     minute_str = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).astimezone(berlin_tz).strftime("%H:%M")
-                    
-                    # Build embedding path with mcap_identifier
-                    pt_path = EMBEDDINGS / model_name / rosbag_name / m["topic_folder"] / m["mcap_identifier"] / f"{ts_ns}.pt"
-                    
-                    if i == 1:  # Log first result path construction
-                        logging.debug("[SEARCH] EMBEDDINGS path construction: %s (exists=%s)", pt_path, pt_path.exists() if pt_path else False)
-                    
+
                     model_results.append({
                         'rank': i,
                         'rosbag': rosbag_name,
-                        'embedding_path': str(pt_path),
                         'similarityScore': float(dist),
                         'topic': m["topic"],           # slashes
                         'timestamp': ts_str,
@@ -336,21 +495,33 @@ def search():
                         'mcap_identifier': m["mcap_identifier"],
                         'model': model_name
                     })
-                    if not aligned_data.empty:
-                        matching_reference_timestamps = aligned_data.loc[
-                            aligned_data.isin([ts_str]).any(axis=1),
-                            'Reference Timestamp'
-                        ].tolist()
-                        if matching_reference_timestamps:
-                            match_indices: list[int] = []
-                            for ref_ts in matching_reference_timestamps:
-                                idxs = aligned_data.index[aligned_data['Reference Timestamp'] == ref_ts].tolist()
-                                match_indices.extend(idxs)
-                            if match_indices:
-                                key = (model_name, rosbag_name, m["topic"])
-                                marks.setdefault(key, set()).update(match_indices)
+
+                    # Marks matching
+                    if has_reference_timestamp_index:
+                        # FAST: Use reference_timestamp_index directly from manifest
+                        ref_ts_idx = m.get("reference_timestamp_index")
+                        if ref_ts_idx is not None:
+                            key = (model_name, rosbag_name, m["topic"])
+                            marks.setdefault(key, set()).add(ref_ts_idx)
+                    elif ts_str in value_to_ref_ts:
+                        # LEGACY: O(1) lookup from pre-built index
+                        matching_ref_timestamps = value_to_ref_ts[ts_str]
+                        match_indices: list[int] = []
+                        for ref_ts in matching_ref_timestamps:
+                            if ref_ts in ref_ts_to_indices:
+                                match_indices.extend(ref_ts_to_indices[ref_ts])
+                        if match_indices:
+                            key = (model_name, rosbag_name, m["topic"])
+                            marks.setdefault(key, set()).update(match_indices)
 
                 all_results.extend(model_results)
+
+                t_results_end = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] Results building took %.3fs for %d results", t_results_end - t_results_start, len(model_results))
+
+                t_rosbag_end = time.perf_counter()
+                logging.info("[SEARCH-DEBUG] === Rosbag %s COMPLETE: %.3fs total, %d results ===",
+                            rosbag_name, t_rosbag_end - t_rosbag_start, len(model_results))
 
             # Cleanup GPU per model
             del model
