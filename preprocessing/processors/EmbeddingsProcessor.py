@@ -82,6 +82,19 @@ CACHE_DIR = "/mnt/data/openclip_cache"
 BATCH_SIZE = 256  # Default batch size for open_clip models
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Standard column order for manifest.parquet files
+MANIFEST_COLUMN_ORDER = [
+    "id",
+    "topic", 
+    "timestamp_ns",
+    "minute_of_day",
+    "mcap_identifier",
+    "reference_timestamp",
+    "reference_timestamp_index",
+    "shard_id",
+    "row_in_shard"
+]
+
 # =========================
 # Utility Functions
 # =========================
@@ -483,10 +496,16 @@ def read_manifest(manifest_path: Path) -> pd.DataFrame:
     """Read manifest parquet file."""
     if manifest_path.is_file():
         return pd.read_parquet(manifest_path)
-    return pd.DataFrame(columns=["id", "topic", "timestamp_ns", "minute_of_day", "mcap_identifier", "shard_id", "row_in_shard", "pt_path"])
+    return pd.DataFrame(columns=MANIFEST_COLUMN_ORDER)
 
 def write_manifest(manifest_path: Path, df: pd.DataFrame) -> None:
-    """Write manifest parquet file."""
+    """Write manifest parquet file with standardized column order."""
+    # Reorder columns: standard columns first, then any extras
+    existing_cols = df.columns.tolist()
+    ordered_cols = [c for c in MANIFEST_COLUMN_ORDER if c in existing_cols]
+    extra_cols = [c for c in existing_cols if c not in MANIFEST_COLUMN_ORDER]
+    df = df[ordered_cols + extra_cols]
+    
     table = pa.Table.from_pandas(df.reset_index(drop=True))
     pq.write_table(table, manifest_path, compression="zstd")
 
@@ -504,7 +523,7 @@ def next_shard_name(shards_dir: Path) -> str:
 
 def write_shards_from_embeddings(
     out_dir: Path,
-    records: List[Tuple[str, int, int, str, torch.Tensor]],
+    records: List[Tuple[str, int, int, str, Optional[str], Optional[int], torch.Tensor]],
     meta: Dict,
     shard_rows: int = DEFAULT_SHARD_ROWS,
     dtype = OUTPUT_DTYPE,
@@ -512,10 +531,10 @@ def write_shards_from_embeddings(
     """
     Write embeddings directly to shard .npy files.
     Appends to the last shard if it's not full, otherwise creates new shards.
-    
+
     Args:
-        records: List of (topic, timestamp_ns, minute_of_day, mcap_identifier, embedding_tensor)
-    
+        records: List of (topic, timestamp_ns, minute_of_day, mcap_identifier, reference_timestamp, reference_timestamp_index, embedding_tensor)
+
     Returns:
         DataFrame of manifest rows and updated meta.
     """
@@ -525,7 +544,7 @@ def write_shards_from_embeddings(
     # Determine D
     D = int(meta.get("D", 0))
     if D == 0 and records:
-        D = int(records[0][4].shape[-1])  # embedding is at index 4
+        D = int(records[0][6].shape[-1])  # embedding is at index 6
     if D == 0:
         raise RuntimeError("Could not determine embedding dimension D from records.")
 
@@ -533,7 +552,7 @@ def write_shards_from_embeddings(
 
     manifest_rows = []
     batch_vecs: List[np.ndarray] = []
-    batch_records: List[Tuple[str, int, int, str]] = []  # Track metadata for new records only
+    batch_records: List[Tuple[str, int, int, str, Optional[str], Optional[int]]] = []  # Track metadata for new records only
     batch_count = 0
     current = 0
 
@@ -559,14 +578,14 @@ def write_shards_from_embeddings(
             last_shard_path = None
             last_shard_name = None
 
-    for (topic, ts_ns, minute, mcap_identifier, embedding) in records:
+    for (topic, ts_ns, minute, mcap_identifier, reference_ts, reference_ts_idx, embedding) in records:
         vec = embedding.detach().cpu().numpy()
         if vec.shape[-1] != D:
             continue
 
         v = vec.astype(dtype, copy=False)
         batch_vecs.append(v)
-        batch_records.append((topic, ts_ns, minute, mcap_identifier))  # Track only new records
+        batch_records.append((topic, ts_ns, minute, mcap_identifier, reference_ts, reference_ts_idx))  # Track only new records
         batch_count += 1
 
         if batch_count >= shard_rows:
@@ -593,9 +612,10 @@ def write_shards_from_embeddings(
                     "timestamp_ns": record[1],
                     "minute_of_day": record[2],
                     "mcap_identifier": record[3],
+                    "reference_timestamp": record[4],
+                    "reference_timestamp_index": record[5],
                     "shard_id": shard_name,
                     "row_in_shard": i,  # i is the index in X, which matches the position in the shard file
-                    "pt_path": "",
                 })
                 current += 1
             batch_vecs.clear()
@@ -615,10 +635,10 @@ def write_shards_from_embeddings(
             shard_name = next_shard_name(shards_dir)
             shard_path = shards_dir / shard_name
             row_offset = 0
-        
+
         X = np.stack(batch_vecs, axis=0)
         np.save(shard_path, X)
-        
+
         # Only create manifest rows for NEW records (skip prepended ones)
         new_records_start_idx = last_shard_rows
         for i in range(new_records_start_idx, X.shape[0]):
@@ -629,9 +649,10 @@ def write_shards_from_embeddings(
                 "timestamp_ns": record[1],
                 "minute_of_day": record[2],
                 "mcap_identifier": record[3],
+                "reference_timestamp": record[4],
+                "reference_timestamp_index": record[5],
                 "shard_id": shard_name,
                 "row_in_shard": i,  # i is the index in X, which matches the position in the shard file
-                "pt_path": "",
             })
             current += 1
         batch_vecs.clear()
@@ -641,7 +662,10 @@ def write_shards_from_embeddings(
     meta["dtype"] = "float32"
     meta["total_count"] = start_id + current
 
-    df_append = pd.DataFrame.from_records(manifest_rows)
+    df_append = pd.DataFrame.from_records(
+        manifest_rows,
+        columns=MANIFEST_COLUMN_ORDER
+    )
     return df_append, meta
 
 # =========================
@@ -651,34 +675,39 @@ def write_shards_from_embeddings(
 class EmbeddingsProcessor(McapProcessor):
     """
     Generate embeddings for image messages in an MCAP.
-    
+
     Collects images during MCAP iteration, preprocesses them by type,
     generates embeddings for all models, and saves to shards.
-    
+
     Operates at MCAP level - processes each MCAP independently.
     """
-    
-    def __init__(self, output_dir: Path):
+
+    def __init__(self, output_dir: Path, lookup_tables_dir: Optional[Path] = None):
         """
         Initialize embeddings processor.
-        
+
         Args:
             output_dir: Directory to write embedding shards
+            lookup_tables_dir: Directory containing lookup tables (for reference_timestamp mapping)
         """
         super().__init__("embeddings_processor")
         self.output_dir = Path(output_dir)
+        self.lookup_tables_dir = Path(lookup_tables_dir) if lookup_tables_dir else None
         self.logger: PipelineLogger = get_logger()
         self.completion_tracker = CompletionTracker(self.output_dir)
-        
+
         # Collected images per MCAP: List of {"topic": str, "timestamp_ns": int, "mcap_id": str, "image": PIL.Image}
         self.collected_images: List[Dict[str, Any]] = []
-        
+
         # Model cache: {model_id: model}
         self.models_cache: Dict[str, torch.nn.Module] = {}
-        
+
         # Current MCAP ID (set by main.py before message iteration)
         self.current_mcap_id: Optional[str] = None
-        
+
+        # Timestamp to reference_timestamp mapping (loaded per rosbag)
+        self._ts_to_ref_cache: Dict[str, Dict[str, Tuple[str, int]]] = {}  # rosbag_name -> {ts -> (ref_ts, row_index)}
+
         # Group models by preprocessing type
         self._group_models_by_preprocess()
     
@@ -730,7 +759,81 @@ class EmbeddingsProcessor(McapProcessor):
             except Exception as e:
                 self.logger.warning(f"Error checking preprocess for {config['name']}: {e}")
                 continue
-    
+
+    def _load_timestamp_mapping(self, rosbag_name: str) -> Dict[str, Tuple[str, int]]:
+        """
+        Load timestamp to reference_timestamp mapping for a rosbag.
+
+        Args:
+            rosbag_name: Name of the rosbag
+
+        Returns:
+            Dict mapping timestamp_ns string -> (reference_timestamp string, row_index int)
+        """
+        # Check cache first
+        if rosbag_name in self._ts_to_ref_cache:
+            return self._ts_to_ref_cache[rosbag_name]
+
+        ts_to_ref: Dict[str, Tuple[str, int]] = {}
+
+        if not self.lookup_tables_dir:
+            self._ts_to_ref_cache[rosbag_name] = ts_to_ref
+            return ts_to_ref
+
+        lookup_dir = self.lookup_tables_dir / rosbag_name
+        if not lookup_dir.exists():
+            self.logger.warning(f"Lookup tables directory not found: {lookup_dir}")
+            self._ts_to_ref_cache[rosbag_name] = ts_to_ref
+            return ts_to_ref
+
+        # Load all CSV files
+        csv_files = sorted(lookup_dir.glob("*.csv"), key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf'))
+        if not csv_files:
+            self.logger.warning(f"No lookup table CSVs found in {lookup_dir}")
+            self._ts_to_ref_cache[rosbag_name] = ts_to_ref
+            return ts_to_ref
+
+        self.logger.info(f"Loading {len(csv_files)} lookup table CSV(s) for {rosbag_name}")
+
+        # Track global row index across all CSV files
+        global_row_index = 0
+
+        for csv_path in csv_files:
+            try:
+                df = pd.read_csv(csv_path, dtype=str)
+                if df.empty or 'Reference Timestamp' not in df.columns:
+                    continue
+
+                ref_ts_col = df['Reference Timestamp']
+
+                # Map each column's values to (reference_timestamp, global_row_index)
+                for local_idx in range(len(df)):
+                    ref_ts = str(ref_ts_col.iloc[local_idx]).strip()
+                    row_idx = global_row_index + local_idx
+
+                    for col in df.columns:
+                        if col in ('Reference Timestamp', 'Max Distance'):
+                            continue
+                        val = df[col].iloc[local_idx]
+                        if pd.notna(val) and val != '':
+                            val_str = str(val).strip()
+                            if val_str and val_str not in ts_to_ref:
+                                ts_to_ref[val_str] = (ref_ts, row_idx)
+
+                    # Also map Reference Timestamp to itself
+                    if ref_ts and ref_ts not in ts_to_ref:
+                        ts_to_ref[ref_ts] = (ref_ts, row_idx)
+
+                global_row_index += len(df)
+
+            except Exception as e:
+                self.logger.warning(f"Failed to load lookup table {csv_path}: {e}")
+                continue
+
+        self.logger.info(f"Built timestamp mapping with {len(ts_to_ref):,} entries")
+        self._ts_to_ref_cache[rosbag_name] = ts_to_ref
+        return ts_to_ref
+
     def reset(self) -> None:
         """Reset collector state before each MCAP iteration."""
         self.collected_images = []
@@ -1004,15 +1107,24 @@ class EmbeddingsProcessor(McapProcessor):
                         # Concatenate chunk embeddings
                         if chunk_embeddings:
                             embeddings_tensor = torch.cat(chunk_embeddings, dim=0)
-                            
+
+                            # Load timestamp mapping for reference_timestamp lookup
+                            ts_to_ref = self._load_timestamp_mapping(rosbag_name)
+
                             # Prepare records for this chunk
                             records = []
                             for i, (emb, meta_item) in enumerate(zip(embeddings_tensor, chunk_metadata)):
+                                ts_ns = meta_item["timestamp_ns"]
+                                ref_data = ts_to_ref.get(str(ts_ns))  # Returns (ref_ts, row_index) or None
+                                ref_ts = ref_data[0] if ref_data else None
+                                ref_ts_idx = ref_data[1] if ref_data else None
                                 records.append((
                                     meta_item["topic"],
-                                    meta_item["timestamp_ns"],
-                                    ns_to_minute_of_day(meta_item["timestamp_ns"]),
+                                    ts_ns,
+                                    ns_to_minute_of_day(ts_ns),
                                     meta_item["mcap_id"],
+                                    ref_ts,
+                                    ref_ts_idx,
                                     emb
                                 ))
                             
@@ -1023,7 +1135,15 @@ class EmbeddingsProcessor(McapProcessor):
                             
                             # Update manifest
                             if not df_append.empty:
-                                manifest = pd.concat([manifest, df_append], ignore_index=True)
+                                if manifest.empty:
+                                    manifest = df_append.copy()
+                                else:
+                                    manifest = pd.concat([manifest, df_append], ignore_index=True)
+                                    # Reorder columns: standard columns first, then any extras
+                                    existing_cols = manifest.columns.tolist()
+                                    ordered_cols = [c for c in MANIFEST_COLUMN_ORDER if c in existing_cols]
+                                    extra_cols = [c for c in existing_cols if c not in MANIFEST_COLUMN_ORDER]
+                                    manifest = manifest[ordered_cols + extra_cols]
                                 manifest.sort_values("id", inplace=True, kind="mergesort")
                                 write_manifest(manifest_path, manifest)
                                 save_meta(meta_path, meta)
