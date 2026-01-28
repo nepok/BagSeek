@@ -28,3 +28,5 @@ preprocessing/mcap_*
 __pycache__/
 
 old_preprocessing/
+
+scripts/*
