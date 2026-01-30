@@ -2678,7 +2678,7 @@ const PositionalOverview: React.FC = () => {
               Options
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, width: '100%' }}>
-              {/* Show all toggle - half width */}
+              {/* Show all visited locations toggle - half width */}
               <Box
                 sx={{
                   display: 'flex',
@@ -2694,7 +2694,7 @@ const PositionalOverview: React.FC = () => {
                 }}
               >
                 <Typography variant="body2" sx={{ fontSize: '8pt', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                  Show all
+                  Show all visited locations
                 </Typography>
                 <Switch
                   checked={showAllRosbags}
@@ -2726,7 +2726,7 @@ const PositionalOverview: React.FC = () => {
                 }}
               >
                 <Typography variant="body2" sx={{ fontSize: '8pt', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                  Show mcaps
+                  Show individual mcap files
                 </Typography>
                 <Switch
                   checked={showMcaps}
@@ -2747,7 +2747,7 @@ const PositionalOverview: React.FC = () => {
           {/* Second Part: Polygons Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-              Area Restrictions
+              Area Filter
             </Typography>
             
             {/* Count */}
@@ -2811,7 +2811,7 @@ const PositionalOverview: React.FC = () => {
                   }}
                 >
                   <MenuItem value="">
-                    None
+                    Load predefined area polygons
                   </MenuItem>
                   {polygonFiles.map((filename) => (
                     <MenuItem key={filename} value={filename}>
