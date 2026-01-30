@@ -66,6 +66,32 @@ const escapeHtml = (str: string | number): string => {
   return div.innerHTML;
 };
 
+// Helper to find closest point on a line segment
+const closestPointOnSegment = (
+  px: number, py: number,  // Point to project
+  ax: number, ay: number,  // Segment start
+  bx: number, by: number   // Segment end
+): { x: number; y: number; t: number } => {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+
+  if (lenSq === 0) {
+    // Segment is a point
+    return { x: ax, y: ay, t: 0 };
+  }
+
+  // Project point onto line, clamped to segment
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  return {
+    x: ax + t * dx,
+    y: ay + t * dy,
+    t,
+  };
+};
+
 const ROSBAG_TIMESTAMP_REGEX = /^rosbag2_(\d{4})_(\d{2})_(\d{2})-(\d{2})_(\d{2})_(\d{2})(?:_short)?$/;
 
 const parseRosbagTimestamp = (name: string): number | null => {
@@ -523,6 +549,13 @@ const PositionalOverview: React.FC = () => {
   const [polygons, setPolygons] = useState<Polygon[]>([]);
   const [activePolygonId, setActivePolygonId] = useState<string | null>(null);
   const [selectedPolygonId, setSelectedPolygonId] = useState<string | null>(null);
+  const [selectedPointId, setSelectedPointId] = useState<{ polygonId: string; pointId: string } | null>(null);
+  const [edgeHoverInfo, setEdgeHoverInfo] = useState<{
+    polygonId: string;
+    segmentIndex: number; // Insert after this index
+    lat: number;
+    lon: number;
+  } | null>(null);
   const [rosbagOverlapStatus, setRosbagOverlapStatus] = useState<Map<string, boolean>>(new Map());
   const [checkingOverlap, setCheckingOverlap] = useState<boolean>(false);
   const [polygonFiles, setPolygonFiles] = useState<string[]>([]);
@@ -543,6 +576,7 @@ const PositionalOverview: React.FC = () => {
   const hoverTooltipRef = useRef<L.Popup | null>(null);
   const polygonLayersRef = useRef<Map<string, { markers: L.Marker[]; polyline: L.Polyline | null; polygon: L.Polygon | null }>>(new Map());
   const offsetPolygonLayersRef = useRef<Map<string, L.Polyline>>(new Map());
+  const edgeGhostMarkerRef = useRef<L.Marker | null>(null);
   const isRestoringRef = useRef(false);
   const prevPointsRef = useRef<RosbagPoint[]>([]);
 
@@ -911,20 +945,43 @@ const PositionalOverview: React.FC = () => {
       map.invalidateSize();
     }, 0);
 
+    // Left-click handler for deselecting points/polygons
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
+      const target = e.originalEvent.target as HTMLElement;
+
+      // Don't deselect if clicking on a polygon layer (marker, path, etc.)
+      if (target && (target.tagName === 'path' || target.tagName === 'polyline' || target.closest('.leaflet-interactive') || target.closest('.custom-polygon-marker'))) {
+        return;
+      }
+
+      // Deselect point and polygon when clicking on empty map area
+      setSelectedPointId(null);
+      setSelectedPolygonId(null);
+    };
+    map.on('click', handleMapClick);
+
     // Right-click handler for creating polygon points
     const handleContextMenu = (e: L.LeafletMouseEvent) => {
       e.originalEvent.preventDefault();
-      
+
+      const target = e.originalEvent.target as HTMLElement;
+
+      // Don't add points if right-clicking on a polygon marker
+      if (target && target.closest('.custom-polygon-marker')) {
+        return;
+      }
+
+      // Add point to polygon
       const newPoint: PolygonPoint = {
         lat: e.latlng.lat,
         lon: e.latlng.lng,
         id: `${Date.now()}-${Math.random()}`,
       };
-      
+
       setPolygons((prev) => {
         // Find active polygon (not closed)
         const activePolygon = prev.find((p) => !p.isClosed);
-        
+
         if (activePolygon) {
           // Add point to active polygon
           const updatedPolygons = prev.map((p) =>
@@ -938,6 +995,8 @@ const PositionalOverview: React.FC = () => {
           // Create new polygon
           const newPolygonId = `polygon-${Date.now()}-${Math.random()}`;
           setActivePolygonId(newPolygonId);
+          setSelectedPolygonId(null); // Deselect any selected polygon when starting new one
+          setSelectedPointId(null); // Deselect any selected point when starting new one
           return [
             ...prev,
             {
@@ -949,25 +1008,11 @@ const PositionalOverview: React.FC = () => {
         }
       });
     };
-
     map.on('contextmenu', handleContextMenu);
-    
-    // Click handler to deselect polygon when clicking on map (but not on polygons)
-    const handleMapClick = (e: L.LeafletMouseEvent) => {
-      const target = e.originalEvent.target as HTMLElement;
-      
-      // Don't deselect if clicking on a polygon layer
-      if (target && (target.tagName === 'path' || target.tagName === 'polyline' || target.closest('.leaflet-interactive'))) {
-        return;
-      }
-      
-      setSelectedPolygonId(null);
-    };
-    map.on('click', handleMapClick);
 
     return () => {
-      map.off('contextmenu', handleContextMenu);
       map.off('click', handleMapClick);
+      map.off('contextmenu', handleContextMenu);
       // Clean up polygon layers
       polygonLayersRef.current.forEach((layers) => {
         if (layers.polyline) {
@@ -1502,36 +1547,41 @@ const PositionalOverview: React.FC = () => {
       cleanedPoints.forEach((point, index) => {
         const isFirstPoint = index === 0;
         const isLastPoint = index === cleanedPoints.length - 1;
-        
-        // Create custom icon
+        const isPointSelected = selectedPointId?.polygonId === polygon.id && selectedPointId?.pointId === point.id;
+
+        // Create custom icon - highlight selected points
         const icon = L.divIcon({
           className: 'custom-polygon-marker',
           html: `<div style="
-            width: 16px;
-            height: 16px;
+            width: ${isPointSelected ? '20px' : '16px'};
+            height: ${isPointSelected ? '20px' : '16px'};
             border-radius: 50%;
-            background-color: ${isFirstPoint ? '#4caf50' : isLastPoint && isActive ? '#ff9800' : '#2196f3'};
-            border: 2px solid white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            cursor: move;
+            background-color: ${isPointSelected ? '#e91e63' : isFirstPoint ? '#4caf50' : isLastPoint && isActive ? '#ff9800' : '#2196f3'};
+            border: ${isPointSelected ? '3px solid #fff' : '2px solid white'};
+            box-shadow: ${isPointSelected ? '0 0 8px rgba(233,30,99,0.6), 0 2px 4px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.3)'};
+            cursor: ${polygon.isClosed ? 'pointer' : 'move'};
+            transition: all 0.15s ease;
           "></div>`,
-          iconSize: [16, 16],
-          iconAnchor: [8, 8],
+          iconSize: [isPointSelected ? 20 : 16, isPointSelected ? 20 : 16],
+          iconAnchor: [isPointSelected ? 10 : 8, isPointSelected ? 10 : 8],
         });
 
-        const marker = L.marker([point.lat, point.lon], { 
+        const marker = L.marker([point.lat, point.lon], {
           icon,
           draggable: true,
         });
-        
-        // Add click handler to close polygon if clicking on any existing point
+
+        // Add click handler based on polygon state
         if (isActive) {
-          marker.on('click', () => {
-            if (polygon.points.length >= 3) {
+          marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+
+            if (isFirstPoint && polygon.points.length >= 3) {
+              // Click on first point with >= 3 points closes the polygon
               setPolygons((prev) =>
                 prev.map((p) => {
                   if (p.id !== polygon.id) return p;
-                  
+
                   // Clean duplicates when closing
                   let cleanedPoints = [...p.points];
                   if (cleanedPoints.length > 1) {
@@ -1541,7 +1591,7 @@ const PositionalOverview: React.FC = () => {
                     if (first.lat === last.lat && first.lon === last.lon && cleanedPoints.length > 3) {
                       cleanedPoints = cleanedPoints.slice(0, -1);
                     }
-                    
+
                     // Remove any other duplicate consecutive points
                     const uniquePoints: PolygonPoint[] = [cleanedPoints[0]];
                     for (let i = 1; i < cleanedPoints.length; i++) {
@@ -1557,12 +1607,23 @@ const PositionalOverview: React.FC = () => {
                     }
                     cleanedPoints = uniquePoints;
                   }
-                  
+
                   return { ...p, points: cleanedPoints, isClosed: true };
                 })
               );
               setActivePolygonId(null);
+              setSelectedPointId(null);
+            } else if (!isFirstPoint) {
+              // Click on any other point selects it for deletion
+              setSelectedPointId({ polygonId: polygon.id, pointId: point.id });
             }
+          });
+        } else if (polygon.isClosed) {
+          // For closed polygons, click selects the point
+          marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            setSelectedPointId({ polygonId: polygon.id, pointId: point.id });
+            setSelectedPolygonId(null); // Deselect polygon when selecting a point
           });
         }
 
@@ -1637,14 +1698,152 @@ const PositionalOverview: React.FC = () => {
           opacity: 0.8,
           dashArray: polygon.isClosed ? undefined : '5, 5',
         });
-        
+
         // Add click handler to select polygon
         polyline.off('click'); // Remove any existing handlers first
         polyline.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
           setSelectedPolygonId(polygon.id);
         });
-        
+
+        // Add mousemove handler for edge hover detection
+        polyline.on('mousemove', (e) => {
+          const mouseLatLng = e.latlng;
+          let closestDist = Infinity;
+          let closestPoint: { lat: number; lon: number; segmentIndex: number } | null = null;
+
+          // Check each segment
+          for (let i = 0; i < cleanedPoints.length - 1; i++) {
+            const p1 = cleanedPoints[i];
+            const p2 = cleanedPoints[i + 1];
+            const closest = closestPointOnSegment(
+              mouseLatLng.lat, mouseLatLng.lng,
+              p1.lat, p1.lon,
+              p2.lat, p2.lon
+            );
+            const dist = Math.sqrt(
+              Math.pow(closest.x - mouseLatLng.lat, 2) +
+              Math.pow(closest.y - mouseLatLng.lng, 2)
+            );
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestPoint = { lat: closest.x, lon: closest.y, segmentIndex: i };
+            }
+          }
+
+          // For closed polygons, also check the closing segment
+          if (polygon.isClosed && cleanedPoints.length >= 3) {
+            const p1 = cleanedPoints[cleanedPoints.length - 1];
+            const p2 = cleanedPoints[0];
+            const closest = closestPointOnSegment(
+              mouseLatLng.lat, mouseLatLng.lng,
+              p1.lat, p1.lon,
+              p2.lat, p2.lon
+            );
+            const dist = Math.sqrt(
+              Math.pow(closest.x - mouseLatLng.lat, 2) +
+              Math.pow(closest.y - mouseLatLng.lng, 2)
+            );
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestPoint = { lat: closest.x, lon: closest.y, segmentIndex: cleanedPoints.length - 1 };
+            }
+          }
+
+          if (closestPoint) {
+            setEdgeHoverInfo({
+              polygonId: polygon.id,
+              segmentIndex: closestPoint.segmentIndex,
+              lat: closestPoint.lat,
+              lon: closestPoint.lon,
+            });
+          }
+        });
+
+        polyline.on('mouseout', () => {
+          setEdgeHoverInfo(null);
+        });
+
+        // Add contextmenu handler for inserting points on edge
+        polyline.on('contextmenu', (e) => {
+          L.DomEvent.stopPropagation(e);
+          e.originalEvent.preventDefault();
+
+          const mouseLatLng = e.latlng;
+          let closestDist = Infinity;
+          let closestPoint: { lat: number; lon: number; segmentIndex: number } | null = null;
+
+          // Find the closest point on any segment
+          for (let i = 0; i < cleanedPoints.length - 1; i++) {
+            const p1 = cleanedPoints[i];
+            const p2 = cleanedPoints[i + 1];
+            const closest = closestPointOnSegment(
+              mouseLatLng.lat, mouseLatLng.lng,
+              p1.lat, p1.lon,
+              p2.lat, p2.lon
+            );
+            const dist = Math.sqrt(
+              Math.pow(closest.x - mouseLatLng.lat, 2) +
+              Math.pow(closest.y - mouseLatLng.lng, 2)
+            );
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestPoint = { lat: closest.x, lon: closest.y, segmentIndex: i };
+            }
+          }
+
+          // For closed polygons, also check the closing segment
+          if (polygon.isClosed && cleanedPoints.length >= 3) {
+            const p1 = cleanedPoints[cleanedPoints.length - 1];
+            const p2 = cleanedPoints[0];
+            const closest = closestPointOnSegment(
+              mouseLatLng.lat, mouseLatLng.lng,
+              p1.lat, p1.lon,
+              p2.lat, p2.lon
+            );
+            const dist = Math.sqrt(
+              Math.pow(closest.x - mouseLatLng.lat, 2) +
+              Math.pow(closest.y - mouseLatLng.lng, 2)
+            );
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestPoint = { lat: closest.x, lon: closest.y, segmentIndex: cleanedPoints.length - 1 };
+            }
+          }
+
+          if (closestPoint) {
+            // Insert new point after segmentIndex
+            const newPoint: PolygonPoint = {
+              lat: closestPoint.lat,
+              lon: closestPoint.lon,
+              id: `${Date.now()}-${Math.random()}`,
+            };
+
+            setPolygons((prev) =>
+              prev.map((p) => {
+                if (p.id !== polygon.id) return p;
+
+                // Find the original index in p.points that corresponds to cleanedPoints[segmentIndex]
+                const cleanedPoint = cleanedPoints[closestPoint!.segmentIndex];
+                const originalIndex = p.points.findIndex(
+                  (pt) =>
+                    pt.id === cleanedPoint.id ||
+                    (Math.abs(pt.lat - cleanedPoint.lat) < 1e-9 && Math.abs(pt.lon - cleanedPoint.lon) < 1e-9)
+                );
+
+                if (originalIndex === -1) return p;
+
+                // Insert after the found index
+                const newPoints = [...p.points];
+                newPoints.splice(originalIndex + 1, 0, newPoint);
+                return { ...p, points: newPoints };
+              })
+            );
+
+            setEdgeHoverInfo(null);
+          }
+        });
+
         polyline.addTo(map);
       }
 
@@ -1657,14 +1856,106 @@ const PositionalOverview: React.FC = () => {
           fillColor: isSelected ? '#ff9800' : '#2196f3',
           fillOpacity: isSelected ? 0.3 : 0.2,
         });
-        
+
         // Add click handler to select polygon
         polygonFill.off('click'); // Remove any existing handlers first
         polygonFill.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
           setSelectedPolygonId(polygon.id);
         });
-        
+
+        // Helper to find closest edge point for closed polygon
+        const findClosestEdgePoint = (mouseLatLng: L.LatLng) => {
+          let closestDist = Infinity;
+          let closestPoint: { lat: number; lon: number; segmentIndex: number } | null = null;
+
+          // Check each segment including the closing segment
+          for (let i = 0; i < cleanedPoints.length; i++) {
+            const p1 = cleanedPoints[i];
+            const p2 = cleanedPoints[(i + 1) % cleanedPoints.length]; // Wrap around for closing segment
+            const closest = closestPointOnSegment(
+              mouseLatLng.lat, mouseLatLng.lng,
+              p1.lat, p1.lon,
+              p2.lat, p2.lon
+            );
+            const dist = Math.sqrt(
+              Math.pow(closest.x - mouseLatLng.lat, 2) +
+              Math.pow(closest.y - mouseLatLng.lng, 2)
+            );
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestPoint = { lat: closest.x, lon: closest.y, segmentIndex: i };
+            }
+          }
+
+          return { closestPoint, closestDist };
+        };
+
+        // Add mousemove handler for edge hover detection on filled polygon
+        polygonFill.on('mousemove', (e) => {
+          const { closestPoint, closestDist } = findClosestEdgePoint(e.latlng);
+
+          // Only show ghost marker if close to an edge (threshold in lat/lng units)
+          // Roughly 0.0001 degrees is about 11 meters
+          const edgeThreshold = 0.0015; // ~165 meters - wider detection area
+          if (closestPoint && closestDist < edgeThreshold) {
+            setEdgeHoverInfo({
+              polygonId: polygon.id,
+              segmentIndex: closestPoint.segmentIndex,
+              lat: closestPoint.lat,
+              lon: closestPoint.lon,
+            });
+          } else {
+            setEdgeHoverInfo(null);
+          }
+        });
+
+        polygonFill.on('mouseout', () => {
+          setEdgeHoverInfo(null);
+        });
+
+        // Add contextmenu handler for inserting points on edge
+        polygonFill.on('contextmenu', (e) => {
+          const { closestPoint, closestDist } = findClosestEdgePoint(e.latlng);
+
+          // Only insert if close to an edge
+          const edgeThreshold = 0.0015; // ~165 meters
+          if (closestPoint && closestDist < edgeThreshold) {
+            L.DomEvent.stopPropagation(e);
+            e.originalEvent.preventDefault();
+
+            // Insert new point after segmentIndex
+            const newPoint: PolygonPoint = {
+              lat: closestPoint.lat,
+              lon: closestPoint.lon,
+              id: `${Date.now()}-${Math.random()}`,
+            };
+
+            setPolygons((prev) =>
+              prev.map((p) => {
+                if (p.id !== polygon.id) return p;
+
+                // Find the original index in p.points that corresponds to cleanedPoints[segmentIndex]
+                const cleanedPoint = cleanedPoints[closestPoint!.segmentIndex];
+                const originalIndex = p.points.findIndex(
+                  (pt) =>
+                    pt.id === cleanedPoint.id ||
+                    (Math.abs(pt.lat - cleanedPoint.lat) < 1e-9 && Math.abs(pt.lon - cleanedPoint.lon) < 1e-9)
+                );
+
+                if (originalIndex === -1) return p;
+
+                // Insert after the found index
+                const newPoints = [...p.points];
+                newPoints.splice(originalIndex + 1, 0, newPoint);
+                return { ...p, points: newPoints };
+              })
+            );
+
+            setEdgeHoverInfo(null);
+          }
+        });
+
         polygonFill.addTo(map);
       }
 
@@ -1674,7 +1965,49 @@ const PositionalOverview: React.FC = () => {
         polygon: polygonFill,
       });
     });
-  }, [polygons, activePolygonId, selectedPolygonId]);
+  }, [polygons, activePolygonId, selectedPolygonId, selectedPointId]);
+
+  // Effect to render edge hover ghost marker
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Remove existing ghost marker
+    if (edgeGhostMarkerRef.current) {
+      map.removeLayer(edgeGhostMarkerRef.current);
+      edgeGhostMarkerRef.current = null;
+    }
+
+    // Add new ghost marker if we have edge hover info
+    if (edgeHoverInfo) {
+      const ghostIcon = L.divIcon({
+        className: 'edge-ghost-marker',
+        html: `<div style="
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background-color: rgba(156, 39, 176, 0.7);
+          border: 2px dashed white;
+          box-shadow: 0 0 6px rgba(156, 39, 176, 0.5);
+          cursor: pointer;
+        "></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+
+      edgeGhostMarkerRef.current = L.marker([edgeHoverInfo.lat, edgeHoverInfo.lon], {
+        icon: ghostIcon,
+        interactive: false, // Don't intercept clicks - let them pass to polyline
+      }).addTo(map);
+    }
+
+    return () => {
+      if (edgeGhostMarkerRef.current && map) {
+        map.removeLayer(edgeGhostMarkerRef.current);
+        edgeGhostMarkerRef.current = null;
+      }
+    };
+  }, [edgeHoverInfo]);
 
   // Effect to handle offset polygon rendering
   useEffect(() => {
@@ -1737,30 +2070,88 @@ const PositionalOverview: React.FC = () => {
     };
   }, [polygons, offsetDistance]);
 
-  // Keyboard handler for deleting selected polygon
+  // Keyboard handler for deleting polygon points or entire polygons
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle backspace, delete, or entf if a polygon is selected and we're not in an input field
+      // Only handle backspace, delete, or entf if we're not in an input field
       const activeElement = document.activeElement;
       const isInputField = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA' || (activeElement as HTMLElement)?.isContentEditable;
-      
-      if ((e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Entf') && selectedPolygonId && !isInputField) {
+
+      if ((e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Entf') && !isInputField) {
         e.preventDefault();
         e.stopPropagation();
-        setPolygons((prev) => prev.filter((p) => p.id !== selectedPolygonId));
-        if (activePolygonId === selectedPolygonId) {
-          setActivePolygonId(null);
+
+        // Priority 1: If an individual point is selected, delete just that point
+        if (selectedPointId) {
+          setPolygons((prev) => {
+            const targetPolygon = prev.find((p) => p.id === selectedPointId.polygonId);
+            if (!targetPolygon) return prev;
+
+            // Find and remove the selected point
+            const updatedPoints = targetPolygon.points.filter((p) => p.id !== selectedPointId.pointId);
+
+            // For closed polygons: need at least 3 points
+            // For unclosed polygons: can have any number of points (even 0)
+            if (targetPolygon.isClosed && updatedPoints.length < 3) {
+              setSelectedPointId(null);
+              setActivePolygonId(null);
+              return prev.filter((p) => p.id !== selectedPointId.polygonId);
+            }
+
+            if (updatedPoints.length === 0) {
+              setSelectedPointId(null);
+              setActivePolygonId(null);
+              return prev.filter((p) => p.id !== selectedPointId.polygonId);
+            }
+
+            // Otherwise, update the polygon with the remaining points (polygon automatically reconnects)
+            return prev.map((p) =>
+              p.id === selectedPointId.polygonId
+                ? { ...p, points: updatedPoints }
+                : p
+            );
+          });
+          setSelectedPointId(null);
+          return;
         }
-        setSelectedPolygonId(null);
+
+        // Priority 2: If there's an active polygon being drawn, delete the last point
+        if (activePolygonId) {
+          setPolygons((prev) => {
+            const activePolygon = prev.find((p) => p.id === activePolygonId);
+            if (activePolygon && !activePolygon.isClosed && activePolygon.points.length > 0) {
+              if (activePolygon.points.length === 1) {
+                // Last point - remove the entire polygon
+                setActivePolygonId(null);
+                return prev.filter((p) => p.id !== activePolygonId);
+              } else {
+                // Remove the last point
+                return prev.map((p) =>
+                  p.id === activePolygonId
+                    ? { ...p, points: p.points.slice(0, -1) }
+                    : p
+                );
+              }
+            }
+            return prev;
+          });
+          return;
+        }
+
+        // Priority 3: If a closed polygon is selected, delete it entirely
+        if (selectedPolygonId) {
+          setPolygons((prev) => prev.filter((p) => p.id !== selectedPolygonId));
+          setSelectedPolygonId(null);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedPolygonId, activePolygonId]);
+  }, [selectedPolygonId, activePolygonId, selectedPointId]);
 
   // Sync polygons to sessionStorage whenever they change
   useEffect(() => {
