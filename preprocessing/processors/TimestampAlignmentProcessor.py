@@ -38,7 +38,7 @@ class TimestampAlignmentProcessor(McapProcessor):
         super().__init__("timestamp_alignment_processor")
         self.output_dir = Path(output_dir)
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir)
+        self.completion_tracker = CompletionTracker(self.output_dir, processor_name="timestamp_alignment_processor")
         # Internal state for collected timestamps
         self.timestamps = defaultdict(list)
     
@@ -99,9 +99,13 @@ class TimestampAlignmentProcessor(McapProcessor):
         # Construct output file path before checking completion (for fallback check)
         output_file = self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.csv"
         
-        # Check completion (with output_path for auto-repair fallback)
-        if self.completion_tracker.is_completed(context, output_path=output_file, mcap_name=context.get_mcap_name()):
-            self.logger.processor_skip(f"timestamp lookup for {context.get_mcap_name()}", "already completed")
+        # Get rosbag name and mcap name
+        rosbag_name = str(context.get_relative_path())
+        mcap_name = context.get_mcap_name()
+        
+        # Check completion using new unified interface
+        if self.completion_tracker.is_mcap_completed(rosbag_name, mcap_name):
+            self.logger.processor_skip(f"timestamp lookup for {mcap_name}", "already completed")
             return {}
         
         self.logger.info(f"Starting timestamp alignment for {context.get_mcap_name()}")
@@ -177,11 +181,12 @@ class TimestampAlignmentProcessor(McapProcessor):
         self.logger.info(f"Writing CSV to {output_file}")
         self._write_csv(output_file, ref_ts, aligned_data)
         
-        # Mark as completed
+        # Mark as completed using new unified interface
         self.completion_tracker.mark_completed(
-            context,
-            output_file,
-            mcap_name=context.get_mcap_name()
+            rosbag_name=rosbag_name,
+            mcap_name=mcap_name,
+            status="completed",
+            output_files=[output_file]
         )
         
         self.logger.success(f"Built timestamp lookup for {context.get_mcap_name()} with {len(topic_data)} topics")

@@ -35,7 +35,7 @@ class PositionalLookupProcessor(HybridProcessor):
         self.output_dir = Path(output_dir)  # Now expects full file path
         self.positional_grid_resolution = positional_grid_resolution  # 0.0001 degrees (~11 meters)
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir.parent)
+        self.completion_tracker = CompletionTracker(self.output_dir.parent, processor_name="positional_lookup_processor")
         self.positions: List[Dict[str, Any]] = []  # Store collected position data (accumulated across MCAPs)
         self.current_mcap_id: Optional[str] = None  # Track which MCAP we're currently collecting from
         self.combined_data: Dict[str, Dict] = {}  # Accumulate all rosbag data in memory for single file output
@@ -136,14 +136,15 @@ class PositionalLookupProcessor(HybridProcessor):
         Args:
             context: MCAP processing context
         """
-        # Output file is the same JSON for all MCAPs in this rosbag
-        output_path = self.output_dir
+        # Get rosbag name and mcap name
+        rosbag_name = str(context.get_relative_path())
+        mcap_name = context.get_mcap_name()
         
-        # Mark this MCAP as completed (hierarchical structure)
+        # Mark this MCAP as completed (no output_files at MCAP level - they contribute to rosbag-level file)
         self.completion_tracker.mark_completed(
-            context,
-            output_path=output_path,
-            mcap_name=context.get_mcap_name()
+            rosbag_name=rosbag_name,
+            mcap_name=mcap_name,
+            status="completed"
         )
     
     def is_mcap_completed(self, context: McapProcessingContext) -> bool:
@@ -160,36 +161,11 @@ class PositionalLookupProcessor(HybridProcessor):
         Returns:
             True if this MCAP is marked as completed in completion.json, False otherwise
         """
+        rosbag_name = str(context.get_relative_path())
         mcap_name = context.get_mcap_name()
-        rosbag_name = context.get_relative_path().as_posix()
         
-        # Check completion.json entry - this is the source of truth
-        completion_data = self.completion_tracker._load()
-        
-        # First check hierarchical structure (rosbag_name -> mcap_name)
-        if rosbag_name in completion_data:
-            rosbag_entry = completion_data[rosbag_name]
-            if isinstance(rosbag_entry, dict) and "status" not in rosbag_entry:
-                # Hierarchical structure
-                if mcap_name in rosbag_entry:
-                    mcap_entry = rosbag_entry[mcap_name]
-                    if isinstance(mcap_entry, dict):
-                        status = mcap_entry.get("status")
-                        if status in ("complete", "completed"):
-                            # Marked as completed in completion.json - trust it
-                            return True
-        
-        # Also check flat structure (mcap_name as direct key) - handles legacy/alternative formats
-        if mcap_name in completion_data:
-            mcap_entry = completion_data[mcap_name]
-            if isinstance(mcap_entry, dict):
-                status = mcap_entry.get("status")
-                if status in ("complete", "completed"):
-                    # Marked as completed in flat structure - trust it
-                    return True
-        
-        # Not in completion.json, not completed
-        return False
+        # Use new unified interface
+        return self.completion_tracker.is_mcap_completed(rosbag_name, mcap_name)
     
     def _verify_mcap_data_in_json(self, rosbag_name: str, mcap_id: str) -> bool:
         """
@@ -344,6 +320,13 @@ class PositionalLookupProcessor(HybridProcessor):
         
         self.logger.success(f"Built aggregated lookup with {len(location_counts)} grid cells from {len(self.positions)} positions")
         self.logger.info(f"  Incrementally written to {self.output_dir}")
+        
+        # Mark rosbag as completed (output file is at rosbag level)
+        self.completion_tracker.mark_completed(
+            rosbag_name=rosbag_name,
+            status="completed",
+            output_files=[self.output_dir]
+        )
         
         # Clear positions after processing this rosbag (prepare for next rosbag)
         self.positions = []

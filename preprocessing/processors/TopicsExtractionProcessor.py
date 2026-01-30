@@ -32,7 +32,7 @@ class TopicsExtractionProcessor(RosbagProcessor):
         self.output_dir = Path(output_dir)
         self.rosbags_dir = Path(rosbags_dir)
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir)
+        self.completion_tracker = CompletionTracker(self.output_dir, processor_name="topics_extraction_processor")
     
     def process_rosbag(self, context: RosbagProcessingContext) -> Dict:
         """
@@ -46,15 +46,16 @@ class TopicsExtractionProcessor(RosbagProcessor):
         """
 
         self.logger.info(f"Extracting topics from {context.get_relative_path()}...")
-        # Check completion
-        output_dir = context.config.topics_dir
-        completion_tracker = CompletionTracker(output_dir)
         
-        # Construct output file path before checking completion (for fallback check)
-        output_file = output_dir / context.get_relative_path().with_suffix('.json')
+        # Get rosbag name (relative path as string)
+        rosbag_name = str(context.get_relative_path())
         
-        if completion_tracker.is_completed(context, output_path=output_file):
-            self.logger.processor_skip(f"topics extraction for {context.get_relative_path()}", "already completed")
+        # Construct output file path
+        output_file = self.output_dir / context.get_relative_path().with_suffix('.json')
+        
+        # Check completion using new unified interface
+        if self.completion_tracker.is_rosbag_completed(rosbag_name):
+            self.logger.processor_skip(f"topics extraction for {rosbag_name}", "already completed")
             return {}
         
         topics_data = {
@@ -131,10 +132,11 @@ class TopicsExtractionProcessor(RosbagProcessor):
         with open(output_file, 'w') as f:
             json.dump(topics_data, f, indent=2)
         
-        # Mark as completed
-        completion_tracker.mark_completed(
-            context,
-            output_file
+        # Mark as completed using new unified interface
+        self.completion_tracker.mark_completed(
+            rosbag_name=rosbag_name,
+            status="completed",
+            output_files=[output_file]
         )
         
         self.logger.success(f"Extracted {len(topics_data['topics'])} topics")

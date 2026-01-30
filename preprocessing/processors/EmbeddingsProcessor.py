@@ -694,7 +694,7 @@ class EmbeddingsProcessor(McapProcessor):
         self.output_dir = Path(output_dir)
         self.lookup_tables_dir = Path(lookup_tables_dir) if lookup_tables_dir else None
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir)
+        self.completion_tracker = CompletionTracker(self.output_dir, processor_name="embeddings_processor")
 
         # Collected images per MCAP: List of {"topic": str, "timestamp_ns": int, "mcap_id": str, "image": PIL.Image}
         self.collected_images: List[Dict[str, Any]] = []
@@ -1156,12 +1156,13 @@ class EmbeddingsProcessor(McapProcessor):
                     
                     self.logger.info(f"  {model_dir_id}: Added {total_processed} embedding(s) to shards")
                     
-                    # Mark this MCAP as completed for this model
-                    self.completion_tracker.mark_mcap_completed_with_model(
+                    # Mark this MCAP as completed for this model (no output_files at MCAP level)
+                    mcap_name = f"{rosbag_name}_{mcap_id}.mcap"
+                    self.completion_tracker.mark_completed(
                         model_name=model_dir_id,
                         rosbag_name=rosbag_name,
-                        mcap_id=mcap_id,
-                        output_path=manifest_path
+                        mcap_name=mcap_name,
+                        status="completed"
                     )
                     
                     # Unload model from GPU after processing
@@ -1230,10 +1231,11 @@ class EmbeddingsProcessor(McapProcessor):
                 manifest_path = out_dir / "manifest.parquet"
                 
                 # Fast check: use completion tracker if available
-                completion_marked = self.completion_tracker.is_mcap_completed_with_model(
+                mcap_name = f"{rosbag_name}_{mcap_id}.mcap"
+                completion_marked = self.completion_tracker.is_model_mcap_completed(
                     model_name=model_dir_id,
                     rosbag_name=rosbag_name,
-                    mcap_id=mcap_id
+                    mcap_name=mcap_name
                 )
                 
                 # Always verify with manifest content (more reliable)
@@ -1245,11 +1247,11 @@ class EmbeddingsProcessor(McapProcessor):
                         if mcap_in_manifest:
                             # Verified in manifest - if not in completion.json, mark it
                             if not completion_marked:
-                                self.completion_tracker.mark_mcap_completed_with_model(
+                                self.completion_tracker.mark_completed(
                                     model_name=model_dir_id,
                                     rosbag_name=rosbag_name,
-                                    mcap_id=mcap_id,
-                                    output_path=manifest_path
+                                    mcap_name=mcap_name,
+                                    status="completed"
                                 )
                             continue  # This model is complete
                         else:

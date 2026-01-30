@@ -35,7 +35,7 @@ class AdjacentSimilaritiesPostprocessor(PostProcessor):
         self.embeddings_dir = Path(embeddings_dir)
         self.output_dir = Path(output_dir)
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir)
+        self.completion_tracker = CompletionTracker(self.output_dir, processor_name="adjacent_similarities_postprocessor")
     
     def _load_embeddings_from_shards_for_topic(
         self, manifest_path: Path, shards_dir: Path, topic: str
@@ -263,16 +263,8 @@ class AdjacentSimilaritiesPostprocessor(PostProcessor):
             
             # Process each topic
             for topic in sorted(topics):
-                # Check completion before processing
-                completion_key = f"{model_name}/{rosbag_name}/{topic}"
-                topic_folder = topic.replace("/", "__")
-                # Convert rosbag_name to Path for proper directory structure
-                rosbag_path_obj = Path(rosbag_name)
-                
-                expected_output = self.output_dir / model_name / rosbag_path_obj / topic_folder / f"{topic_folder}.jpg"
-                
-                # The completion check should only check one file (the PNG), not both. The .npy file is secondary data.
-                if self.completion_tracker.is_completed(completion_key, output_path=expected_output):
+                # Check completion using new unified interface
+                if self.completion_tracker.is_model_topic_completed(model_name, rosbag_name, topic):
                     self.logger.processor_skip(f"Model {model_name} with rosbag {rosbag_name} and topic {topic}", "already completed")
                     continue
                 
@@ -300,10 +292,21 @@ class AdjacentSimilaritiesPostprocessor(PostProcessor):
                     continue
                 
                 # Save plot and similarities
-                output_path = self._plot_and_save(similarities, model_name, rosbag_name, topic)
-                if output_path:
-                    # Mark as completed after successful save
-                    self.completion_tracker.mark_completed(completion_key, output_path=output_path)
+                jpg_path = self._plot_and_save(similarities, model_name, rosbag_name, topic)
+                if jpg_path:
+                    # Get npy path (same directory, same filename but .npy extension)
+                    topic_folder = topic.replace("/", "__")
+                    rosbag_path_obj = Path(rosbag_name)
+                    npy_path = self.output_dir / model_name / rosbag_path_obj / topic_folder / f"{topic_folder}.npy"
+                    
+                    # Mark as completed with both output files using new unified interface
+                    self.completion_tracker.mark_completed(
+                        model_name=model_name,
+                        rosbag_name=rosbag_name,
+                        topic_name=topic,
+                        status="completed",
+                        output_files=[jpg_path, npy_path]
+                    )
                     self.logger.success(
                         f"Saved {len(similarities)} pairwise similarities"
                     )

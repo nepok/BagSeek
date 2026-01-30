@@ -37,7 +37,7 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
         super().__init__("image_topic_previews_processor")
         self.output_dir = Path(output_dir)
         self.logger: PipelineLogger = get_logger()
-        self.completion_tracker = CompletionTracker(self.output_dir)
+        self.completion_tracker = CompletionTracker(self.output_dir, processor_name="image_topic_previews_processor")
         
         # Fencepost mapping: MCAP ID -> [(part_idx, percentage), ...]
         self.fencepost_mapping: Dict[str, List[Tuple[int, float]]] = {}
@@ -71,20 +71,15 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
             context: RosbagProcessingContext
         """
         # Check if already completed - skip fencepost calculation if so
-        output_dir = self.output_dir / context.get_relative_path()
-        if output_dir.exists():
-            # Check if any stitched images exist (indicates completion)
-            jpg_files = list(output_dir.glob("*.jpg"))
-            if jpg_files:
-                # Check completion using completion tracker
-                if self.completion_tracker.is_completed(context, output_path=jpg_files[0]):
-                    # Already completed, skip fencepost calculation
-                    self.fencepost_mapping = {}
-                    self.collected_images = []
-                    self.topic_index = defaultdict(int)
-                    self.current_mcap_id = None
-                    self.image_topics = set()
-                    return
+        rosbag_name = str(context.get_relative_path())
+        if self.completion_tracker.is_rosbag_completed(rosbag_name):
+            # Already completed, skip fencepost calculation
+            self.fencepost_mapping = {}
+            self.collected_images = []
+            self.topic_index = defaultdict(int)
+            self.current_mcap_id = None
+            self.image_topics = set()
+            return
         
         # Get MCAP files
         mcap_files = context.mcap_files
@@ -450,12 +445,12 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
             self.logger.warning(f"No images collected for {context.get_relative_path()}")
             return {}
         
-        # Use first topic's stitched image as completion marker
-        first_topic = sorted(set(img["topic"] for img in self.collected_images))[0]
-        completion_file = output_dir / f"{first_topic.replace('/', '_')}.jpg"
+        # Get rosbag name
+        rosbag_name = str(context.get_relative_path())
         
-        if self.completion_tracker.is_completed(context, output_path=completion_file):
-            self.logger.processor_skip(f"image previews for {context.get_relative_path()}", "already completed")
+        # Check completion using new unified interface
+        if self.completion_tracker.is_rosbag_completed(rosbag_name):
+            self.logger.processor_skip(f"image previews for {rosbag_name}", "already completed")
             return {}
         
         self.logger.info(f"Stitching image previews for {context.get_relative_path()}...")
@@ -492,23 +487,13 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
             
             self.logger.info(f"  Stitched {len(topic_images)} images for {topic} -> {stitched_file.name}")
         
-        # Mark as completed with all stitched files
+        # Mark as completed with all stitched files using new unified interface
         if stitched_files:
-            # Calculate relative paths for all stitched files
-            relative_files = []
-            for stitched_file in stitched_files:
-                if stitched_file.is_absolute():
-                    relative_file = stitched_file.relative_to(self.completion_tracker.completion_file.parent)
-                else:
-                    relative_file = stitched_file
-                relative_files.append(str(relative_file))
-            
-            # Store all output files in metadata
-            metadata = {
-                "output_files": relative_files
-            }
-            # Use first file as primary output_file for backward compatibility
-            self.completion_tracker.mark_completed(context, stitched_files[0], metadata=metadata)
+            self.completion_tracker.mark_completed(
+                rosbag_name=rosbag_name,
+                status="completed",
+                output_files=stitched_files
+            )
         
         self.logger.success(f"Stitched {len(stitched_files)} preview(s) from {len(self.collected_images)} images across {len(topics)} topic(s)")
         
