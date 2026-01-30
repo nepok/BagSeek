@@ -379,8 +379,10 @@ def main():
         embeddings_complete = is_rosbag_complete_for_embeddings(
             embeddings_processor, rosbag_name, mcap_names
         )
+        # Similarities needs work if embeddings needs work (will run after embeddings complete)
         similarities_complete = is_rosbag_complete_for_adjacent_similarities(
-            adjacent_similarities_postprocessor, rosbag_name, config.embeddings_dir
+            adjacent_similarities_postprocessor, rosbag_name, config.embeddings_dir,
+            embeddings_need_work=not embeddings_complete
         )
 
         # Check if ALL processors are complete for this rosbag
