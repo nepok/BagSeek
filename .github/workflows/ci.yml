@@ -69,7 +69,7 @@ jobs:
       - name: Test backend health
         run: |
           docker run -d --name test-backend \
-            -e BASE=/tmp -e ROSBAGS=/tmp -e PRESELECTED_ROSBAG=/tmp/test \
+            -e BASE=/tmp -e ROSBAGS=/tmp \
             -e OPEN_CLIP_MODELS=/tmp -e OTHER_MODELS=/tmp \
             -e IMAGE_TOPIC_PREVIEWS=/tmp -e POSITIONAL_LOOKUP_TABLE=/tmp/lookup.json \
             -e LOOKUP_TABLES=/tmp -e TOPICS=/tmp -e CANVASES_FILE=/tmp/canvases.json \
