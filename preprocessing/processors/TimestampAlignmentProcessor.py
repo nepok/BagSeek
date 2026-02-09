@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import csv
+import pandas as pd
 
 from ..abstract import McapProcessor
 from ..core import McapProcessingContext
@@ -77,7 +77,7 @@ class TimestampAlignmentProcessor(McapProcessor):
     
     def get_output_path(self, context: McapProcessingContext) -> Path:
         """Get the expected output path for this context."""
-        return self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.csv"
+        return self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.parquet"
     
     # Processor method (called after MCAP iteration in main.py)
     def process_mcap(self, context: McapProcessingContext, all_topics: Optional[list[str]] = None) -> Dict:
@@ -97,7 +97,7 @@ class TimestampAlignmentProcessor(McapProcessor):
         self.all_topics = all_topics
 
         # Construct output file path before checking completion (for fallback check)
-        output_file = self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.csv"
+        output_file = self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.parquet"
         
         # Get rosbag name and mcap name
         rosbag_name = str(context.get_relative_path())
@@ -176,10 +176,9 @@ class TimestampAlignmentProcessor(McapProcessor):
                 for topic in missing_topics:
                     aligned_data[topic] = [None] * len(ref_ts)
         
-        # 6. write csv
-        #print("output_dir:", self.output_dir, "context:", context.get_relative_path(), "mcap_name:", context.get_mcap_name())
-        self.logger.info(f"Writing CSV to {output_file}")
-        self._write_csv(output_file, ref_ts, aligned_data)
+        # 6. write parquet
+        self.logger.info(f"Writing Parquet to {output_file}")
+        self._write_parquet(output_file, ref_ts, aligned_data)
         
         # Mark as completed using new unified interface
         self.completion_tracker.mark_completed(
@@ -192,44 +191,46 @@ class TimestampAlignmentProcessor(McapProcessor):
         self.logger.success(f"Built timestamp lookup for {context.get_mcap_name()} with {len(topic_data)} topics")
         return topic_data
     
-    def _write_csv(self, csv_path: Path, ref_ts: np.ndarray, aligned_data: Dict[str, List[Optional[int]]]):
+    def _write_parquet(self, parquet_path: Path, ref_ts: np.ndarray, aligned_data: Dict[str, List[Optional[int]]]):
         """
-        Write aligned timestamp data to CSV file.
-        
+        Write aligned timestamp data to Parquet file.
+
         Args:
-            csv_path: Path to output CSV file
+            parquet_path: Path to output Parquet file
             ref_ts: Reference timeline timestamps
             aligned_data: Dictionary mapping topics to aligned timestamp lists
         """
         topics = self.all_topics if self.all_topics else list(aligned_data.keys())
-        header = ['Reference Timestamp'] + topics + ['Max Distance']
-        
+
         # Ensure output directory exists
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+
         try:
-            with open(csv_path, 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(header)
-                
-                for i, ref_time in enumerate(ref_ts):
-                    row = [int(ref_time)]
-                    row_values = []
-                    
-                    for topic in topics:
-                        aligned_ts = aligned_data[topic][i]
-                        if aligned_ts is not None:
-                            row.append(int(aligned_ts))
-                            row_values.append(abs(aligned_ts - ref_time))
-                        else:
-                            row.append("")
-                    
-                    max_dist = max(row_values) if row_values else ""
-                    row.append(int(max_dist) if max_dist != "" else "")
-                    writer.writerow(row)
-            
-            self.logger.debug(f"CSV file written successfully: {csv_path.stat().st_size} bytes, {len(ref_ts)} rows")
+            # Build DataFrame with proper types
+            data = {'Reference Timestamp': ref_ts.astype(np.int64)}
+
+            for topic in topics:
+                # Convert to nullable Int64 to handle None values
+                aligned_ts = aligned_data[topic]
+                data[topic] = pd.array(aligned_ts, dtype=pd.Int64Dtype())
+
+            # Compute Max Distance column
+            max_distances = []
+            for i, ref_time in enumerate(ref_ts):
+                distances = []
+                for topic in topics:
+                    aligned_ts = aligned_data[topic][i]
+                    if aligned_ts is not None:
+                        distances.append(abs(aligned_ts - ref_time))
+                max_distances.append(max(distances) if distances else None)
+
+            data['Max Distance'] = pd.array(max_distances, dtype=pd.Int64Dtype())
+
+            df = pd.DataFrame(data)
+            df.to_parquet(parquet_path, engine='pyarrow', index=False)
+
+            self.logger.debug(f"Parquet file written successfully: {parquet_path.stat().st_size} bytes, {len(ref_ts)} rows")
         except Exception as e:
-            self.logger.error(f"Failed to write CSV file: {e}")
+            self.logger.error(f"Failed to write Parquet file: {e}")
             raise
 
