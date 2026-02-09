@@ -8,6 +8,8 @@ Uses granular completion checking to skip already-processed work at multiple lev
 - Rosbag level: Skip entire rosbag if all MCAPs complete
 - MCAP level: Skip individual MCAPs if already processed
 """
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import sys
@@ -616,6 +618,47 @@ def main():
         logger.success("All rosbags already complete! Nothing to process.")
     else:
         logger.success("Pipeline complete!")
+
+    # ========================================================================
+    # WRITE VALID ROSBAGS INDEX
+    # ========================================================================
+
+    logger.info("\nWriting valid_rosbags.json index file...")
+
+    # Collect all valid rosbag paths (those with embeddings)
+    valid_rosbag_paths = []
+    embeddings_dir = config.embeddings_dir
+
+    if embeddings_dir.exists():
+        for rosbag_path in rosbags:
+            relative_path = rosbag_path.relative_to(config.rosbags_dir)
+            rosbag_name = str(relative_path)
+
+            # Check if this rosbag has embeddings in at least one model
+            found_in_embeddings = False
+            for model_dir in embeddings_dir.iterdir():
+                if not model_dir.is_dir():
+                    continue
+                embeddings_rosbag_path = model_dir / relative_path
+                if embeddings_rosbag_path.exists() and embeddings_rosbag_path.is_dir():
+                    found_in_embeddings = True
+                    break
+
+            if found_in_embeddings:
+                valid_rosbag_paths.append(rosbag_name)
+
+    valid_rosbag_paths.sort()
+
+    # Write index file
+    index_file = config.base_dir / "valid_rosbags.json"
+    index_data = {
+        "paths": valid_rosbag_paths,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    with open(index_file, 'w') as f:
+        json.dump(index_data, f, indent=2)
+
+    logger.success(f"Wrote {len(valid_rosbag_paths)} valid rosbag(s) to {index_file}")
 
     logger.section("", char="=")
 
