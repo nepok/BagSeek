@@ -40,68 +40,68 @@ def extract_rosbag_name_from_path(rosbag_path: str) -> str:
 
 
 def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> pd.DataFrame:
-    """Load and combine all mcap CSV files for a rosbag.
-    
+    """Load and combine all mcap lookup table files for a rosbag.
+
+    Supports Parquet format.
+
     Args:
         rosbag_name: Name of the rosbag (directory name, not full path)
         use_cache: Whether to use cached data if available
-    
+
     Returns:
         Combined DataFrame with all lookup table data, or empty DataFrame if none found.
     """
     if not LOOKUP_TABLES:
         return pd.DataFrame()
-    
+
     lookup_rosbag_dir = LOOKUP_TABLES / rosbag_name
     if not lookup_rosbag_dir.exists():
         return pd.DataFrame()
-    
+
+    # Sort files numerically by mcap_id (filename stem)
+    def get_mcap_id_numeric(file_path: Path) -> int:
+        """Extract numeric mcap_id from filename for sorting."""
+        try:
+            return int(file_path.stem)
+        except (ValueError, TypeError):
+            return float('inf')
+
+    parquet_files = sorted(lookup_rosbag_dir.glob("*.parquet"), key=get_mcap_id_numeric)
+    if not parquet_files:
+        return pd.DataFrame()
+    data_files = parquet_files
+
     # Check cache
     if use_cache and rosbag_name in _lookup_table_cache:
         cached_df, cached_mtime = _lookup_table_cache[rosbag_name]
-        # Check if any CSV file was modified
-        csv_files = list(lookup_rosbag_dir.glob("*.csv"))
-        if csv_files:
-            latest_mtime = max(f.stat().st_mtime for f in csv_files)
-            if latest_mtime <= cached_mtime:
-                return cached_df
-    
-    csv_files = list(lookup_rosbag_dir.glob("*.csv"))
-    if not csv_files:
-        return pd.DataFrame()
-    
-    # Sort CSV files numerically by mcap_id (filename stem), not alphabetically
-    def get_mcap_id_numeric(csv_path: Path) -> int:
-        """Extract numeric mcap_id from CSV filename for sorting."""
-        try:
-            return int(csv_path.stem)
-        except (ValueError, TypeError):
-            # If not numeric, sort alphabetically as fallback
-            return float('inf')
-    
-    csv_files.sort(key=get_mcap_id_numeric)
-    
+        latest_mtime = max(f.stat().st_mtime for f in data_files)
+        if latest_mtime <= cached_mtime:
+            return cached_df
+
     all_dfs = []
     latest_mtime = 0.0
-    for csv_path in csv_files:
-        mcap_id = csv_path.stem  # Extract mcap_id from filename (without .csv extension)
+
+    for file_path in data_files:
+        mcap_id = file_path.stem  # Extract mcap_id from filename
         try:
-            stat = csv_path.stat()
+            stat = file_path.stat()
             latest_mtime = max(latest_mtime, stat.st_mtime)
-            df = pd.read_csv(csv_path, dtype=str)
+
+            df = pd.read_parquet(file_path)
+
             if len(df) > 0:
                 # Add mcap_id as a column to track which mcap this row came from
                 df['_mcap_id'] = mcap_id
                 all_dfs.append(df)
         except Exception as e:
-            logging.warning(f"Failed to load CSV {csv_path}: {e}")
+            logging.warning(f"Failed to load Parquet {file_path}: {e}")
             continue
-    
+
     if not all_dfs:
         return pd.DataFrame()
-    
+
     result_df = pd.concat(all_dfs, ignore_index=True)
-    
+
     # Sort by Reference Timestamp to ensure consistent ordering
     # This is critical for correct mcap_id assignment in ranges
     if 'Reference Timestamp' in result_df.columns and len(result_df) > 0:
@@ -109,11 +109,11 @@ def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> p
             result_df = result_df.sort_values('Reference Timestamp').reset_index(drop=True)
         except (ValueError, TypeError) as e:
             logging.warning(f"Failed to sort DataFrame by Reference Timestamp: {e}")
-    
+
     # Cache the result
     if use_cache:
         _lookup_table_cache[rosbag_name] = (result_df, latest_mtime)
-    
+
     return result_df
 
 

@@ -21,8 +21,7 @@ interface NodeMetadata {
 }
 
 interface SplittableCanvasProps {
-  availableTopics: string[];
-  availableTopicTypes: { [topic: string]: string };
+  availableTopics: Record<string, string>; // Unified: { topicName: messageType }
   mappedTimestamps: { [topic: string]: number };
   selectedRosbag: string | null;
   mcapIdentifier: string | null;
@@ -31,7 +30,10 @@ interface SplittableCanvasProps {
   currentMetadata: { [id: number]: NodeMetadata };
 }
 
-const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, availableTopicTypes, mappedTimestamps, selectedRosbag, mcapIdentifier, onCanvasChange, currentRoot, currentMetadata }) => {
+const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, mappedTimestamps, selectedRosbag, mcapIdentifier, onCanvasChange, currentRoot, currentMetadata }) => {
+  // Derive topics array and types map from unified availableTopics
+  const topicsList = Object.keys(availableTopics);
+  const availableTopicTypes = availableTopics;
 
   const [root, setRoot] = useState<Node>({ id: 1 }); // root node of canvas layout tree
   const [nodeMetadata, setNodeMetadata] = useState<{ [id: number]: NodeMetadata }>({}); // metadata for each panel
@@ -403,7 +405,7 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, av
             ]}
           >
             <Paper>
-              {availableTopics.map((topic) => (
+              {topicsList.map((topic) => (
                 <MenuItem
                   key={topic}
                   onClick={() => handleTopicSelection(topic)}

@@ -8,15 +8,17 @@ import { times } from 'lodash';
 interface ExportProps {
   timestamps: number[];
   timestampDensity: number[];
-  topics: string[];
+  availableTopics: Record<string, string>; // Unified: { topicName: messageType }
   isVisible: boolean;
   onClose: () => void;
   searchMarks: { value: number; label: string }[];
-  topicTypes: Record<string, string>;
   selectedRosbag: string | null;
 }
 
-const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, topics, isVisible, onClose, searchMarks, topicTypes, selectedRosbag: selectedRosbagProp }) => {
+const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, availableTopics, isVisible, onClose, searchMarks, selectedRosbag: selectedRosbagProp }) => {
+  // Derive topics array and topicTypes map from unified availableTopics
+  const topics = Object.keys(availableTopics);
+  const topicTypes = availableTopics;
 
   // State for selected rosbag name (fallback if prop not provided)
   const [selectedRosbag, setSelectedRosbag] = useState('');

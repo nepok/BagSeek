@@ -10,6 +10,7 @@ import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
 import PositionalOverview from './components/PositionalOverview/PositionalOverview';
+import { sortTopicsObject } from './utils/topics';
 
 interface Node {
   id: number;
@@ -36,8 +37,8 @@ function App() {
   const [timestampDensity, setTimestampDensity] = useState<number[]>([]);  // Density information of timestamps, used for UI visualization like heatmaps
   const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});  // Mapping from topic names to their respective timestamps at the selected reference
   const [mcapIdentifier, setMcapIdentifier] = useState<string | null>(null);  // MCAP identifier for the currently selected reference timestamp
-  const [availableTopics, setAvailableTopics] = useState<string[]>([]);  // List of all available topics fetched from backend
-  const [availableTopicTypes, setAvailableTopicTypes] = useState<{ [topic: string]: string }>({});  // Mapping from topic names to their types, e.g., sensor_msgs/Image
+  // Unified topics state: { topicName: messageType } - single source of truth for topics and their types
+  const [availableTopics, setAvailableTopics] = useState<Record<string, string>>({});
   const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);  // Currently selected rosbag file identifier or name
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);  // Controls visibility of the file input dialog component
   const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);  // Controls visibility of the export dialog component
@@ -89,33 +90,20 @@ function App() {
     return parts[parts.length - 1];
   };
 
-  // Fetch list of available topics from backend API
+  // Fetch unified topics (topicName -> messageType) from backend API
   const fetchAvailableTopics = async () => {
     try {
       const response = await fetch('/api/get-available-topics');
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch topics');
-      } 
-      setAvailableTopics(data.availableTopics);
+      }
+      // Sort topics on frontend
+      const sortedTopics = sortTopicsObject(data.topics || {});
+      setAvailableTopics(sortedTopics);
     } catch (error) {
       setError('Error fetching available topics');
       console.error('Error fetching available topics:', error);
-    }
-  };
-
-  // Fetch mapping of topics to their types from backend API
-  const fetchAvailableTopicTypes = async () => {
-    try {
-      const response = await fetch('/api/get-available-topic-types');
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch topic types');
-      }
-      setAvailableTopicTypes(data.availableTopicTypes);
-    } catch (error) {
-      setError('Error fetching available topic types');
-      console.error('Error fetching available topic types:', error);
     }
   };
 
@@ -360,7 +348,6 @@ function App() {
           // Refresh dependent data
           await Promise.all([
             fetchAvailableTopics(),
-            fetchAvailableTopicTypes(),
             fetchAvailableTimestampsAndDensity(),
             fetchSelectedRosbag(),
           ]);
@@ -512,7 +499,6 @@ function App() {
         isVisible={isFileInputVisible}
         onClose={() => setIsFileInputVisible(false)}
         onAvailableTopicsUpdate={fetchAvailableTopics}
-        onAvailableTopicTypesUpdate={fetchAvailableTopicTypes}
         onAvailableTimestampsUpdate={fetchAvailableTimestampsAndDensity}
         onSelectedRosbagUpdate={fetchSelectedRosbag}
       />
@@ -520,8 +506,7 @@ function App() {
       <Export
         timestamps={availableTimestamps}
         timestampDensity={timestampDensity}
-        topics={availableTopics}
-        topicTypes={availableTopicTypes}
+        availableTopics={availableTopics}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
         searchMarks={[]} // COMMENTED OUT: Search functionality disabled
@@ -550,7 +535,6 @@ function App() {
                 <>
                   <SplittableCanvas
                     availableTopics={availableTopics}
-                    availableTopicTypes={availableTopicTypes}
                     mappedTimestamps={mappedTimestamps}
                     selectedRosbag={selectedRosbag}
                     mcapIdentifier={mcapIdentifier}

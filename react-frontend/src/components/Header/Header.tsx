@@ -15,7 +15,7 @@ interface HeaderProps {
   handleLoadCanvas: (name: string) => void; // Callback to load a canvas by name
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
   handleResetCanvas: () => void; // Callback to reset canvas to empty state
-  availableTopics: string[]; // List of available topics for the currently selected rosbag
+  availableTopics: Record<string, string>; // Unified: { topicName: messageType }
   canvasList: { [key: string]: { root: any, metadata: { [id: number]: any }, rosbag?: string } }; // Collection of saved canvases from App
   refreshCanvasList: () => Promise<void>; // Function to refresh canvas list from backend
 }
@@ -53,14 +53,14 @@ const extractTopicsFromCanvas = (canvas: { metadata?: { [id: number]: { nodeTopi
 };
 
 // Check if a canvas is compatible with the currently selected rosbag based on topics
-const isCanvasCompatible = (canvas: any, availableTopics: string[]): boolean => {
+const isCanvasCompatible = (canvas: any, availableTopics: Record<string, string>): boolean => {
   const requiredTopics = extractTopicsFromCanvas(canvas);
   if (requiredTopics.length === 0) return false; // Canvas with no topics is not compatible
-  
+
   // Normalize both canvas topics and available topics for comparison
   const normalizedRequiredTopics = requiredTopics.map(normalizeTopic);
-  const normalizedAvailableTopics = availableTopics.map(normalizeTopic);
-  
+  const normalizedAvailableTopics = Object.keys(availableTopics).map(normalizeTopic);
+
   // Check if all required topics exist in available topics
   return normalizedRequiredTopics.every(topic => normalizedAvailableTopics.includes(topic));
 };
@@ -313,8 +313,8 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
           <>
             {/* Button to toggle file input dialog */}
             <Tooltip title="Open Rosbag" arrow>
-              <IconButton 
-                className="header-icon" 
+              <IconButton
+                className="header-icon"
                 onClick={() => {
                   setShowCanvasPopper(false); // Close canvas popper if open
                   setIsFileInputVisible((prev) => !prev); // Toggle file input visibility
@@ -330,15 +330,15 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
                 <ViewQuiltRoundedIcon />
               </IconButton>
             </Tooltip>
-
-            {/* Button to toggle export dialog visibility */}
-            <Tooltip title="Export Rosbag" arrow>
-              <IconButton className="header-icon" onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}>
-                <IosShareIcon />
-              </IconButton>
-            </Tooltip>
           </>
         )}
+
+        {/* Export button - shown on all pages */}
+        <Tooltip title="Export Rosbag" arrow>
+          <IconButton className="header-icon" onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}>
+            <IosShareIcon />
+          </IconButton>
+        </Tooltip>
       </Box>
     </Box>
   );
