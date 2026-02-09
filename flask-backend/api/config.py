@@ -26,7 +26,6 @@ def _require_env(name: str) -> str:
 # Required environment variables
 BASE_STR = _require_env("BASE")
 ROSBAGS_STR = _require_env("ROSBAGS")
-PRESELECTED_ROSBAG_STR = _require_env("PRESELECTED_ROSBAG")
 OPEN_CLIP_MODELS_STR = _require_env("OPEN_CLIP_MODELS")
 OTHER_MODELS_STR = _require_env("OTHER_MODELS")
 
@@ -43,7 +42,6 @@ EXPORT_STR = _require_env("EXPORT")
 
 # Path constants
 ROSBAGS = Path(ROSBAGS_STR)
-PRESELECTED_ROSBAG = Path(PRESELECTED_ROSBAG_STR)
 
 PRESELECTED_MODEL = os.getenv("PRESELECTED_MODEL", "ViT-B-16-quickgelu__openai")
 OPEN_CLIP_MODELS = Path(BASE_STR + OPEN_CLIP_MODELS_STR)
@@ -73,7 +71,10 @@ CUSTOM_MODEL_DEFAULTS = {
 MAX_K = 100
 
 # Cache configuration
-FILE_PATH_CACHE_TTL_SECONDS = 60
+FILE_PATH_CACHE_TTL_SECONDS = 3600  # 1 hour - index file is the source of truth
+
+# Index file for valid rosbags (written by preprocessing, read by API)
+VALID_ROSBAGS_INDEX = Path(BASE_STR) / "valid_rosbags.json"
 
 # Gemma model for prompt enhancement (optional - requires HuggingFace auth)
 try:
