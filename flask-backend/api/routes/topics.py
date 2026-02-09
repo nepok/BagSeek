@@ -6,44 +6,47 @@ import json
 import logging
 from flask import Blueprint, jsonify, request
 from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS
-from ..state import SELECTED_ROSBAG, get_aligned_data
+from ..state import get_selected_rosbag, get_aligned_data
 from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
-from ..utils.topics import sort_topics
 
 topics_bp = Blueprint('topics', __name__)
 
 
 @topics_bp.route('/api/get-available-topics', methods=['GET'])
 def get_available_rosbag_topics():
+    """Returns unified topics dict: { topic_name: message_type }
+
+    Response: { topics: { "/camera/image": "sensor_msgs/msg/Image", ... } }
+    """
     try:
-        rosbag_name = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
+        selected_rosbag = get_selected_rosbag()
+        if selected_rosbag is None:
+            return jsonify({'topics': {}}), 200
+
+        rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
-            return jsonify({'availableTopics': []}), 200
+            return jsonify({'topics': {}}), 200
 
         with open(topics_json_path, 'r') as f:
             topics_data = json.load(f)
 
         # Topics is now a dict mapping topic names to types
-        # Extract the topic names (keys) as a list
         topics_dict = topics_data.get("topics", {})
         if isinstance(topics_dict, dict):
-            topics = list(topics_dict.keys())
-            topic_types = topics_dict  # Use the dict itself as topic_types mapping
+            topic_types = topics_dict
         else:
             # Fallback for old format where topics was a list
-            topics = topics_dict if isinstance(topics_dict, list) else []
-            topic_types = {}
-        
-        # Sort topics using the default priority order
-        topics = sort_topics(topics, topic_types)
-        
-        return jsonify({'availableTopics': topics}), 200
+            topics_list = topics_dict if isinstance(topics_dict, list) else []
+            topic_types = {t: "" for t in topics_list}
+
+        # Return topics as-is (sorting is now handled in frontend)
+        return jsonify({'topics': topic_types}), 200
 
     except Exception as e:
         logging.error(f"Error reading topics JSON: {e}")
-        return jsonify({'availableTopics': []}), 200
+        return jsonify({'topics': {}}), 200
 
 
 @topics_bp.route('/api/get-available-image-topics', methods=['GET'])
@@ -86,8 +89,8 @@ def get_available_image_topics():
                 except Exception as e:
                     logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
 
-                # Sort topics using the default priority order
-                model_entry[rosbag_name] = sort_topics(topics, topic_types)
+                # Return topics as-is (sorting is now handled in frontend)
+                model_entry[rosbag_name] = topics
 
             if model_entry:
                 results[model_param] = model_entry
@@ -101,8 +104,16 @@ def get_available_image_topics():
 
 @topics_bp.route('/api/get-available-topic-types', methods=['GET'])
 def get_available_rosbag_topic_types():
+    """DEPRECATED: Use /api/get-available-topics which now returns unified { topics: { name: type } }
+
+    Kept for backwards compatibility. Returns same data in old format.
+    """
     try:
-        rosbag_name = extract_rosbag_name_from_path(str(SELECTED_ROSBAG))
+        selected_rosbag = get_selected_rosbag()
+        if selected_rosbag is None:
+            return jsonify({'availableTopicTypes': {}}), 200
+
+        rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
@@ -119,7 +130,7 @@ def get_available_rosbag_topic_types():
         else:
             # Fallback for old format where types was in a separate "types" field
             availableTopicTypes = topics_data.get("types", {})
-        
+
         return jsonify({'availableTopicTypes': availableTopicTypes}), 200
 
     except Exception as e:
