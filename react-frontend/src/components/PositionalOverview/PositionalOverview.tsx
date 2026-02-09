@@ -1,6 +1,8 @@
-import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, MenuItem, Select, Slider, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, MenuItem, Paper, Popper, Slider, TextField, Tooltip, Typography } from '@mui/material';
 import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
 import Switch from '@mui/material/Switch';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -300,6 +302,36 @@ const convertGeoJSONToPolygons = (geoJson: any, baseId: string): Polygon[] => {
   return polygons;
 };
 
+// Convert internal Polygon format to GeoJSON FeatureCollection
+const convertPolygonsToGeoJSON = (polygons: Polygon[]): any => {
+  const features = polygons
+    .filter((polygon) => polygon.isClosed && polygon.points.length >= 3)
+    .map((polygon) => {
+      // GeoJSON polygons need closed rings (first point == last point)
+      const coordinates = polygon.points.map((p) => [p.lon, p.lat]);
+      // Close the ring
+      if (coordinates.length > 0) {
+        coordinates.push([polygon.points[0].lon, polygon.points[0].lat]);
+      }
+
+      return {
+        type: 'Feature',
+        properties: {
+          name: polygon.id,
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [coordinates],
+        },
+      };
+    });
+
+  return {
+    type: 'FeatureCollection',
+    features,
+  };
+};
+
 // Offset polygon by distance in meters using Clipper2-ts
 // Positive offset = shrink inward, negative offset = expand outward
 // Based on: https://www.angusj.com/clipper2/Docs/Units/Clipper.Offset/Classes/ClipperOffset/_Body.htm
@@ -564,6 +596,12 @@ const PositionalOverview: React.FC = () => {
   const [importingPolygon, setImportingPolygon] = useState<boolean>(false);
   const [exportingList, setExportingList] = useState<boolean>(false);
   const [offsetDistance, setOffsetDistance] = useState<number>(0);
+  const [showPolygonPopper, setShowPolygonPopper] = useState<boolean>(false);
+  const [showPolygonSaveField, setShowPolygonSaveField] = useState<boolean>(false);
+  const [newPolygonName, setNewPolygonName] = useState<string>('');
+  const [savingPolygon, setSavingPolygon] = useState<boolean>(false);
+  const [deletingPolygon, setDeletingPolygon] = useState<string | null>(null);
+  const polygonButtonRef = useRef<HTMLButtonElement | null>(null);
   const prevPolygonCountRef = useRef<number>(0);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -742,6 +780,108 @@ const PositionalOverview: React.FC = () => {
       setImportingPolygon(false);
     }
   }, [importingPolygon]);
+
+  // Handle save polygon to file
+  const handleSavePolygon = useCallback(async (name: string) => {
+    if (!name.trim() || savingPolygon) {
+      return;
+    }
+
+    const closedPolygons = polygons.filter((p) => p.isClosed);
+    if (closedPolygons.length === 0) {
+      setError('No closed polygons to save');
+      return;
+    }
+
+    setSavingPolygon(true);
+    setError(null);
+
+    try {
+      const geojson = convertPolygonsToGeoJSON(closedPolygons);
+      const response = await fetch('/api/polygons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), geojson }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to save polygon (${response.status})`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Response wasn't JSON, use default error message
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Refresh polygon files list
+      const listResponse = await fetch('/api/polygons/list');
+      if (listResponse.ok) {
+        const listData = await listResponse.json();
+        setPolygonFiles(listData.files || []);
+      }
+
+      // Reset UI state
+      setNewPolygonName('');
+      setShowPolygonSaveField(false);
+    } catch (saveError) {
+      const errorMessage = saveError instanceof Error ? saveError.message : 'Failed to save polygon';
+      setError(errorMessage);
+      console.error('Failed to save polygon:', saveError);
+    } finally {
+      setSavingPolygon(false);
+    }
+  }, [polygons, savingPolygon]);
+
+  // Handle delete polygon file
+  const handleDeletePolygonFile = useCallback(async (filename: string) => {
+    if (deletingPolygon) {
+      return;
+    }
+
+    setDeletingPolygon(filename);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/polygons/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to delete polygon (${response.status})`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Response wasn't JSON, use default error message
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Refresh polygon files list
+      const listResponse = await fetch('/api/polygons/list');
+      if (listResponse.ok) {
+        const listData = await listResponse.json();
+        setPolygonFiles(listData.files || []);
+      }
+
+      // If the deleted file was selected, clear the selection
+      if (selectedPolygonFile === filename) {
+        setSelectedPolygonFile('');
+      }
+    } catch (deleteError) {
+      const errorMessage = deleteError instanceof Error ? deleteError.message : 'Failed to delete polygon';
+      setError(errorMessage);
+      console.error('Failed to delete polygon:', deleteError);
+    } finally {
+      setDeletingPolygon(null);
+    }
+  }, [deletingPolygon, selectedPolygonFile]);
 
   // Handle export list
   const handleExportList = useCallback(async () => {
@@ -2761,64 +2901,176 @@ const PositionalOverview: React.FC = () => {
 
             {/* Filter: Import Polygons, Offset, Apply to Search, Clear All */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {/* First row: Select and TextField */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                <Select
-                  value={selectedPolygonFile}
-                  onChange={(e) => {
-                    const filename = e.target.value as string;
-                    setSelectedPolygonFile(filename);
-                    if (filename) {
-                      handleImportPolygon(filename);
-                    } else {
-                      // Clear polygons when "None" is selected (same as Clear All)
+              {/* Polygon Popper Menu */}
+              <Popper
+                open={showPolygonPopper}
+                anchorEl={polygonButtonRef.current}
+                placement="top-start"
+                sx={{ zIndex: 10000, width: '300px' }}
+              >
+                <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px', maxHeight: '400px', overflowY: 'auto' }}>
+                  {/* RESET button */}
+                  <Button
+                    onClick={() => {
                       setPolygons([]);
                       setActivePolygonId(null);
                       setSelectedPolygonId(null);
-                      // Clear positional filter and polygons from sessionStorage
+                      setSelectedPolygonFile('');
                       try {
                         sessionStorage.removeItem('__BagSeekPositionalFilter');
                         sessionStorage.removeItem('__BagSeekPositionalPolygons');
                       } catch (e) {
                         console.error('Failed to clear positional filter:', e);
                       }
-                    }
-                  }}
-                  displayEmpty
+                      setShowPolygonPopper(false);
+                    }}
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    sx={{
+                      fontSize: '0.8rem',
+                      marginBottom: '8px',
+                      textTransform: 'none',
+                    }}
+                  >
+                    RESET
+                  </Button>
+
+                  {/* Polygon files list */}
+                  {loadingPolygonFiles ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', padding: '8px' }}>
+                      <CircularProgress size={20} />
+                    </Box>
+                  ) : polygonFiles.length === 0 ? (
+                    <Typography sx={{ fontSize: '0.8rem', color: '#888', textAlign: 'center', padding: '8px' }}>
+                      No saved polygons
+                    </Typography>
+                  ) : (
+                    polygonFiles.map((filename) => {
+                      const isProtected = filename.startsWith('Lehr- und Forsch');
+                      return (
+                        <MenuItem
+                          key={filename}
+                          sx={{
+                            fontSize: '0.8rem',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            color: selectedPolygonFile === filename ? '#2196f3' : 'white',
+                            backgroundColor: selectedPolygonFile === filename ? 'rgba(33, 150, 243, 0.1)' : 'transparent',
+                            '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.1)' },
+                          }}
+                          onClick={() => {
+                            setSelectedPolygonFile(filename);
+                            handleImportPolygon(filename);
+                            setShowPolygonPopper(false);
+                          }}
+                          disabled={importingPolygon || deletingPolygon === filename}
+                        >
+                          <Box sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {filename.replace('.json', '')}
+                          </Box>
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeletePolygonFile(filename);
+                            }}
+                            disabled={isProtected || deletingPolygon === filename}
+                            sx={{ color: '#888', '&:hover': { color: isProtected ? '#888' : '#ff5555' }, marginLeft: '4px' }}
+                          >
+                            {deletingPolygon === filename ? (
+                              <CircularProgress size={16} />
+                            ) : (
+                              <DeleteIcon fontSize="small" />
+                            )}
+                          </IconButton>
+                        </MenuItem>
+                      );
+                    })
+                  )}
+
+                  {/* Save section */}
+                  {showPolygonSaveField ? (
+                    <TextField
+                      autoFocus
+                      fullWidth
+                      size="small"
+                      variant="outlined"
+                      placeholder="Enter name..."
+                      value={newPolygonName}
+                      onChange={(e) => setNewPolygonName(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleSavePolygon(newPolygonName)}
+                      onBlur={() => {
+                        if (!newPolygonName.trim()) {
+                          setShowPolygonSaveField(false);
+                        }
+                      }}
+                      disabled={savingPolygon}
+                      InputProps={{
+                        endAdornment: savingPolygon ? (
+                          <CircularProgress size={16} />
+                        ) : (
+                          <IconButton
+                            size="small"
+                            onClick={() => handleSavePolygon(newPolygonName)}
+                            disabled={!newPolygonName.trim()}
+                          >
+                            <AddIcon fontSize="small" />
+                          </IconButton>
+                        ),
+                      }}
+                      sx={{
+                        backgroundColor: '#303030',
+                        borderRadius: '4px',
+                        marginTop: '4px',
+                        input: { color: 'white', fontSize: '0.8rem' },
+                        '& .MuiOutlinedInput-root': {
+                          '& fieldset': { borderColor: '#555' },
+                          '&:hover fieldset': { borderColor: '#777' },
+                          '&.Mui-focused fieldset': { borderColor: '#aaa' },
+                        },
+                      }}
+                    />
+                  ) : (
+                    <MenuItem
+                      onClick={() => setShowPolygonSaveField(true)}
+                      disabled={polygons.filter((p) => p.isClosed).length === 0}
+                      sx={{ fontSize: '0.8rem', padding: '4px 8px', display: 'flex', justifyContent: 'center' }}
+                    >
+                      <AddIcon fontSize="small" />
+                    </MenuItem>
+                  )}
+                </Paper>
+              </Popper>
+
+              {/* First row: Button and TextField */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <Button
+                  ref={polygonButtonRef}
+                  onClick={() => setShowPolygonPopper(!showPolygonPopper)}
+                  variant="outlined"
                   size="small"
-                  disabled={loadingPolygonFiles || importingPolygon || polygonFiles.length === 0}
+                  disabled={loadingPolygonFiles}
                   sx={{
                     fontSize: '8pt',
                     flex: 1,
                     backgroundColor: 'rgba(30, 30, 30, 0.8)',
                     color: '#ffffff',
+                    borderColor: 'rgba(255, 255, 255, 0.23)',
+                    textTransform: 'none',
+                    justifyContent: 'flex-start',
                     overflow: 'hidden',
-                    borderRadius: 1,
-                    '& .MuiSelect-select': {
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    },
-                    '& .MuiOutlinedInput-notchedOutline': {
-                      borderColor: 'rgba(255, 255, 255, 0.23)',
-                    },
-                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    '&:hover': {
                       borderColor: 'rgba(255, 255, 255, 0.4)',
-                    },
-                    '& .MuiSvgIcon-root': {
-                      color: '#ffffff',
+                      backgroundColor: 'rgba(40, 40, 40, 0.8)',
                     },
                   }}
                 >
-                  <MenuItem value="">
-                    Load predefined area polygons
-                  </MenuItem>
-                  {polygonFiles.map((filename) => (
-                    <MenuItem key={filename} value={filename}>
-                      {filename.replace('.json', '')}
-                    </MenuItem>
-                  ))}
-                </Select>
+                  {selectedPolygonFile ? selectedPolygonFile.replace('.json', '') : 'Load/Save Polygons'}
+                </Button>
                 <TextField
                   type="number"
                   value={offsetDistance}
