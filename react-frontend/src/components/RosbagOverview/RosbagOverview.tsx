@@ -8,6 +8,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, Chip, Box, Divider, Collapse } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { sortTopics } from '../../utils/topics';
 
 interface RosbagOverviewProps {
     rosbags: string[];
@@ -63,7 +64,15 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                 });
 
                 const data = response.data.availableTopics || {};
-                setTopics(data);
+                // Sort topics for each model/rosbag combination
+                const sortedData: typeof data = {};
+                for (const model in data) {
+                    sortedData[model] = {};
+                    for (const rosbag in data[model]) {
+                        sortedData[model][rosbag] = sortTopics(data[model][rosbag] || []);
+                    }
+                }
+                setTopics(sortedData);
             } catch (error) {
                 console.error('Failed to fetch topics:', error);
             }
@@ -545,7 +554,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                             mcap_identifier: mcapInfo.mcap_identifier,
                                                                             timestamp: String(mcapInfo.topicTimestamp)
                                                                         }).toString();
-                                                                        const contentRes = await fetch(`/api/content-mcap?${contentParams}`, { signal: controller.signal });
+                                                                        const contentRes = await fetch(`/api/content-mcap?rosbag=${rosbag}&${contentParams}`, { signal: controller.signal });
                                                                         if (!contentRes.ok) return;
                                                                         const contentData = await contentRes.json();
                                                                         if (contentData?.type !== 'image' || !contentData?.image) return;
