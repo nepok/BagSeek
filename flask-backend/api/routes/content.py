@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from mcap.reader import SeekingReader
 from mcap_ros2.decoder import DecoderFactory
 from ..config import ROSBAGS
-from ..state import SELECTED_ROSBAG, get_aligned_data, get_selected_rosbag
+from ..state import get_aligned_data, get_selected_rosbag
 from .. import state
 from ..utils.mcap import format_message_response
 
@@ -35,20 +35,36 @@ def set_reference_timestamp():
             return jsonify({"error": "Missing referenceTimestamp"}), 400
 
         aligned_data = get_aligned_data()
-        row = aligned_data[aligned_data["Reference Timestamp"] == str(referenceTimestamp)]
+        
+        # Try both string and int comparison
+        row_str = aligned_data[aligned_data["Reference Timestamp"] == str(referenceTimestamp)]
+        row_int = aligned_data[aligned_data["Reference Timestamp"] == int(referenceTimestamp)] if isinstance(referenceTimestamp, (int, str)) and str(referenceTimestamp).isdigit() else None
+        
+        row = row_str if not row_str.empty else (row_int if row_int is not None and not row_int.empty else row_str)
+        
         if row.empty:
-            return jsonify({"error": "Reference timestamp not found in CSV"}), 404
+            return jsonify({"error": "Reference timestamp not found"}), 404
 
         state.set_reference_timestamp(referenceTimestamp)
         mapped_timestamps_dict = row.iloc[0].to_dict()
         # Extract mcap_identifier from the row (exclude it from mapped_timestamps)
         mcap_identifier = mapped_timestamps_dict.pop('_mcap_id', None)
         state.set_mapped_timestamps(mapped_timestamps_dict)
-        # Convert NaNs to None for safe JSON serialization
-        cleaned_mapped_timestamps = {
-            k: (None if v is None or (isinstance(v, float) and math.isnan(v)) else v)
-            for k, v in mapped_timestamps_dict.items()
-        }
+        # Convert NaNs to None and integers to strings for safe JSON serialization
+        cleaned_mapped_timestamps = {}
+        for k, v in mapped_timestamps_dict.items():
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                cleaned_mapped_timestamps[k] = None
+            elif isinstance(v, int):
+                cleaned_mapped_timestamps[k] = str(v)
+            elif not isinstance(v, (str, float, bool)) and hasattr(v, '__int__'):
+                try:
+                    int(v)  # Verify it's actually an integer
+                    cleaned_mapped_timestamps[k] = str(v)
+                except (ValueError, TypeError):
+                    cleaned_mapped_timestamps[k] = v
+            else:
+                cleaned_mapped_timestamps[k] = v
         return jsonify({"mappedTimestamps": cleaned_mapped_timestamps, "mcapIdentifier": mcap_identifier, "message": "Reference timestamp updated"}), 200
 
     except Exception as e:
@@ -58,7 +74,7 @@ def set_reference_timestamp():
 @content_bp.route('/api/content-mcap', methods=['GET', 'POST'])
 def get_content_mcap():
     """Get content from MCAP file for a specific topic, timestamp, and mcap identifier."""
-    relative_rosbag_path = request.args.get('relative_rosbag_path')
+    rosbag = request.args.get('rosbag')
     topic = request.args.get('topic')
     mcap_identifier = request.args.get('mcap_identifier')
     timestamp = request.args.get('timestamp', type=int)
@@ -71,47 +87,41 @@ def get_content_mcap():
     if not SAFE_IDENTIFIER_PATTERN.match(mcap_identifier):
         return jsonify({'error': 'Invalid mcap_identifier format'}), 400
     
-    # Handle missing relative_rosbag_path - use SELECTED_ROSBAG as fallback
-    # Capture once with thread-safe getter to avoid race conditions
-    if not relative_rosbag_path:
+    # Handle missing rosbag - use SELECTED_ROSBAG as fallback
+    if not rosbag:
         current_selected_rosbag = get_selected_rosbag()
         if not current_selected_rosbag:
-            return jsonify({'error': 'No rosbag selected and relative_rosbag_path not provided'}), 400
+            return jsonify({'error': 'No rosbag provided and no rosbag selected in backend'}), 400
         # Get relative path from selected rosbag
-        # It might be a string or Path, and might be absolute or relative
         selected_rosbag_str = str(current_selected_rosbag)
         selected_rosbag_path = Path(selected_rosbag_str)
         
-        # Check if it's an absolute path (starts with /) or relative
         if selected_rosbag_path.is_absolute():
-            # Absolute path - get relative path from ROSBAGS
             try:
-                relative_rosbag_path = str(selected_rosbag_path.relative_to(ROSBAGS))
+                rosbag = str(selected_rosbag_path.relative_to(ROSBAGS))
             except ValueError:
-                # If not a subpath, try to construct it from the basename
-                relative_rosbag_path = selected_rosbag_path.name
+                rosbag = selected_rosbag_path.name
         else:
-            # Already a relative path - use it directly
-            relative_rosbag_path = selected_rosbag_str
-
-    # Security: Validate relative_rosbag_path to prevent directory traversal
-    if not _is_safe_path(relative_rosbag_path):
+            rosbag = selected_rosbag_str
+    
+    # Security: Validate rosbag to prevent directory traversal
+    if not _is_safe_path(rosbag):
         return jsonify({'error': 'Invalid rosbag path'}), 400
 
     # Extract base rosbag name for MCAP filename
     # For multipart rosbags like "rosbag2_2025_07_23-07_29_39_multi_parts/Part_2",
     # we need to get the base name (before _multi_parts) for the MCAP filename
     # MCAP files are named like: rosbag2_2025_07_23-07_29_39_669.mcap
-    if '_multi_parts' in relative_rosbag_path:
+    if '_multi_parts' in rosbag:
         # Extract base name before _multi_parts
-        base_rosbag_name = relative_rosbag_path.split('_multi_parts')[0]
+        base_rosbag_name = rosbag.split('_multi_parts')[0]
     else:
         # For regular rosbags, use the full path as base name
-        base_rosbag_name = relative_rosbag_path
+        base_rosbag_name = rosbag
     
     # Construct MCAP path using Path objects for proper handling
     # MCAP files are in the rosbag directory, named: {base_rosbag_name}_{mcap_identifier}.mcap
-    mcap_path = ROSBAGS / relative_rosbag_path / f"{base_rosbag_name}_{mcap_identifier}.mcap"
+    mcap_path = ROSBAGS / rosbag / f"{base_rosbag_name}_{mcap_identifier}.mcap"
     
     logging.warning(f"[CONTENT_MCAP] MCAP path: {mcap_path}")
     

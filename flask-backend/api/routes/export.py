@@ -9,7 +9,7 @@ from mcap.reader import SeekingReader
 from mcap.writer import Writer, CompressionType, IndexType
 from mcap_ros2.decoder import DecoderFactory
 from ..config import ROSBAGS, EXPORT
-from ..state import SELECTED_ROSBAG, EXPORT_PROGRESS
+from ..state import get_selected_rosbag, EXPORT_PROGRESS
 
 export_bp = Blueprint('export', __name__)
 
@@ -93,14 +93,22 @@ def export_rosbag():
             EXPORT_PROGRESS["message"] = f"Invalid number format: {e}"
             return jsonify({"error": f"Invalid number format: {e}"}), 400
 
+        # Check if a rosbag is selected
+        selected_rosbag = get_selected_rosbag()
+        if selected_rosbag is None:
+            EXPORT_PROGRESS["status"] = "error"
+            EXPORT_PROGRESS["progress"] = -1
+            EXPORT_PROGRESS["message"] = "No rosbag selected"
+            return jsonify({"error": "No rosbag selected"}), 400
+
         # Set status to starting - export is beginning
         EXPORT_PROGRESS["status"] = "starting"
         EXPORT_PROGRESS["progress"] = -1
         EXPORT_PROGRESS["message"] = "Validating export parameters..."
 
         # Set paths
-        # SELECTED_ROSBAG might be absolute or relative, handle both cases
-        selected_rosbag_str = str(SELECTED_ROSBAG)
+        # selected_rosbag might be absolute or relative, handle both cases
+        selected_rosbag_str = str(selected_rosbag)
         selected_rosbag_path = Path(selected_rosbag_str)
         
         # Check if it's an absolute path or relative

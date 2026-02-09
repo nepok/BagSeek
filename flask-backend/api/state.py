@@ -6,15 +6,15 @@ Thread-safe access is provided via locks for mutable state.
 from pathlib import Path
 from threading import Lock
 import pandas as pd
-from .config import PRESELECTED_ROSBAG, PRESELECTED_MODEL
+from .config import PRESELECTED_MODEL
 
 # Locks for thread-safe access to mutable state
 _aligned_data_lock = Lock()
 _selected_rosbag_lock = Lock()
 _reference_timestamp_lock = Lock()
 
-# Runtime state
-_SELECTED_ROSBAG = PRESELECTED_ROSBAG
+# Runtime state - no rosbag selected initially
+_SELECTED_ROSBAG = None
 SELECTED_MODEL = PRESELECTED_MODEL
 
 # ALIGNED_DATA: DataFrame mapping reference timestamps to per-topic timestamps for alignment
@@ -22,11 +22,11 @@ SELECTED_MODEL = PRESELECTED_MODEL
 _ALIGNED_DATA: pd.DataFrame | None = None
 
 
-def get_aligned_data() -> pd.DataFrame:
+def get_aligned_data() -> pd.DataFrame | None:
     """Get or initialize ALIGNED_DATA (thread-safe)."""
     global _ALIGNED_DATA
     with _aligned_data_lock:
-        if _ALIGNED_DATA is None:
+        if _ALIGNED_DATA is None and _SELECTED_ROSBAG is not None:
             # Lazy import to avoid circular dependency
             from .utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
             rosbag_name = extract_rosbag_name_from_path(str(_SELECTED_ROSBAG))
@@ -48,16 +48,10 @@ def get_selected_rosbag():
 
 
 def set_selected_rosbag(path_value) -> None:
-    """Set SELECTED_ROSBAG (thread-safe)."""
-    global _SELECTED_ROSBAG, SELECTED_ROSBAG
+    """Set selected rosbag (thread-safe)."""
+    global _SELECTED_ROSBAG
     with _selected_rosbag_lock:
         _SELECTED_ROSBAG = path_value
-        # Keep backward-compatible module variable in sync
-        SELECTED_ROSBAG = path_value
-
-
-# Backward-compatible module-level access (prefer get_selected_rosbag() for thread safety)
-SELECTED_ROSBAG = _SELECTED_ROSBAG
 
 
 # Progress tracking (use update_*_progress functions for thread-safe writes)
