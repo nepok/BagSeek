@@ -93,7 +93,7 @@ function ResultImageCard({
       try {
         setIsLoading(true);
         const response = await fetch(
-          `/api/content-mcap?relative_rosbag_path=${result.rosbag}&topic=${encodeURIComponent(result.topic)}&mcap_identifier=${result.mcap_identifier}&timestamp=${result.timestamp}`
+          `/api/content-mcap?rosbag=${result.rosbag}&topic=${encodeURIComponent(result.topic)}&mcap_identifier=${result.mcap_identifier}&timestamp=${result.timestamp}`
         );
         const data = await response.json();
 

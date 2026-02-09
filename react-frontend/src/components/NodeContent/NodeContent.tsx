@@ -37,7 +37,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
     try {
-      const response = await fetch(`/api/content-mcap?topic=${encodeURIComponent(nodeTopic!)}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
+      const response = await fetch(`/api/content-mcap?rosbag=${selectedRosbag}&topic=${encodeURIComponent(nodeTopic!)}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
       const data = await response.json();
 
       if (data.error) {
