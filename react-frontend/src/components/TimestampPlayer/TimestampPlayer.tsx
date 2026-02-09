@@ -51,12 +51,34 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     return berlinTime;
   };
 
+  const formatDuration = (totalSeconds: number): string => {
+    const sign = totalSeconds < 0 ? '-' : '';
+    const abs = Math.floor(Math.abs(totalSeconds));
+    const minutes = Math.floor(abs / 60);
+    const seconds = abs % 60;
+    return `${sign}${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const getDurationDisplay = (): string => {
+    if (availableTimestamps.length === 0 || selectedTimestamp === null) return '0:00/0:00';
+    const first = availableTimestamps[0];
+    const last = availableTimestamps[availableTimestamps.length - 1];
+    const totalSeconds = (last - first) / 1e9;
+    const elapsedSeconds = (selectedTimestamp - first) / 1e9;
+    const totalFormatted = formatDuration(totalSeconds);
+    if (showRemaining) {
+      return `${formatDuration(elapsedSeconds - totalSeconds)}/${totalFormatted}`;
+    }
+    return `${formatDuration(elapsedSeconds)}/${totalFormatted}`;
+  };
+
   const [sliderValue, setSliderValue] = useState(
     selectedTimestamp ? availableTimestamps.indexOf(selectedTimestamp) : 0
   ); // current index in timestamp list
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1); // playback multiplier (e.g., 0.5x, 1x, 2x)
   const [isPlaying, setIsPlaying] = useState(false); // whether playback is running
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS'); // display mode: ROS or formatted time
+  const [showRemaining, setShowRemaining] = useState(false); // toggle elapsed vs remaining time
   //const [showFilter, setShowFilter] = useState(false); // toggle polygon filter view
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null); // interval reference for playback
@@ -262,12 +284,28 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       </FormControl>
 
       {/* Play icon button */}
-      <IconButton 
-        aria-label={isPlaying ? "pause" : "play"} 
-        color="primary" 
+      <IconButton
+        aria-label={isPlaying ? "pause" : "play"}
+        color="primary"
         onClick={togglePlayback}>
         {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
       </IconButton>
+
+      {/* Duration display */}
+      <Typography
+        variant="body2"
+        onClick={() => setShowRemaining(prev => !prev)}
+        sx={{
+          fontSize: '0.8rem',
+          whiteSpace: 'nowrap',
+          cursor: 'pointer',
+          userSelect: 'none',
+          fontFamily: 'monospace',
+          minWidth: 105,
+        }}
+      >
+        {getDurationDisplay()}
+      </Typography>
 
       {/* Timestamp slider */}
       <Slider
