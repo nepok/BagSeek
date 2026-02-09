@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, SelectChangeEvent } from '@mui/material';
+import { Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, IconButton, InputLabel, MenuItem, Select, SelectChangeEvent, Tooltip } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import { useError } from '../ErrorContext/ErrorContext';
 
 interface FileInputProps {
   isVisible: boolean; // Controls visibility of the dialog
   onClose: () => void; // Callback to close the dialog
-  onAvailableTopicsUpdate: () => void; // Callback for refreshing topics list after file selection
-  onAvailableTopicTypesUpdate: () => void; // Callback for refreshing topic types after file selection
+  onAvailableTopicsUpdate: () => void; // Callback for refreshing topics (unified: topicName -> messageType)
   onAvailableTimestampsUpdate: () => void; // Callback for refreshing timestamps after file selection
   onSelectedRosbagUpdate: () => void; // Callback for refreshing selected rosbag state
 }
@@ -24,25 +25,57 @@ const generateColor = (selectedRosbag: string) => {
   return colors[hash % colors.length]; // Pick a color based on hash index
 };
 
-const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTopicsUpdate, onAvailableTopicTypesUpdate, onAvailableTimestampsUpdate, onSelectedRosbagUpdate }) => {
+const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTopicsUpdate, onAvailableTimestampsUpdate, onSelectedRosbagUpdate }) => {
   // State to hold list of available rosbag file paths fetched from backend
   const [filePaths, setFilePaths] = useState<string[]>([]);
   // State for currently selected rosbag file path from dropdown
   const [selectedRosbagPath, setSelectedRosbagPath] = useState<string>('');
-  
+  // State for refresh loading
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  // State for initial loading
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  // Notification context
+  const { setInfo, setError, clearNotification } = useError();
+
   useEffect(() => {
     if (isVisible) {
+      setIsLoading(true);
+      setInfo('Loading file paths...', true);
       // Fetch available rosbag file paths from backend API when dialog becomes visible
       fetch('/api/get-file-paths')
         .then((response) => response.json())
         .then((data) => {
           setFilePaths(data.paths) // Update state with fetched file paths
+          clearNotification();
         })
         .catch((error) => {
           console.error('Error fetching file paths:', error) // Log fetch errors
+          setError('Error loading file paths');
+        })
+        .finally(() => {
+          setIsLoading(false);
         });
     }
   }, [isVisible]); // Re-run when dialog visibility changes
+
+  // Refresh file paths by forcing a full directory scan
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    setInfo('Refreshing file paths...', true);
+    fetch('/api/refresh-file-paths', { method: 'POST' })
+      .then((response) => response.json())
+      .then((data) => {
+        setFilePaths(data.paths);
+        clearNotification();
+      })
+      .catch((error) => {
+        console.error('Error refreshing file paths:', error);
+        setError('Error refreshing file paths');
+      })
+      .finally(() => {
+        setIsRefreshing(false);
+      });
+  };
 
   // Update selected rosbag path state when user selects a different option
   const handleRosbagSelection = (event: SelectChangeEvent<string>) => {
@@ -71,9 +104,8 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
     })
       .then((response) => response.json())
       .then((data) => {
-        // Trigger callbacks to refresh topics, topic types, timestamps, and selected rosbag state
-        onAvailableTopicsUpdate();      
-        onAvailableTopicTypesUpdate();  
+        // Trigger callbacks to refresh topics, timestamps, and selected rosbag state
+        onAvailableTopicsUpdate();
         onAvailableTimestampsUpdate();
         onSelectedRosbagUpdate();
       })
@@ -96,7 +128,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       <DialogContent>
         <FormControl sx={{ width: '100%', overflow: 'hidden' }}>
           <InputLabel id="rosbag-select-label"></InputLabel>
-          <div style={{ width: '100%', display: 'flex', overflow: 'hidden' }}>
+          <div style={{ width: '100%', display: 'flex', overflow: 'hidden', gap: '8px', alignItems: 'center' }}>
             <Select
               labelId="rosbag-select-label"
               id="rosbag-select"
@@ -186,6 +218,15 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
                 </MenuItem>
               ))}
             </Select>
+            <Tooltip title="Refresh rosbag list (rescan file system)">
+              <IconButton
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                sx={{ flexShrink: 0 }}
+              >
+                {isRefreshing ? <CircularProgress size={24} /> : <RefreshIcon />}
+              </IconButton>
+            </Tooltip>
           </div>
         </FormControl>
       </DialogContent>
