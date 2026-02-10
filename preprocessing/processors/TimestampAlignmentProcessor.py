@@ -4,15 +4,17 @@ Step 2: Timestamp Lookup Tables
 Builds timestamp alignment/lookup tables from MCAP files.
 Operates at mcap level - combines collection and processing.
 """
+import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ..abstract import McapProcessor
-from ..core import McapProcessingContext
+from ..core import McapProcessingContext, RosbagProcessingContext
 from ..utils import CompletionTracker, PipelineLogger, get_logger
 
 
@@ -41,6 +43,8 @@ class TimestampAlignmentProcessor(McapProcessor):
         self.completion_tracker = CompletionTracker(self.output_dir, processor_name="timestamp_alignment_processor")
         # Internal state for collected timestamps
         self.timestamps = defaultdict(list)
+        # Per-MCAP metadata accumulated across reset() calls for summary.json
+        self.mcap_summaries: List[Dict] = []
     
     # Collector methods (called during MCAP iteration in main.py)
     def wants_message(self, topic: str, msg_type: str) -> bool:
@@ -188,6 +192,14 @@ class TimestampAlignmentProcessor(McapProcessor):
             output_files=[output_file]
         )
         
+        # Accumulate per-MCAP metadata for summary.json
+        self.mcap_summaries.append({
+            "mcap_id": context.get_mcap_id(),
+            "count": len(ref_ts),
+            "first_timestamp_ns": int(ref_ts[0]),
+            "last_timestamp_ns": int(ref_ts[-1]),
+        })
+
         self.logger.success(f"Built timestamp lookup for {context.get_mcap_name()} with {len(topic_data)} topics")
         return topic_data
     
@@ -233,4 +245,117 @@ class TimestampAlignmentProcessor(McapProcessor):
         except Exception as e:
             self.logger.error(f"Failed to write Parquet file: {e}")
             raise
+
+    def finalize_rosbag(self, rosbag_context: RosbagProcessingContext) -> None:
+        """Write summary.json for a rosbag after all its MCAPs have been processed.
+
+        For MCAPs that were skipped (already complete), loads metadata from
+        pyarrow parquet file footers (no row data read). Then aggregates all
+        per-MCAP metadata into a single summary.json.
+
+        Call this once per rosbag, after the MCAP loop. Resets internal state
+        so the processor is ready for the next rosbag.
+        """
+        # Fill in metadata for any MCAPs not processed in this run
+        collected_ids = {s["mcap_id"] for s in self.mcap_summaries}
+        for mcap_path in rosbag_context.mcap_files:
+            mcap_context = McapProcessingContext(
+                rosbag_path=rosbag_context.rosbag_path,
+                mcap_path=mcap_path,
+                config=rosbag_context.config,
+            )
+            if mcap_context.get_mcap_id() not in collected_ids:
+                self._load_mcap_summary_from_parquet(mcap_context)
+
+        # Write summary.json
+        if self.mcap_summaries:
+            self._write_summary(rosbag_context)
+
+        # Reset for the next rosbag
+        self.mcap_summaries = []
+
+    def _load_mcap_summary_from_parquet(self, context: McapProcessingContext) -> None:
+        """Load summary metadata from an existing parquet file (for skipped MCAPs).
+
+        Uses pyarrow parquet metadata (file footer only) to get row count and
+        Reference Timestamp column statistics without reading any row data.
+        """
+        parquet_path = self.get_output_path(context)
+        if not parquet_path.exists():
+            return
+
+        try:
+            pf = pq.ParquetFile(parquet_path)
+            metadata = pf.metadata
+            row_count = metadata.num_rows
+            if row_count == 0:
+                return
+
+            # Get min/max from row group statistics for Reference Timestamp
+            schema = pf.schema_arrow
+            col_idx = schema.get_field_index('Reference Timestamp')
+            file_min = None
+            file_max = None
+            for rg_idx in range(metadata.num_row_groups):
+                col_stats = metadata.row_group(rg_idx).column(col_idx).statistics
+                if col_stats is not None and col_stats.has_min_max:
+                    if file_min is None or col_stats.min < file_min:
+                        file_min = col_stats.min
+                    if file_max is None or col_stats.max > file_max:
+                        file_max = col_stats.max
+
+            # Fallback: read just the column if statistics aren't available
+            if file_min is None or file_max is None:
+                table = pq.read_table(parquet_path, columns=['Reference Timestamp'])
+                ts = table.column('Reference Timestamp')
+                file_min = ts[0].as_py()
+                file_max = ts[-1].as_py()
+
+            self.mcap_summaries.append({
+                "mcap_id": context.get_mcap_id(),
+                "count": row_count,
+                "first_timestamp_ns": int(file_min),
+                "last_timestamp_ns": int(file_max),
+            })
+        except Exception as e:
+            self.logger.warning(f"Failed to read parquet metadata from {parquet_path}: {e}")
+
+    def _write_summary(self, rosbag_context: RosbagProcessingContext) -> None:
+        """Write summary.json from accumulated mcap_summaries."""
+        sorted_summaries = sorted(self.mcap_summaries, key=lambda s: int(s["mcap_id"]))
+
+        mcap_ranges = []
+        cumulative_index = 0
+        global_first = None
+        global_last = None
+
+        for summary in sorted_summaries:
+            mcap_ranges.append({
+                "mcap_id": summary["mcap_id"],
+                "start_index": cumulative_index,
+                "count": summary["count"],
+            })
+            first = summary["first_timestamp_ns"]
+            last = summary["last_timestamp_ns"]
+            if global_first is None or first < global_first:
+                global_first = first
+            if global_last is None or last > global_last:
+                global_last = last
+            cumulative_index += summary["count"]
+
+        summary_data = {
+            "total_count": cumulative_index,
+            "first_timestamp_ns": global_first,
+            "last_timestamp_ns": global_last,
+            "mcap_ranges": mcap_ranges,
+        }
+
+        output_dir = self.output_dir / rosbag_context.get_relative_path()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = output_dir / "summary.json"
+
+        with open(summary_path, 'w') as f:
+            json.dump(summary_data, f, indent=2)
+
+        self.logger.success(f"Wrote timestamp summary to {summary_path}")
 

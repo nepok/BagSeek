@@ -373,8 +373,10 @@ def main():
 
         # Check completion at rosbag level for each processor type
         topics_complete = topics_extraction_processor.completion_tracker.is_rosbag_completed(rosbag_name)
-        timestamp_complete = is_rosbag_complete_for_mcap_processor(
-            timestamp_alignment_processor, rosbag_name, mcap_names
+        summary_path = config.lookup_tables_dir / relative_path / "summary.json"
+        timestamp_complete = (
+            is_rosbag_complete_for_mcap_processor(timestamp_alignment_processor, rosbag_name, mcap_names)
+            and summary_path.exists()
         )
         positional_complete = positional_lookup_processor.completion_tracker.is_rosbag_completed(rosbag_name)
         previews_complete = image_topic_previews_processor.completion_tracker.is_rosbag_completed(rosbag_name)
@@ -590,6 +592,10 @@ def main():
                     elif isinstance(processor, HybridProcessor):
                         if hasattr(processor, 'process_mcap'):
                             processor.process_mcap(mcap_context)
+
+        # Write timestamp summary.json (if timestamps were processed or summary is missing)
+        if rosbag_needs_timestamps or not summary_path.exists():
+            timestamp_alignment_processor.finalize_rosbag(rosbag_context)
 
         # Call process_rosbag_after_mcaps only for active hybrid processors
         if active_hybrid_processors:
