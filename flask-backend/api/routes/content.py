@@ -26,27 +26,25 @@ def _is_safe_path(path: str) -> bool:
 
 @content_bp.route('/api/set-reference-timestamp', methods=['POST'])
 def set_reference_timestamp():
-    """Set the current reference timestamp and retrieve its aligned mappings."""
+    """Set the current reference timestamp by index and retrieve its aligned mappings."""
     try:
         data = request.get_json()
-        referenceTimestamp = data.get('referenceTimestamp')
-        
-        if not referenceTimestamp:
-            return jsonify({"error": "Missing referenceTimestamp"}), 400
+        index = data.get('index')
 
+        if index is None:
+            return jsonify({"error": "Missing index"}), 400
+
+        index = int(index)
         aligned_data = get_aligned_data()
-        
-        # Try both string and int comparison
-        row_str = aligned_data[aligned_data["Reference Timestamp"] == str(referenceTimestamp)]
-        row_int = aligned_data[aligned_data["Reference Timestamp"] == int(referenceTimestamp)] if isinstance(referenceTimestamp, (int, str)) and str(referenceTimestamp).isdigit() else None
-        
-        row = row_str if not row_str.empty else (row_int if row_int is not None and not row_int.empty else row_str)
-        
-        if row.empty:
-            return jsonify({"error": "Reference timestamp not found"}), 404
 
-        state.set_reference_timestamp(referenceTimestamp)
-        mapped_timestamps_dict = row.iloc[0].to_dict()
+        if index < 0 or index >= len(aligned_data):
+            return jsonify({"error": "Index out of range"}), 404
+
+        row_series = aligned_data.iloc[index]
+        reference_timestamp = row_series['Reference Timestamp']
+
+        state.set_reference_timestamp(reference_timestamp)
+        mapped_timestamps_dict = row_series.to_dict()
         # Extract mcap_identifier from the row (exclude it from mapped_timestamps)
         mcap_identifier = mapped_timestamps_dict.pop('_mcap_id', None)
         state.set_mapped_timestamps(mapped_timestamps_dict)
@@ -65,7 +63,12 @@ def set_reference_timestamp():
                     cleaned_mapped_timestamps[k] = v
             else:
                 cleaned_mapped_timestamps[k] = v
-        return jsonify({"mappedTimestamps": cleaned_mapped_timestamps, "mcapIdentifier": mcap_identifier, "message": "Reference timestamp updated"}), 200
+        return jsonify({
+            "referenceTimestamp": str(reference_timestamp),
+            "mappedTimestamps": cleaned_mapped_timestamps,
+            "mcapIdentifier": mcap_identifier,
+            "message": "Reference timestamp updated",
+        }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -23,7 +23,7 @@ _ALIGNED_DATA: pd.DataFrame | None = None
 
 
 def get_aligned_data() -> pd.DataFrame | None:
-    """Get or initialize ALIGNED_DATA (thread-safe)."""
+    """Get or initialize ALIGNED_DATA (thread-safe). Triggers lazy load if needed."""
     global _ALIGNED_DATA
     with _aligned_data_lock:
         if _ALIGNED_DATA is None and _SELECTED_ROSBAG is not None:
@@ -31,6 +31,12 @@ def get_aligned_data() -> pd.DataFrame | None:
             from .utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
             rosbag_name = extract_rosbag_name_from_path(str(_SELECTED_ROSBAG))
             _ALIGNED_DATA = load_lookup_tables_for_rosbag(rosbag_name)
+        return _ALIGNED_DATA
+
+
+def get_aligned_data_if_loaded() -> pd.DataFrame | None:
+    """Return cached ALIGNED_DATA without triggering lazy load."""
+    with _aligned_data_lock:
         return _ALIGNED_DATA
 
 

@@ -9,7 +9,7 @@ from mcap.reader import SeekingReader
 from mcap.writer import Writer, CompressionType, IndexType
 from mcap_ros2.decoder import DecoderFactory
 from ..config import ROSBAGS, EXPORT
-from ..state import get_selected_rosbag, EXPORT_PROGRESS
+from ..state import get_selected_rosbag, get_aligned_data, EXPORT_PROGRESS
 
 export_bp = Blueprint('export', __name__)
 
@@ -27,13 +27,13 @@ def get_export_status():
 def export_rosbag():
     """
     Export MCAP files from a rosbag based on MCAP ID range and time filtering.
-    
+
     Request body:
     {
         "new_rosbag_name": str,
         "topics": List[str],
-        "start_timestamp": int (nanoseconds),
-        "end_timestamp": int (nanoseconds),
+        "start_index": int (index into aligned data),
+        "end_index": int (index into aligned data),
         "start_mcap_id": int,
         "end_mcap_id": int
     }
@@ -42,20 +42,20 @@ def export_rosbag():
     EXPORT_PROGRESS["status"] = "idle"
     EXPORT_PROGRESS["progress"] = -1
     EXPORT_PROGRESS["message"] = "Waiting for export..."
-    
+
     try:
         data = request.json
         if not data:
             return jsonify({"error": "No data provided"}), 400
-        
+
         # Extract parameters from request
         new_rosbag_name = data.get("new_rosbag_name")
         topics = data.get("topics", [])
-        start_timestamp_raw = data.get("start_timestamp")
-        end_timestamp_raw = data.get("end_timestamp")
+        start_index_raw = data.get("start_index")
+        end_index_raw = data.get("end_index")
         start_mcap_id_raw = data.get("start_mcap_id")
         end_mcap_id_raw = data.get("end_mcap_id")
-        
+
         # Validate required parameters
         if not new_rosbag_name:
             EXPORT_PROGRESS["status"] = "error"
@@ -70,21 +70,21 @@ def export_rosbag():
             EXPORT_PROGRESS["message"] = "Invalid rosbag name format. Only alphanumeric characters, underscores, and hyphens are allowed."
             return jsonify({"error": "Invalid rosbag name format. Only alphanumeric characters, underscores, and hyphens are allowed."}), 400
 
-        if start_timestamp_raw is None or end_timestamp_raw is None:
+        if start_index_raw is None or end_index_raw is None:
             EXPORT_PROGRESS["status"] = "error"
             EXPORT_PROGRESS["progress"] = -1
-            EXPORT_PROGRESS["message"] = "start_timestamp and end_timestamp are required"
-            return jsonify({"error": "start_timestamp and end_timestamp are required"}), 400
+            EXPORT_PROGRESS["message"] = "start_index and end_index are required"
+            return jsonify({"error": "start_index and end_index are required"}), 400
         if start_mcap_id_raw is None or end_mcap_id_raw is None:
             EXPORT_PROGRESS["status"] = "error"
             EXPORT_PROGRESS["progress"] = -1
             EXPORT_PROGRESS["message"] = "start_mcap_id and end_mcap_id are required"
             return jsonify({"error": "start_mcap_id and end_mcap_id are required"}), 400
-        
+
         # Convert to integers (after validation to allow 0 values)
         try:
-            start_timestamp = int(start_timestamp_raw)
-            end_timestamp = int(end_timestamp_raw)
+            start_index = int(start_index_raw)
+            end_index = int(end_index_raw)
             start_mcap_id = int(start_mcap_id_raw)
             end_mcap_id = int(end_mcap_id_raw)
         except (ValueError, TypeError) as e:
@@ -92,6 +92,23 @@ def export_rosbag():
             EXPORT_PROGRESS["progress"] = -1
             EXPORT_PROGRESS["message"] = f"Invalid number format: {e}"
             return jsonify({"error": f"Invalid number format: {e}"}), 400
+
+        # Resolve indices to nanosecond timestamps from aligned data
+        aligned_data = get_aligned_data()
+        if aligned_data is None or aligned_data.empty:
+            EXPORT_PROGRESS["status"] = "error"
+            EXPORT_PROGRESS["progress"] = -1
+            EXPORT_PROGRESS["message"] = "No aligned data available"
+            return jsonify({"error": "No aligned data available"}), 400
+
+        if start_index < 0 or start_index >= len(aligned_data) or end_index < 0 or end_index >= len(aligned_data):
+            EXPORT_PROGRESS["status"] = "error"
+            EXPORT_PROGRESS["progress"] = -1
+            EXPORT_PROGRESS["message"] = "Index out of range"
+            return jsonify({"error": "Index out of range"}), 400
+
+        start_timestamp = int(aligned_data.iloc[start_index]['Reference Timestamp'])
+        end_timestamp = int(aligned_data.iloc[end_index]['Reference Timestamp'])
 
         # Check if a rosbag is selected
         selected_rosbag = get_selected_rosbag()
