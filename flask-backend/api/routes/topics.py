@@ -4,8 +4,11 @@ import re
 import math
 import json
 import logging
+from pathlib import Path
 from flask import Blueprint, jsonify, request
-from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS
+import pandas as pd
+import pyarrow.parquet as pq
+from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS, LOOKUP_TABLES
 from ..state import get_selected_rosbag, get_aligned_data
 from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
 
@@ -102,180 +105,125 @@ def get_available_image_topics():
         return jsonify({'availableTopics': {}}), 200
 
 
-@topics_bp.route('/api/get-available-topic-types', methods=['GET'])
-def get_available_rosbag_topic_types():
-    """DEPRECATED: Use /api/get-available-topics which now returns unified { topics: { name: type } }
+@topics_bp.route('/api/get-timestamp-summary', methods=['GET'])
+def get_timestamp_summary():
+    """Combined endpoint: timestamp count, bounds, and MCAP boundary ranges.
 
-    Kept for backwards compatibility. Returns same data in old format.
+    Fast path: reads precomputed summary.json (written during preprocessing).
+    Fallback: reads pyarrow parquet metadata (file footers only, no row data).
     """
+    empty_response = {
+        'count': 0,
+        'firstTimestampNs': None,
+        'lastTimestampNs': None,
+        'mcapRanges': [],
+    }
     try:
-        selected_rosbag = get_selected_rosbag()
-        if selected_rosbag is None:
-            return jsonify({'availableTopicTypes': {}}), 200
+        relative_rosbag_path = request.args.get('rosbag')
 
-        rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
-        topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
-
-        if not os.path.exists(topics_json_path):
-            return jsonify({'availableTopicTypes': {}}), 200
-
-        with open(topics_json_path, 'r') as f:
-            topics_data = json.load(f)
-
-        # Topics is now a dict mapping topic names to types
-        # Return the topics dict directly as it contains the mapping
-        topics_dict = topics_data.get("topics", {})
-        if isinstance(topics_dict, dict):
-            availableTopicTypes = topics_dict
+        if relative_rosbag_path:
+            full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
+            rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
         else:
-            # Fallback for old format where types was in a separate "types" field
-            availableTopicTypes = topics_data.get("types", {})
+            selected_rosbag = get_selected_rosbag()
+            if selected_rosbag is None:
+                return jsonify(empty_response), 200
+            rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
 
-        return jsonify({'availableTopicTypes': availableTopicTypes}), 200
+        lookup_dir = Path(LOOKUP_TABLES) / rosbag_name
 
-    except Exception as e:
-        logging.error(f"Error reading topics JSON: {e}")
-        return jsonify({'availableTopicTypes': {}}), 200
+        # Fast path: precomputed summary.json
+        summary_path = lookup_dir / 'summary.json'
+        if summary_path.exists():
+            with open(summary_path, 'r') as f:
+                summary = json.load(f)
 
+            mcap_ranges = [
+                {
+                    'startIndex': r['start_index'],
+                    'mcapIdentifier': r['mcap_id'],
+                    'count': r.get('count', 0),
+                }
+                for r in summary.get('mcap_ranges', [])
+            ]
 
-@topics_bp.route('/api/get-available-timestamps', methods=['GET'])
-def get_available_timestamps():
-    aligned_data = get_aligned_data()
-    availableTimestamps = aligned_data['Reference Timestamp'].astype(str).tolist()
-    return jsonify({'availableTimestamps': availableTimestamps}), 200
+            first_ts = summary.get('first_timestamp_ns')
+            last_ts = summary.get('last_timestamp_ns')
+            return jsonify({
+                'count': summary.get('total_count', 0),
+                'firstTimestampNs': str(first_ts) if first_ts is not None else None,
+                'lastTimestampNs': str(last_ts) if last_ts is not None else None,
+                'mcapRanges': mcap_ranges,
+            }), 200
 
+        # Fallback: read pyarrow parquet metadata (file footers only)
+        if not lookup_dir.exists():
+            return jsonify(empty_response), 200
 
-@topics_bp.route('/api/get-timestamp-lengths', methods=['GET'])
-def get_timestamp_lengths():
-    rosbags = request.args.getlist("rosbags")
-    topics = request.args.getlist("topics")  # Optional: topics to get counts for
-    timestampLengths = {}
+        parquet_files = sorted(
+            lookup_dir.glob('*.parquet'),
+            key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf'),
+        )
+        if not parquet_files:
+            return jsonify(empty_response), 200
 
-    for rosbag in rosbags:
-        rosbag_name = extract_rosbag_name_from_path(rosbag)
-        try:
-            df = load_lookup_tables_for_rosbag(rosbag_name)
-            if df.empty:
-                if topics:
-                    timestampLengths[rosbag] = {topic: 0 for topic in topics}
-                else:
-                    timestampLengths[rosbag] = 0
-            else:
-                if topics:
-                    # Return counts per topic
-                    topic_counts = {}
-                    for topic in topics:
-                        if topic in df.columns:
-                            count = df[topic].notnull().sum()
-                            topic_counts[topic] = int(count)
-                        else:
-                            topic_counts[topic] = 0
-                    timestampLengths[rosbag] = topic_counts
-                else:
-                    # Backward compatibility: return total count if no topics specified
-                    count = df['Reference Timestamp'].notnull().sum() if 'Reference Timestamp' in df.columns else len(df)
-                    timestampLengths[rosbag] = int(count)
-        except Exception as e:
-            if topics:
-                timestampLengths[rosbag] = {topic: f"Error: {str(e)}" for topic in topics}
-            else:
-                timestampLengths[rosbag] = f"Error: {str(e)}"
+        total_count = 0
+        global_first = None
+        global_last = None
+        mcap_ranges = []
 
-    return jsonify({'timestampLengths': timestampLengths})
+        for pf_path in parquet_files:
+            try:
+                pf = pq.ParquetFile(pf_path)
+                metadata = pf.metadata
+                n = metadata.num_rows
+                if n == 0:
+                    continue
 
+                mcap_id = pf_path.stem
 
-@topics_bp.route('/api/get-timestamp-density', methods=['GET'])
-def get_timestamp_density():
-    aligned_data = get_aligned_data()
-    density_array = aligned_data.drop(columns=["Reference Timestamp"]).notnull().sum(axis=1).tolist()
-    return jsonify({'timestampDensity': density_array})
+                # Try to get min/max from row group statistics
+                schema = pf.schema_arrow
+                col_idx = schema.get_field_index('Reference Timestamp')
+                file_min = None
+                file_max = None
+                for rg_idx in range(metadata.num_row_groups):
+                    col_stats = metadata.row_group(rg_idx).column(col_idx).statistics
+                    if col_stats is not None and col_stats.has_min_max:
+                        if file_min is None or col_stats.min < file_min:
+                            file_min = col_stats.min
+                        if file_max is None or col_stats.max > file_max:
+                            file_max = col_stats.max
 
+                # Fallback: read the column
+                if file_min is None or file_max is None:
+                    df = pd.read_parquet(pf_path, columns=['Reference Timestamp'])
+                    file_min = int(df['Reference Timestamp'].min())
+                    file_max = int(df['Reference Timestamp'].max())
 
-@topics_bp.route('/api/get-topic-mcap-mapping', methods=['GET'])
-def get_topic_mcap_mapping():
-    """Get mcap_identifier ranges for Reference Timestamp indices.
-    
-    Returns ranges for ALL topics in the rosbag (mcap_id ranges are the same for all topics).
-    Only requires relative_rosbag_path parameter.
-    
-    Returns contiguous ranges where each range has the same mcap_identifier.
-    Each range contains only startIndex and mcap_identifier (endIndex can be derived from next range's startIndex - 1).
-    
-    Optimized for speed:
-    - Cached dataframe loading
-    - Minimal data returned (no topicTimestamp, no endIndex)
-    - Efficient single-pass iteration
-    - One call returns ranges for all topics
-    """
-    try:
-        relative_rosbag_path = request.args.get('relative_rosbag_path')
-        
-        if not relative_rosbag_path:
-            return jsonify({'error': 'Missing required parameter: relative_rosbag_path'}), 400
-        
-        # Convert relative path to full path, then extract rosbag name
-        full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
-        rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
-        
-        # Load lookup tables for this rosbag (cached)
-        df = load_lookup_tables_for_rosbag(rosbag_name, use_cache=True)
-        if df.empty:
-            return jsonify({'error': 'No lookup table data found'}), 404
-        
-        # Sort by Reference Timestamp to ensure consistent ordering (only if not already sorted)
-        if 'Reference Timestamp' in df.columns:
-            # Check if already sorted by checking if first < last
-            if len(df) > 1:
-                first_ts = df.iloc[0]['Reference Timestamp']
-                last_ts = df.iloc[-1]['Reference Timestamp']
-                try:
-                    if float(first_ts) > float(last_ts):
-                        df = df.sort_values('Reference Timestamp').reset_index(drop=True)
-                except (ValueError, TypeError):
-                    df = df.sort_values('Reference Timestamp').reset_index(drop=True)
-        
-        total = len(df)  # Number of Reference Timestamps (rows)
-        
-        if total == 0:
-            return jsonify({'ranges': [], 'total': 0}), 200
-        
-        # Build ranges: group contiguous indices with the same mcap_identifier
-        # The mcap_id ranges are the same for all topics (based on _mcap_id column)
-        ranges = []
-        current_range_start = 0
-        current_mcap_id = df.iloc[0].get('_mcap_id')
-        
-        # Single pass: iterate through dataframe and detect mcap_id changes
-        for idx in range(1, total):
-            mcap_id = df.iloc[idx].get('_mcap_id')
-            
-            # If mcap_id changed, close current range and start new one
-            if mcap_id != current_mcap_id:
-                ranges.append({
-                    'startIndex': current_range_start,
-                    'mcap_identifier': current_mcap_id
+                mcap_ranges.append({
+                    'startIndex': total_count,
+                    'mcapIdentifier': mcap_id,
+                    'count': n,
                 })
-                current_range_start = idx
-                current_mcap_id = mcap_id
-        
-        # Close the last range
-        ranges.append({
-            'startIndex': current_range_start,
-            'mcap_identifier': current_mcap_id
-        })
-        
-        # Sort ranges by startIndex ONLY - this is critical for correct lookup
-        # The frontend iterates through ranges sequentially to find which range contains a given index
-        # If sorted by mcap_identifier, the lookup will fail because ranges won't be in index order
-        ranges.sort(key=lambda r: r['startIndex'])
-        
+                if global_first is None or file_min < global_first:
+                    global_first = file_min
+                if global_last is None or file_max > global_last:
+                    global_last = file_max
+                total_count += n
+            except Exception as e:
+                logging.warning(f"Failed to read parquet metadata from {pf_path}: {e}")
+                continue
+
         return jsonify({
-            'ranges': ranges,
-            'total': total
+            'count': total_count,
+            'firstTimestampNs': str(global_first) if global_first is not None else None,
+            'lastTimestampNs': str(global_last) if global_last is not None else None,
+            'mcapRanges': mcap_ranges,
         }), 200
-        
+
     except Exception as e:
-        logging.error(f"Error in get_topic_mcap_mapping: {e}", exc_info=True)
+        logging.error(f"Error in get_timestamp_summary: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
