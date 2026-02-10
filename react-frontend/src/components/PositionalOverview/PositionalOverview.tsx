@@ -3131,25 +3131,35 @@ const PositionalOverview: React.FC = () => {
                   // Get rosbags that overlap with closed polygons (using offset if applicable)
                   const closedPolygons = polygons.filter((p) => p.isClosed);
                   const overlappingRosbags: string[] = [];
-                  
-                  // Re-check overlaps with current offset distance
+                  const mcapFilterMap: Record<string, string[]> = {};
+
+                  // Re-check overlaps and collect per-rosbag MCAP IDs
                   for (const rosbag of rosbags) {
                     const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons, offsetDistance);
                     if (overlaps) {
                       overlappingRosbags.push(rosbag.name);
+                      const mcapIds = await getMcapsInsidePolygons(rosbag.name, closedPolygons, offsetDistance);
+                      if (mcapIds.size > 0) {
+                        mcapFilterMap[rosbag.name] = Array.from(mcapIds);
+                      }
                     }
                   }
-                  
-                  // Store filtered rosbags and polygons in sessionStorage
+
+                  // Store filtered rosbags, MCAP IDs, and polygons in sessionStorage
                   try {
                     sessionStorage.setItem('__BagSeekPositionalFilter', JSON.stringify(overlappingRosbags));
                     sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
+                    if (Object.keys(mcapFilterMap).length > 0) {
+                      sessionStorage.setItem('__BagSeekPositionalMcapFilter', JSON.stringify(mcapFilterMap));
+                    } else {
+                      sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+                    }
                     // Dispatch custom event for same-tab updates
                     window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
                   } catch (e) {
                     console.error('Failed to store positional filter:', e);
                   }
-                  
+
                   // Navigate to GlobalSearch
                   navigate('/search');
                 }}
@@ -3166,10 +3176,11 @@ const PositionalOverview: React.FC = () => {
                     setActivePolygonId(null);
                     setSelectedPolygonId(null);
                     setSelectedPolygonFile(''); // Reset the selected file so it can be reselected
-                    // Clear positional filter and polygons from sessionStorage
+                    // Clear positional filter, MCAP filter, and polygons from sessionStorage
                     try {
                       sessionStorage.removeItem('__BagSeekPositionalFilter');
                       sessionStorage.removeItem('__BagSeekPositionalPolygons');
+                      sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
                     } catch (e) {
                       console.error('Failed to clear positional filter:', e);
                     }

@@ -1,4 +1,5 @@
 """Search routes."""
+import json
 import uuid
 import logging
 import time
@@ -92,12 +93,15 @@ def search():
     if accuracy is None:                   return jsonify({'error': 'No accuracy provided'}), 400
 
     # ---- Parse inputs
+    mcap_filter_raw = request.args.get('mcapFilter', default=None, type=str)
     try:
         models_list = [m.strip() for m in models.split(",") if m.strip()]  # Filter out empty model names
         # Use rosbag paths directly - frontend sends relative paths that match preprocessing output
         rosbags_list = [r.strip() for r in rosbags.split(",") if r.strip()]
         time_start, time_end = map(int, timeRange.split(","))
         k_subsample = max(1, int(accuracy))
+        # Parse optional MCAP filter: { "rosbag_path": [[startId, endId], ...], ... }
+        mcap_filter = json.loads(mcap_filter_raw) if mcap_filter_raw else None
     except Exception as e:
         logging.exception("[C] Failed parsing inputs")
         return jsonify({'error': f'Invalid inputs: {e}'}), 400
@@ -243,6 +247,20 @@ def search():
                 if mf.empty:
                     logging.debug("[SEARCH] SKIP: No rows in time window for %s/%s", model_name, rosbag_name)
                     continue
+
+                # ---- Filter by MCAP ranges (optional)
+                if mcap_filter and rosbag_name in mcap_filter and "mcap_identifier" in mf.columns:
+                    allowed_ranges = mcap_filter[rosbag_name]
+                    pre_mcap_count = len(mf)
+                    mcap_ids = mf["mcap_identifier"].astype(int)
+                    mask = pd.Series(False, index=mf.index)
+                    for range_start, range_end in allowed_ranges:
+                        mask |= (mcap_ids >= int(range_start)) & (mcap_ids <= int(range_end))
+                    mf = mf.loc[mask]
+                    logging.info("[SEARCH-DEBUG] MCAP filter: %d -> %d rows", pre_mcap_count, len(mf))
+                    if mf.empty:
+                        logging.debug("[SEARCH] SKIP: No rows after MCAP filter for %s/%s", model_name, rosbag_name)
+                        continue
 
                 # ---- Subsample per topic
                 parts, per_topic_counts_before, per_topic_counts_after = [], {}, {}

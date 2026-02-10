@@ -7,6 +7,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
 import RoomIcon from '@mui/icons-material/Room';
 import { extractRosbagName } from '../../utils/rosbag';
+import McapRangeFilter, { McapFilterState } from '../McapRangeFilter/McapRangeFilter';
 
 // Hover-still helper: true after delay ms with no meaningful cursor movement
 function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
@@ -314,6 +315,9 @@ const GlobalSearch: React.FC = () => {
     const [confirmedModels, setConfirmedModels] = useState<string[]>([]);
     const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>([]);
     const [timeRange, setTimeRange] = useState<number[]>([0, 1439]);
+    const [mcapFilters, setMcapFilters] = useState<McapFilterState>({});
+    // Pending MCAP IDs from positional filter (map view), keyed by rosbag name
+    const [pendingMcapIds, setPendingMcapIds] = useState<Record<string, string[]> | null>(null);
     const [sampling, setSampling] = useState<number>(10); // Default to 1, which is 10^0
     const [enhancePrompt, setEnhancePrompt] = useState<boolean>(true);
     const [enhancedPrompt, setEnhancedPrompt] = useState<string>('');
@@ -441,6 +445,20 @@ const GlobalSearch: React.FC = () => {
               }
             } else {
               setPositionallyFilteredRosbags(null);
+            }
+          } catch {}
+          // Also load per-rosbag MCAP IDs from positional filter
+          try {
+            const mcapFilterRaw = sessionStorage.getItem('__BagSeekPositionalMcapFilter');
+            if (mcapFilterRaw) {
+              const parsed = JSON.parse(mcapFilterRaw);
+              if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                setPendingMcapIds(parsed);
+              } else {
+                setPendingMcapIds(null);
+              }
+            } else {
+              setPendingMcapIds(null);
             }
           } catch {}
         };
@@ -602,13 +620,29 @@ const GlobalSearch: React.FC = () => {
                 const rosbagParams = rosbags.join(',');
                 const timeRangeParam = timeRange.join(',');
                 const accuracyParam = sampling.toString();
-                const queryParams = new URLSearchParams({
+
+                // Build MCAP filter: only include rosbags with active windows
+                const mcapFilterParam: Record<string, [number, number][]> = {};
+                for (const [rosbag, filter] of Object.entries(mcapFilters)) {
+                  if (filter.windows.length > 0 && filter.ranges.length > 0) {
+                    mcapFilterParam[rosbag] = filter.windows.map(([startIdx, endIdx]) => [
+                      parseInt(filter.ranges[startIdx]?.mcapIdentifier ?? '0', 10),
+                      parseInt(filter.ranges[endIdx]?.mcapIdentifier ?? '0', 10),
+                    ]);
+                  }
+                }
+
+                const params: Record<string, string> = {
                   query: queryToUse,
                   models: modelParams,
                   rosbags: rosbagParams,
                   timeRange: timeRangeParam,
-                  accuracy: accuracyParam
-                }).toString();
+                  accuracy: accuracyParam,
+                };
+                if (Object.keys(mcapFilterParam).length > 0) {
+                  params.mcapFilter = JSON.stringify(mcapFilterParam);
+                }
+                const queryParams = new URLSearchParams(params).toString();
                 const response = await fetch(`/api/search?${queryParams}`, { method: 'GET' });
                 const data = await response.json();
                 setSearchResults(data.results || []);
@@ -730,8 +764,10 @@ const GlobalSearch: React.FC = () => {
                         if (e.ctrlKey || e.metaKey) {
                             // Clear filter on Ctrl/Cmd+Click
                             setPositionallyFilteredRosbags(null);
+                            setPendingMcapIds(null);
                             try {
                                 sessionStorage.removeItem('__BagSeekPositionalFilter');
+                                sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
                             } catch {}
                         } else {
                             navigate('/positional-overview');
@@ -994,6 +1030,16 @@ const GlobalSearch: React.FC = () => {
                     </Select>
                 </FormControl>
             </Box>
+            <McapRangeFilter
+              selectedRosbags={rosbags}
+              mcapFilters={mcapFilters}
+              onMcapFiltersChange={setMcapFilters}
+              pendingMcapIds={pendingMcapIds}
+              onPendingMcapIdsConsumed={() => {
+                setPendingMcapIds(null);
+                sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+              }}
+            />
             <Box ref={searchIconRef}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <TextField

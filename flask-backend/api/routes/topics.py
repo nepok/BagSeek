@@ -138,14 +138,48 @@ def get_timestamp_summary():
             with open(summary_path, 'r') as f:
                 summary = json.load(f)
 
-            mcap_ranges = [
-                {
+            mcap_ranges = []
+            needs_ts_backfill = False
+            for r in summary.get('mcap_ranges', []):
+                entry = {
                     'startIndex': r['start_index'],
                     'mcapIdentifier': r['mcap_id'],
                     'count': r.get('count', 0),
                 }
-                for r in summary.get('mcap_ranges', [])
-            ]
+                if 'first_timestamp_ns' in r:
+                    entry['firstTimestampNs'] = str(r['first_timestamp_ns'])
+                if 'last_timestamp_ns' in r:
+                    entry['lastTimestampNs'] = str(r['last_timestamp_ns'])
+                else:
+                    needs_ts_backfill = True
+                mcap_ranges.append(entry)
+
+            # Backfill per-MCAP timestamps from parquet metadata if summary.json is old
+            if needs_ts_backfill:
+                for entry in mcap_ranges:
+                    if 'firstTimestampNs' in entry:
+                        continue
+                    pf_path = lookup_dir / f"{entry['mcapIdentifier']}.parquet"
+                    if not pf_path.exists():
+                        continue
+                    try:
+                        pf = pq.ParquetFile(pf_path)
+                        schema = pf.schema_arrow
+                        col_idx = schema.get_field_index('Reference Timestamp')
+                        f_min, f_max = None, None
+                        for rg_idx in range(pf.metadata.num_row_groups):
+                            stats = pf.metadata.row_group(rg_idx).column(col_idx).statistics
+                            if stats and stats.has_min_max:
+                                if f_min is None or stats.min < f_min:
+                                    f_min = stats.min
+                                if f_max is None or stats.max > f_max:
+                                    f_max = stats.max
+                        if f_min is not None:
+                            entry['firstTimestampNs'] = str(int(f_min))
+                        if f_max is not None:
+                            entry['lastTimestampNs'] = str(int(f_max))
+                    except Exception:
+                        pass
 
             first_ts = summary.get('first_timestamp_ns')
             last_ts = summary.get('last_timestamp_ns')
@@ -205,6 +239,8 @@ def get_timestamp_summary():
                     'startIndex': total_count,
                     'mcapIdentifier': mcap_id,
                     'count': n,
+                    'firstTimestampNs': str(file_min) if file_min is not None else None,
+                    'lastTimestampNs': str(file_max) if file_max is not None else None,
                 })
                 if global_first is None or file_min < global_first:
                     global_first = file_min

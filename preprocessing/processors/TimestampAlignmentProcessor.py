@@ -334,6 +334,8 @@ class TimestampAlignmentProcessor(McapProcessor):
                 "mcap_id": summary["mcap_id"],
                 "start_index": cumulative_index,
                 "count": summary["count"],
+                "first_timestamp_ns": summary["first_timestamp_ns"],
+                "last_timestamp_ns": summary["last_timestamp_ns"],
             })
             first = summary["first_timestamp_ns"]
             last = summary["last_timestamp_ns"]
