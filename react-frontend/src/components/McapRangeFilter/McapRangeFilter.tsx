@@ -69,16 +69,105 @@ function mcapIdsToWindows(
   return windows;
 }
 
+/** Convert a nanosecond timestamp string to epoch milliseconds, or null on failure. */
+function nsToMs(nsStr: string | undefined): number | null {
+  if (!nsStr) return null;
+  try {
+    return Number(BigInt(nsStr) / BigInt(1_000_000));
+  } catch {
+    return null;
+  }
+}
+
 /** Format a nanosecond timestamp string to HH:MM time-of-day. */
 function formatNsToTime(nsStr: string | undefined): string {
-  if (!nsStr) return '??:??';
-  try {
-    const ms = Number(BigInt(nsStr) / BigInt(1_000_000));
-    const d = new Date(ms);
-    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '??:??';
+  const ms = nsToMs(nsStr);
+  if (ms === null) return '??:??';
+  const d = new Date(ms);
+  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Build slider marks: tick at every minute, label (MCAP ID + time) every 5min (10min if >5h). */
+function buildMarks(
+  ranges: McapRangeMeta[]
+): { value: number; label?: React.ReactNode }[] {
+  if (ranges.length < 2) return [];
+
+  const maxIdx = ranges.length - 1;
+  const firstMs = nsToMs(ranges[0]?.firstTimestampNs);
+  const lastMs = nsToMs(ranges[maxIdx]?.lastTimestampNs);
+  if (firstMs === null || lastMs === null) return [];
+
+  const durationH = (lastMs - firstMs) / 3_600_000;
+  const labelIntervalMin = durationH > 5 ? 10 : 5;
+  const ONE_MIN_MS = 60_000;
+
+  const msValues = ranges.map((r) => nsToMs(r.firstTimestampNs));
+  const startMinute = Math.ceil(firstMs / ONE_MIN_MS) * ONE_MIN_MS;
+
+  const marks: { value: number; label?: React.ReactNode }[] = [];
+  const usedIndices = new Set<number>();
+  const labelledIndices = new Set<number>();
+  let searchFrom = 0;
+
+  const makeLabel = (idx: number, useLastTs?: boolean) => {
+    const r = ranges[idx];
+    if (!r) return undefined;
+    const time = useLastTs
+      ? formatNsToTime(r.lastTimestampNs)
+      : formatNsToTime(r.firstTimestampNs);
+    return (
+      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.2 }}>
+        <span>{r.mcapIdentifier}</span>
+        <span style={{ color: 'rgba(255,255,255,0.35)' }}>{time}</span>
+      </span>
+    );
+  };
+
+  for (let t = startMinute; t <= lastMs; t += ONE_MIN_MS) {
+    let bestIdx = searchFrom;
+    let bestDist = Infinity;
+    for (let i = searchFrom; i < msValues.length; i++) {
+      const ms = msValues[i];
+      if (ms === null) continue;
+      const dist = Math.abs(ms - t);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+      if (ms > t + ONE_MIN_MS) break;
+    }
+
+    if (usedIndices.has(bestIdx)) continue;
+    usedIndices.add(bestIdx);
+    searchFrom = Math.max(0, bestIdx - 1);
+
+    const minuteOfDay = Math.round(t / ONE_MIN_MS);
+    const isLabelled = minuteOfDay % labelIntervalMin === 0;
+
+    if (isLabelled) {
+      labelledIndices.add(bestIdx);
+      marks.push({ value: bestIdx, label: makeLabel(bestIdx) });
+    } else {
+      marks.push({ value: bestIdx });
+    }
   }
+
+  // Always include first and last with labels
+  if (!usedIndices.has(0)) marks.unshift({ value: 0 });
+  if (!labelledIndices.has(0)) {
+    const existing = marks.find((m) => m.value === 0);
+    if (existing) existing.label = makeLabel(0);
+    else marks.unshift({ value: 0, label: makeLabel(0) });
+  }
+  if (!usedIndices.has(maxIdx)) marks.push({ value: maxIdx });
+  if (!labelledIndices.has(maxIdx)) {
+    const existing = marks.find((m) => m.value === maxIdx);
+    if (existing) existing.label = makeLabel(maxIdx, true);
+    else marks.push({ value: maxIdx, label: makeLabel(maxIdx, true) });
+  }
+
+  return marks;
 }
 
 const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
@@ -294,18 +383,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
               ranges[maxIdx]?.lastTimestampNs
             );
 
-            // Build slider marks at 0%, 25%, 50%, 75%, 100% positions
-            const markPositions = [0, 0.25, 0.5, 0.75, 1].map((frac) => {
-              const idx = Math.round(frac * maxIdx);
-              return {
-                value: idx,
-                label: formatNsToTime(ranges[idx]?.firstTimestampNs),
-              };
-            });
-            // Deduplicate marks at same position
-            const marks = markPositions.filter(
-              (m, i, arr) => arr.findIndex((x) => x.value === m.value) === i
-            );
+            const marks = buildMarks(ranges);
 
             return (
               <Box key={rosbag} sx={{ mt: 1 }}>
@@ -370,39 +448,6 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                       key={wIdx}
                       sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}
                     >
-                      {/* Start MCAP ID input */}
-                      <TextField
-                        size="small"
-                        type="number"
-                        value={startMcap?.mcapIdentifier ?? wStart}
-                        onChange={(e) => {
-                          const id = parseInt(e.target.value, 10);
-                          if (isNaN(id)) return;
-                          const idx = ranges.findIndex(
-                            (r) => parseInt(r.mcapIdentifier, 10) >= id
-                          );
-                          if (idx >= 0) {
-                            updateWindow(rosbag, wIdx, [
-                              Math.min(idx, wEnd),
-                              wEnd,
-                            ]);
-                          }
-                        }}
-                        slotProps={{
-                          input: {
-                            sx: {
-                              width: 64,
-                              '& input': {
-                                textAlign: 'center',
-                                py: 0.5,
-                                fontSize: '0.75rem',
-                              },
-                            },
-                          },
-                        }}
-                        title={`Start: MCAP ${startMcap?.mcapIdentifier} (${formatNsToTime(startMcap?.firstTimestampNs)})`}
-                      />
-
                       {/* Range slider */}
                       <Box sx={{ flexGrow: 1, px: 1 }}>
                         <Slider
@@ -423,47 +468,21 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                             return `MCAP ${r.mcapIdentifier} (${formatNsToTime(r.firstTimestampNs)})`;
                           }}
                           marks={marks}
-                          sx={{ py: 1 }}
+                          sx={{
+                            mb: 3,
+                            '& .MuiSlider-mark': {
+                              height: 4,
+                              width: 1.5,
+                              backgroundColor: 'rgba(255,255,255,0.2)',
+                            },
+                            '& .MuiSlider-markLabel': {
+                              fontSize: '0.55rem',
+                              color: 'rgba(255,255,255,0.5)',
+                              whiteSpace: 'nowrap',
+                            },
+                          }}
                         />
                       </Box>
-
-                      {/* End MCAP ID input */}
-                      <TextField
-                        size="small"
-                        type="number"
-                        value={endMcap?.mcapIdentifier ?? wEnd}
-                        onChange={(e) => {
-                          const id = parseInt(e.target.value, 10);
-                          if (isNaN(id)) return;
-                          // Find last range with mcapIdentifier <= id
-                          let idx = -1;
-                          for (let i = ranges.length - 1; i >= 0; i--) {
-                            if (parseInt(ranges[i].mcapIdentifier, 10) <= id) {
-                              idx = i;
-                              break;
-                            }
-                          }
-                          if (idx >= 0) {
-                            updateWindow(rosbag, wIdx, [
-                              wStart,
-                              Math.max(idx, wStart),
-                            ]);
-                          }
-                        }}
-                        slotProps={{
-                          input: {
-                            sx: {
-                              width: 64,
-                              '& input': {
-                                textAlign: 'center',
-                                py: 0.5,
-                                fontSize: '0.75rem',
-                              },
-                            },
-                          },
-                        }}
-                        title={`End: MCAP ${endMcap?.mcapIdentifier} (${formatNsToTime(endMcap?.lastTimestampNs)})`}
-                      />
 
                       {/* Remove button */}
                       <IconButton
