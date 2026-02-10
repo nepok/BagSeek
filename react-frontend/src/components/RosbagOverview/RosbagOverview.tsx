@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, Chip, Box, Divider, Collapse } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { sortTopics } from '../../utils/topics';
+import { extractRosbagName } from '../../utils/rosbag';
 
 interface RosbagOverviewProps {
     rosbags: string[];
@@ -86,22 +87,30 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
         setMcapMappings({});
     }, [rosbags, models]);
 
+    // Fetch timestamp count per rosbag via get-timestamp-summary (one call per rosbag)
     useEffect(() => {
+        if (rosbags.length === 0) return;
+
         const fetchTimestampLengths = async () => {
             try {
-                const response = await axios.get('/api/get-timestamp-lengths', {
-                    params: {
-                        rosbags: rosbags
-                    },
-                    paramsSerializer: params => {
-                        const searchParams = new URLSearchParams();
-                        params.rosbags.forEach((r: string) => searchParams.append('rosbags', r));
-                        return searchParams.toString();
-                    }
+                const results = await Promise.all(
+                    rosbags.map(async (rosbag) => {
+                        try {
+                            const response = await axios.get('/api/get-timestamp-summary', {
+                                params: { rosbag },
+                            });
+                            return { rosbag, count: response.data?.count ?? 0 };
+                        } catch (err) {
+                            console.error(`Failed to fetch timestamp summary for ${rosbag}:`, err);
+                            return { rosbag, count: 0 };
+                        }
+                    })
+                );
+                const lengths: { [rosbag: string]: number } = {};
+                results.forEach(({ rosbag, count }) => {
+                    lengths[rosbag] = count;
                 });
-
-                const data = response.data.timestampLengths || {};
-                setTimestampLengths(data);
+                setTimestampLengths(lengths);
             } catch (error) {
                 console.error('Failed to fetch timestamp lengths:', error);
             }
@@ -133,17 +142,22 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                 fetchedMappingsRef.current.add(rosbag);
                 
                 try {
-                    const response = await axios.get('/api/get-topic-mcap-mapping', {
+                    const response = await axios.get('/api/get-timestamp-summary', {
                         params: {
-                            relative_rosbag_path: rosbag
+                            rosbag: rosbag
                         }
                     });
                     
-                    if (response.data?.ranges) {
+                    if (response.data?.mcapRanges) {
+                        // Map mcapRanges to expected format: { startIndex, mcap_identifier }
+                        const ranges = response.data.mcapRanges.map((r: { startIndex: number; mcapIdentifier: string }) => ({
+                            startIndex: r.startIndex,
+                            mcap_identifier: r.mcapIdentifier,
+                        }));
                         // Get all topics for this rosbag from all models
                         const allTopics = new Set<string>();
                         for (const model of models) {
-                            const rosbagName = rosbag.split('/').pop() || rosbag;
+                            const rosbagName = extractRosbagName(rosbag);
                             const topicList = topics[model]?.[rosbagName] || [];
                             topicList.forEach(topic => allTopics.add(topic));
                         }
@@ -151,7 +165,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                         // Store the same ranges for all topics (they're identical)
                         Array.from(allTopics).forEach(topic => {
                             const key = `${rosbag}|${topic}`;
-                            newMappings[key] = response.data.ranges;
+                            newMappings[key] = ranges;
                         });
                     } else {
                         // If fetch failed, remove from ref so it can be retried
@@ -202,7 +216,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pb: 2 }}>
             {models.map((model) => {
                 const modelRosbags = rosbags.filter(rosbag => {
-                    const rosbagName = rosbag.split('/').pop() || rosbag;
+                    const rosbagName = extractRosbagName(rosbag);
                     return topics[model]?.[rosbagName] !== undefined;
                 });
                 
@@ -211,7 +225,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                 
                 // Check if all rosbags are expanded for this model (for button icon state)
                 const allRosbagsExpanded = modelRosbags.length === 0 || modelRosbags.every(rosbag => {
-                    const rosbagName = rosbag.split('/').pop() || rosbag;
+                    const rosbagName = extractRosbagName(rosbag);
                     const rosbagKey = `${model}|${rosbagName}`;
                     // Default to expanded (true) if not explicitly set
                     return expandedRosbags[rosbagKey] !== false;
@@ -291,7 +305,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                             <Collapse in={isModelExpanded || modelRosbags.length === 0}>
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                     {modelRosbags.map((rosbag) => {
-                                        const rosbagName = rosbag.split('/').pop() || rosbag;
+                                        const rosbagName = extractRosbagName(rosbag);
                                         const rosbagTopics = topics[model]?.[rosbagName] || [];
                                         const rosbagKey = `${model}|${rosbagName}`;
                                         // Default to expanded (true) if not explicitly set to false
@@ -660,30 +674,10 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                                     }
                                                                                 }
                                                                                 
-                                                                                // Use the first mark's timestamp if available, otherwise try to get first timestamp for this topic
-                                                                                let firstTimestamp = null;
-                                                                                if (marks && marks.length > 0) {
-                                                                                    // Use the exact timestamp from the first search result
-                                                                                    firstTimestamp = marks[0].value;
-                                                                                } else {
-                                                                                    // Fallback: try to get first timestamp from available timestamps
-                                                                                    try {
-                                                                                        const timestampResponse = await fetch('/api/get-available-timestamps');
-                                                                                        if (timestampResponse.ok) {
-                                                                                            const timestampData = await timestampResponse.json();
-                                                                                            if (timestampData.availableTimestamps && timestampData.availableTimestamps.length > 0) {
-                                                                                                firstTimestamp = timestampData.availableTimestamps[0];
-                                                                                            }
-                                                                                        }
-                                                                                    } catch (e) {
-                                                                                        // ignore
-                                                                                    }
-                                                                                }
-                                                                                
                                                                                 const params = new URLSearchParams();
                                                                                 params.set('rosbag', rosbagName);
                                                                                 params.set('canvas', encodedCanvas);
-                                                                                if (firstTimestamp) params.set('ts', String(firstTimestamp));
+                                                                                params.set('ts', '0');
                                                                                 // Marks are now stored in sessionStorage, not in URL
                                                                                 navigate(`/explore?${params.toString()}`);
                                                                             }}

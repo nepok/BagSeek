@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./NodeContent.css"; // Import the CSS file
-import { Box, Typography } from "@mui/material";
+import { Box, Typography, CircularProgress } from "@mui/material";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -30,12 +30,14 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     angular_velocity: { x: number; y: number; z: number };
     linear_acceleration: { x: number; y: number; z: number };
   } | null>(null); // orientation, angular velocity, and acceleration from IMU
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
   const mapContainerRef = useRef<HTMLDivElement | null>(null); // reference to the div container holding the map
   
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
+    setIsLoading(true);
     try {
       const response = await fetch(`/api/content-mcap?rosbag=${selectedRosbag}&topic=${encodeURIComponent(nodeTopic!)}&mcap_identifier=${mcapIdentifier}&timestamp=${mappedTimestamp}`);
       const data = await response.json();
@@ -122,6 +124,8 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       setPosition(null);
       setImuData(null);
       setRealTimestamp(null);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -319,7 +323,13 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
 
   // Render content based on the topicType
   let renderedContent: React.ReactNode = null;
-  if ((nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image") && imageUrl) {
+  if (isLoading) {
+    renderedContent = (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%' }}>
+        <CircularProgress size={40} sx={{ color: 'white' }} />
+      </Box>
+    );
+  } else if ((nodeTopicType === "sensor_msgs/msg/CompressedImage" || nodeTopicType === "sensor_msgs/msg/Image") && imageUrl) {
     renderedContent = (
       <div className="image-container">
         <img

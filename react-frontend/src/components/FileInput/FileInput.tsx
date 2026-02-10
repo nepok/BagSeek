@@ -7,7 +7,7 @@ interface FileInputProps {
   isVisible: boolean; // Controls visibility of the dialog
   onClose: () => void; // Callback to close the dialog
   onAvailableTopicsUpdate: () => void; // Callback for refreshing topics (unified: topicName -> messageType)
-  onAvailableTimestampsUpdate: () => void; // Callback for refreshing timestamps after file selection
+  onAvailableTimestampsUpdate?: () => void | Promise<void>; // Callback for refreshing timestamps and MCAP boundaries
   onSelectedRosbagUpdate: () => void; // Callback for refreshing selected rosbag state
 }
 
@@ -106,7 +106,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       .then((data) => {
         // Trigger callbacks to refresh topics, timestamps, and selected rosbag state
         onAvailableTopicsUpdate();
-        onAvailableTimestampsUpdate();
+        onAvailableTimestampsUpdate?.();
         onSelectedRosbagUpdate();
       })
       .catch((error) => {

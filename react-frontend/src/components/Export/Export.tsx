@@ -6,8 +6,7 @@ import { CustomTrack } from '../CustomTrack/CustomTrack';
 import { times } from 'lodash';
 
 interface ExportProps {
-  timestamps: number[];
-  timestampDensity: number[];
+  timestampCount: number;
   availableTopics: Record<string, string>; // Unified: { topicName: messageType }
   isVisible: boolean;
   onClose: () => void;
@@ -15,7 +14,7 @@ interface ExportProps {
   selectedRosbag: string | null;
 }
 
-const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, availableTopics, isVisible, onClose, searchMarks, selectedRosbag: selectedRosbagProp }) => {
+const Export: React.FC<ExportProps> = ({ timestampCount, availableTopics, isVisible, onClose, searchMarks, selectedRosbag: selectedRosbagProp }) => {
   // Derive topics array and topicTypes map from unified availableTopics
   const topics = Object.keys(availableTopics);
   const topicTypes = availableTopics;
@@ -31,7 +30,7 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
   // State for selected types when filtering by type
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   // Range of timestamps selected for export (indices)
-  const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestamps.length - 1)]);
+  const [exportRange, setExportRange] = useState<number[]>([0, Math.max(0, timestampCount - 1)]);
   // Export progress and status information
   const [exportStatus, setExportStatus] = useState<{progress: number, status: string, message?: string} | null>(null);
   // Ref for Leaflet map instance
@@ -202,35 +201,31 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
 
   // Handle export button click: send export request and poll for status
   const handleExport = async () => {
-    if (timestamps.length === 0) return;
+    if (timestampCount === 0) return;
 
-    // Don't set status here - backend will set it. We'll fetch it after sending the request.
+    // Get clamped indices
+    const startIndex = Math.min(exportRange[0], timestampCount - 1);
+    const endIndex = Math.min(exportRange[1], timestampCount - 1);
 
-    // Get timestamp indices
-    const startIndex = Math.min(exportRange[0], timestamps.length - 1);
-    const endIndex = Math.min(exportRange[1], timestamps.length - 1);
-    const startTimestamp = timestamps[startIndex];
-    const endTimestamp = timestamps[endIndex];
-
-    // Fetch MCAP mapping to get MCAP IDs for the timestamps
+    // Fetch timestamp summary to get MCAP IDs for the timestamps
     let startMcapId: string | null = null;
     let endMcapId: string | null = null;
     
     try {
-      // Fetch the MCAP mapping for the selected rosbag
-      const mappingResponse = await fetch(`/api/get-topic-mcap-mapping?relative_rosbag_path=${encodeURIComponent(selectedRosbag)}`);
-      if (mappingResponse.ok) {
-        const mappingData = await mappingResponse.json();
-        const ranges = mappingData.ranges || [];
+      const summaryResponse = await fetch(`/api/get-timestamp-summary?rosbag=${encodeURIComponent(selectedRosbag)}`);
+      if (summaryResponse.ok) {
+        const summaryData = await summaryResponse.json();
+        const mcapRanges = summaryData.mcapRanges || [];
+        const total = summaryData.count ?? 0;
         
         // Helper function to find MCAP ID for a given index
         const findMcapIdForIndex = (index: number): string | null => {
-          for (let i = 0; i < ranges.length; i++) {
-            const range = ranges[i];
-            const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : mappingData.total;
+          for (let i = 0; i < mcapRanges.length; i++) {
+            const range = mcapRanges[i];
+            const nextStart = i < mcapRanges.length - 1 ? mcapRanges[i + 1].startIndex : total;
             
             if (index >= range.startIndex && index < nextStart) {
-              return range.mcap_identifier;
+              return range.mcapIdentifier;
             }
           }
           return null;
@@ -240,8 +235,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
         endMcapId = findMcapIdForIndex(endIndex);
       }
     } catch (error) {
-      console.error('Error fetching MCAP mapping:', error);
-      alert('Failed to fetch MCAP mapping. Export cannot proceed without MCAP IDs.');
+      console.error('Error fetching timestamp summary:', error);
+      alert('Failed to fetch timestamp summary. Export cannot proceed without MCAP IDs.');
       // Don't set status here - let backend handle it, or clear it since export didn't start
       setExportStatus(null);
       return;
@@ -250,8 +245,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
     const exportData = {
       new_rosbag_name: newRosbagName.trim(),
       topics: selectedTopics, // Can be empty array (will export all topics if empty)
-      start_timestamp: startTimestamp, // nanoseconds
-      end_timestamp: endTimestamp, // nanoseconds
+      start_index: startIndex,
+      end_index: endIndex,
       start_mcap_id: startMcapId, // string
       end_mcap_id: endMcapId, // string
     };
@@ -377,10 +372,10 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
     }).format(date);
   };
 
-  // Format slider value label with date and raw timestamp
+  // Format slider value label with index position
   const valueLabelFormat = (value: number) => {
-    if (value < 0 || value >= timestamps.length) return 'Invalid';
-    return `${formatDate(timestamps[value])} (${timestamps[value]})`;
+    if (value < 0 || value >= timestampCount) return 'Invalid';
+    return `Index ${value}`;
   };
 
   // Render only export status popup when dialog is not visible
@@ -512,15 +507,14 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
             onChange={handleSliderChange}
             valueLabelDisplay="auto"
             min={0}
-            max={Math.max(0, timestamps.length - 1)}
+            max={Math.max(0, timestampCount - 1)}
             valueLabelFormat={valueLabelFormat}
             components={{
               Track: (props) => (
                 <CustomTrack
                   {...props}
-                  timestampCount={timestamps.length}
+                  timestampCount={timestampCount}
                   searchMarks={searchMarks}
-                  timestampDensity={timestampDensity}
                   bins={1000}
                   windowSize={50}
                 />
@@ -528,8 +522,8 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
             }}
             sx={{
               '& .MuiSlider-thumb': {
-                backgroundColor: 'primary', // or another solid color
-                zIndex: 2, // ensure they sit above the highlight
+                backgroundColor: 'primary',
+                zIndex: 2,
               }
             }}
           />
@@ -538,11 +532,11 @@ const Export: React.FC<ExportProps> = ({ timestamps, timestampDensity, available
             sx={{
               position: 'absolute',
               top: '50%',
-              transform: 'translateY(-10px)', // half of the defined height
-              left: `${(exportRange[0] / (timestamps.length - 1)) * 100}%`,
-              width: `${((exportRange[1] - exportRange[0]) / (timestamps.length - 1)) * 100}%`,
-              height: '20px', // fixed height in pixels
-              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.2), // semi-transparent primary color
+              transform: 'translateY(-10px)',
+              left: `${timestampCount > 1 ? (exportRange[0] / (timestampCount - 1)) * 100 : 0}%`,
+              width: `${timestampCount > 1 ? ((exportRange[1] - exportRange[0]) / (timestampCount - 1)) * 100 : 100}%`,
+              height: '20px',
+              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.2),
               pointerEvents: 'none',
               zIndex: 1,
             }}

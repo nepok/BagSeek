@@ -6,6 +6,7 @@ import { Center } from '@react-three/drei';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
 import RoomIcon from '@mui/icons-material/Room';
+import { extractRosbagName } from '../../utils/rosbag';
 
 // Hover-still helper: true after delay ms with no meaningful cursor movement
 function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
@@ -805,7 +806,7 @@ const GlobalSearch: React.FC = () => {
                         </MenuItem>
                         <MenuItem value="currently selected">
                             <Checkbox checked={(() => {
-                                const matched = filteredAvailableRosbags.find(b => b.split('/').pop() === searchResults[0]?.rosbag);
+                                const matched = filteredAvailableRosbags.find(b => extractRosbagName(b) === searchResults[0]?.rosbag);
                                 return rosbags.includes(matched || '');
                             })()} />
                             <ListItemText primary="CURRENTLY SELECTED" />

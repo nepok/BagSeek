@@ -4,7 +4,8 @@ import { styled } from '@mui/material/styles';
 interface HeatBarProps {
   timestampCount: number;
   searchMarks: { value: number }[];
-  timestampDensity?: number[];
+  mcapBoundaries?: number[];
+  sliderValue?: number;
   bins?: number;
   windowSize?: number;
   height?: number;
@@ -12,45 +13,36 @@ interface HeatBarProps {
   onLeave?: () => void;
 }
 
-function getHeatColor(value: number, densityFactor: number) {
+function getHeatColor(value: number) {
   const hue = (1 - value) * 268;
-  const sat = densityFactor * 30 + value * 70;
+  const sat = value * 70;
   return `hsl(${hue}, ${sat}%, 50%)`;
 }
 
-// Math.max(...array) throws when the array is huge; this helper avoids spreading.
-function arrayMax(values: number[] | undefined, fallback: number) {
-  if (!values || values.length === 0) {
-    return fallback;
-  }
-
-  let max = values[0];
-  for (let i = 1; i < values.length; i += 1) {
-    if (values[i] > max) {
-      max = values[i];
-    }
-  }
-  return max;
-}
-
-const StyledTrack = styled('div')<{ height?: number }>(({ height }) => ({
-  height: height ?? 2,
+const TrackWrapper = styled('div')({
   width: '100%',
   position: 'relative',
+});
+
+const SegmentBar = styled('div')<{ height?: number }>(({ height }) => ({
+  height: height ?? 2,
+  width: '100%',
   display: 'flex',
   overflow: 'hidden',
+  position: 'relative',
 }));
 
-const HeatBarSegment = styled('div')<{ intensity: number; densityFactor: number }>(({ intensity, densityFactor }) => ({
+const HeatBarSegment = styled('div')<{ intensity: number }>(({ intensity }) => ({
   flex: 1,
   height: '100%',
-  background: getHeatColor(intensity, densityFactor),
+  background: getHeatColor(intensity),
 }));
 
 export const HeatBar: React.FC<HeatBarProps> = ({
   timestampCount,
   searchMarks,
-  timestampDensity,
+  mcapBoundaries = [],
+  sliderValue = 0,
   bins = 1000,
   windowSize = 50,
   height,
@@ -77,42 +69,41 @@ export const HeatBar: React.FC<HeatBarProps> = ({
       counts[i] = score;
     }
 
-    const max = arrayMax(counts, 1);
+    let max = 1;
+    for (let j = 0; j < counts.length; j++) {
+      if (counts[j] > max) max = counts[j];
+    }
     const normalizedCounts = counts.map((c) => c / (max || 1));
 
     return normalizedCounts;
   }, [searchMarks, timestampCount, bins, windowSize]);
 
-  const normalizedDensity = useMemo(() => {
-    const source = timestampDensity && timestampDensity.length > 0
-      ? timestampDensity
-      : new Array(bins).fill(0);
-
-    const max = arrayMax(source, 1);
-    const normalized = source.map((v) => v / (max || 1));
-
-    const resized = new Array(bins).fill(0);
-    const factor = (timestampDensity?.length ?? bins) / bins;
-
-    for (let i = 0; i < bins; i++) {
-      const pos = i * factor;
-      const low = Math.floor(pos);
-      const high = Math.ceil(pos);
-      const weight = pos - low;
-
-      const lowVal = normalized[low] ?? 0;
-      const highVal = normalized[high] ?? 0;
-
-      resized[i] = lowVal * (1 - weight) + highVal * weight;
+  // Determine which MCAP segment the slider is currently in
+  let activeMcapIndex = 0;
+  for (let i = mcapBoundaries.length - 1; i >= 0; i--) {
+    if (sliderValue >= mcapBoundaries[i]) {
+      activeMcapIndex = i;
+      break;
     }
+  }
 
-    return resized;
-  }, [timestampDensity, bins]);
+  // Build segment info for MCAP indicators
+  const segments = mcapBoundaries.map((startIdx, i) => {
+    const endIdx = i < mcapBoundaries.length - 1 ? mcapBoundaries[i + 1] : timestampCount;
+    return {
+      index: i,
+      startFrac: timestampCount > 0 ? startIdx / timestampCount : 0,
+      endFrac: timestampCount > 0 ? endIdx / timestampCount : 0,
+      isActive: i === activeMcapIndex,
+    };
+  });
+
+  // Reduce label/line density when many boundaries: >40 → every 2nd, >80 → every 3rd, etc.
+  const labelStep = Math.max(1, Math.ceil(mcapBoundaries.length / 40));
 
   return (
-    <StyledTrack
+    <TrackWrapper
       ref={trackRef}
-      height={height}
       onMouseLeave={() => { setHoverPos(null); onLeave && onLeave(); }}
       onMouseMove={(e) => {
         if (!trackRef.current) return;
@@ -123,23 +114,65 @@ export const HeatBar: React.FC<HeatBarProps> = ({
         onHover && onHover(frac, e);
       }}
     >
+      {/* Heat segments with overflow hidden */}
+      <SegmentBar height={height}>
         {densityData.map((val, idx) => (
-        <HeatBarSegment key={idx} intensity={val} densityFactor={normalizedDensity[idx]} />
+          <HeatBarSegment key={idx} intensity={val} />
         ))}
-        {hoverPos !== null && (
+      </SegmentBar>
+      {/* Hover indicator */}
+      {hoverPos !== null && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: `${hoverPos * 100}%`,
+            width: 2,
+            background: 'rgba(255,255,255,0.8)',
+            transform: 'translateX(-1px)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+      {/* MCAP boundary lines - always show all */}
+      {segments.map((seg) => (
+        seg.index > 0 && (
           <div
+            key={`mcap-line-${seg.index}`}
             style={{
               position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: `${hoverPos * 100}%`,
-              width: 2,
-              background: 'rgba(255,255,255,0.8)',
-              transform: 'translateX(-1px)',
+              top: -4,
+              bottom: -4,
+              left: `${seg.startFrac * 100}%`,
+              width: 1,
+              background: 'rgba(255,255,255,0.45)',
               pointerEvents: 'none',
             }}
           />
-        )}
-    </StyledTrack>
+        )
+      ))}
+      {/* MCAP index labels - thinned when count > 40 (every 2nd, 3rd, etc.) */}
+      {segments
+        .filter((seg) => seg.index % labelStep === 0 || seg.index === activeMcapIndex)
+        .map((seg) => (
+          <div
+            key={`mcap-label-${seg.index}`}
+            style={{
+              position: 'absolute',
+              top: -14,
+              left: `${((seg.startFrac + seg.endFrac) / 2) * 100}%`,
+              transform: 'translateX(-50%)',
+              fontSize: 9,
+              color: seg.isActive ? '#90caf9' : 'rgba(255,255,255,0.35)',
+              fontWeight: seg.isActive ? 600 : 400,
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {seg.index}
+          </div>
+        ))}
+    </TrackWrapper>
   );
 };

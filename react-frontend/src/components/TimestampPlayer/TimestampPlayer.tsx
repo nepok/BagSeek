@@ -11,44 +11,49 @@ import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
 import { useError } from '../ErrorContext/ErrorContext'; // adjust path as needed
 
 interface TimestampPlayerProps {
-  availableTimestamps: number[];
-  timestampDensity: number[];
-  selectedTimestamp: number | null;
-  onSliderChange: (value: number) => void;
+  timestampCount: number;
+  firstTimestampNs: string | null;
+  lastTimestampNs: string | null;
+  selectedTimestampIndex: number | null;
+  selectedTimestamp: string | null;
+  onSliderChange: (index: number) => void;
   selectedRosbag: string | null;
   searchMarks: { value: number; label: string }[];
   setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; label: string }[]>>;
+  mcapBoundaries?: number[];
 }
 
 const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   const {
-    availableTimestamps,
-    timestampDensity,
+    timestampCount,
+    firstTimestampNs,
+    lastTimestampNs,
+    selectedTimestampIndex,
     selectedTimestamp,
     onSliderChange,
     selectedRosbag,
     searchMarks,
     setSearchMarks,
+    mcapBoundaries = [],
   } = props;
   
-  const formatDate = (timestamp: number): string => {
-    if (!timestamp || isNaN(timestamp)) {
+  const formatDate = (timestampNs: string): string => {
+    if (!timestampNs) return 'Invalid Timestamp';
+    try {
+      const ms = Number(BigInt(timestampNs) / BigInt(1000000));
+      const date = new Date(ms);
+      return new Intl.DateTimeFormat('de-DE', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(date);
+    } catch {
       return 'Invalid Timestamp';
     }
-    // TODO: automatic conversion for time unit seconds, milli, micro and nano seconds
-    const date = new Date(timestamp / 1000000); // Divide by 1,000,000 to convert to seconds
-    const berlinTime = new Intl.DateTimeFormat('de-DE', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false, // 24-hour format
-
-    }).format(date);
-
-    return berlinTime;
   };
 
   const formatDuration = (totalSeconds: number): string => {
@@ -60,21 +65,24 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   };
 
   const getDurationDisplay = (): string => {
-    if (availableTimestamps.length === 0 || selectedTimestamp === null) return '0:00/0:00';
-    const first = availableTimestamps[0];
-    const last = availableTimestamps[availableTimestamps.length - 1];
-    const totalSeconds = (last - first) / 1e9;
-    const elapsedSeconds = (selectedTimestamp - first) / 1e9;
-    const totalFormatted = formatDuration(totalSeconds);
-    if (showRemaining) {
-      return `${formatDuration(elapsedSeconds - totalSeconds)}/${totalFormatted}`;
+    if (!firstTimestampNs || !lastTimestampNs || !selectedTimestamp) return '0:00/0:00';
+    try {
+      const first = BigInt(firstTimestampNs);
+      const last = BigInt(lastTimestampNs);
+      const current = BigInt(selectedTimestamp);
+      const totalSeconds = Number(last - first) / 1e9;
+      const elapsedSeconds = Number(current - first) / 1e9;
+      const totalFormatted = formatDuration(totalSeconds);
+      if (showRemaining) {
+        return `${formatDuration(elapsedSeconds - totalSeconds)}/${totalFormatted}`;
+      }
+      return `${formatDuration(elapsedSeconds)}/${totalFormatted}`;
+    } catch {
+      return '0:00/0:00';
     }
-    return `${formatDuration(elapsedSeconds)}/${totalFormatted}`;
   };
 
-  const [sliderValue, setSliderValue] = useState(
-    selectedTimestamp ? availableTimestamps.indexOf(selectedTimestamp) : 0
-  ); // current index in timestamp list
+  const [sliderValue, setSliderValue] = useState(selectedTimestampIndex ?? 0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1); // playback multiplier (e.g., 0.5x, 1x, 2x)
   const [isPlaying, setIsPlaying] = useState(false); // whether playback is running
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS'); // display mode: ROS or formatted time
@@ -177,20 +185,19 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     }, [showFilter]);*/
 
 
-  // Keep slider position in sync with selected timestamp
+  // Keep slider position in sync with selected index
   useEffect(() => {
-    if (selectedTimestamp !== null) {
-      const index = availableTimestamps.indexOf(selectedTimestamp);
-      setSliderValue(index);
+    if (selectedTimestampIndex !== null) {
+      setSliderValue(selectedTimestampIndex);
     }
-  }, [selectedTimestamp, availableTimestamps]);
+  }, [selectedTimestampIndex]);
 
 
   // Handle slider movement: update index and propagate to parent
   const handleSliderChange = (event: Event, value: number | number[]) => {
-    const newValue = Array.isArray(value) ? value[0] : value;
-    setSliderValue(newValue);
-    onSliderChange(availableTimestamps[newValue]);
+    const newIndex = Array.isArray(value) ? value[0] : value;
+    setSliderValue(newIndex);
+    onSliderChange(newIndex);
   };
 
   // Update playback speed and restart playback timer if running
@@ -200,13 +207,12 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
 
     if (isPlaying) {
       clearInterval(intervalRef.current!);
-      // Updated logic for intervalTime and step
       const step = newSpeed <= 0.5 ? 1 : newSpeed === 1 ? 2 : newSpeed === 1.5 ? 3 : 4;
       const intervalTime = newSpeed <= 0.5 ? 150 / newSpeed : 300;
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + step) % availableTimestamps.length;
-          onSliderChange(availableTimestamps[nextIndex]);
+          const nextIndex = (prevSliderValue + step) % timestampCount;
+          onSliderChange(nextIndex);
           return nextIndex;
         });
       }, intervalTime);
@@ -224,17 +230,15 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       clearInterval(intervalRef.current!);
       setIsPlaying(false);
     } else {
-      // Updated logic for intervalTime and step
       const step = playbackSpeed <= 0.5 ? 1 : playbackSpeed === 1 ? 2 : playbackSpeed === 1.5 ? 3 : 4;
       const intervalTime = playbackSpeed <= 0.5 ? 150 / playbackSpeed : 300;
-      console.log(`Starting playback at speed ${playbackSpeed} with step ${step} and interval time ${intervalTime}ms`);
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
       intervalRef.current = setInterval(() => {
         setSliderValue(prevSliderValue => {
-          const nextIndex = (prevSliderValue + step) % availableTimestamps.length;
-          onSliderChange(availableTimestamps[nextIndex]);
+          const nextIndex = (prevSliderValue + step) % timestampCount;
+          onSliderChange(nextIndex);
           return nextIndex;
         });
       }, intervalTime);
@@ -311,7 +315,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       <Slider
         size="small"
         min={0}
-        max={availableTimestamps.length - 1}
+        max={Math.max(0, timestampCount - 1)}
         step={1}
         value={sliderValue}
         onChange={handleSliderChange}
@@ -320,9 +324,10 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           Track: (props) => (
             <CustomTrack
               {...props}
-              timestampCount={availableTimestamps.length}
+              timestampCount={timestampCount}
               searchMarks={searchMarks}
-              timestampDensity={timestampDensity}
+              mcapBoundaries={mcapBoundaries}
+              sliderValue={sliderValue}
               bins={1000} // optional
               windowSize={50} // optional
             />
@@ -336,13 +341,13 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       />
 
       {/* Display the selected timestamp */}
-      <Typography 
-        variant="body2" 
+      <Typography
+        variant="body2"
         sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', minWidth: 140 }}
       >
         {timestampUnit === 'ROS'
-          ? selectedTimestamp
-          : selectedTimestamp && formatDate(selectedTimestamp)}
+          ? (selectedTimestamp ?? '')
+          : (selectedTimestamp ? formatDate(selectedTimestamp) : '')}
       </Typography>
 
       {/* Select for Timestamp Unit */}

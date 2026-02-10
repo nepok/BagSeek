@@ -6,9 +6,10 @@ interface CustomTrackProps {
   className?: string;
   timestampCount: number;
   searchMarks: { value: number }[];
-  timestampDensity: number[];
+  mcapBoundaries?: number[];
   bins?: number;
   windowSize?: number;
+  sliderValue?: number;
 }
 
 export const CustomTrack: React.FC<CustomTrackProps> = (props) => {

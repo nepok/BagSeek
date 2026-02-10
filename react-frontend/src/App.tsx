@@ -11,6 +11,7 @@ import { useError } from './components/ErrorContext/ErrorContext';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
 import PositionalOverview from './components/PositionalOverview/PositionalOverview';
 import { sortTopicsObject } from './utils/topics';
+import { extractRosbagName } from './utils/rosbag';
 
 interface Node {
   id: number;
@@ -32,9 +33,11 @@ function App() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
-  const [availableTimestamps, setAvailableTimestamps] = useState<number[]>([]);  // List of all available timestamps fetched from backend
-  const [selectedTimestamp, setSelectedTimestamp] = useState<number | null>(null);  // Currently selected timestamp for playback or display
-  const [timestampDensity, setTimestampDensity] = useState<number[]>([]);  // Density information of timestamps, used for UI visualization like heatmaps
+  const [timestampCount, setTimestampCount] = useState<number>(0);  // Total number of reference timestamps
+  const [firstTimestampNs, setFirstTimestampNs] = useState<string | null>(null);  // First reference timestamp (ns string)
+  const [lastTimestampNs, setLastTimestampNs] = useState<string | null>(null);  // Last reference timestamp (ns string)
+  const [selectedTimestampIndex, setSelectedTimestampIndex] = useState<number | null>(null);  // Index of the currently selected timestamp
+  const [selectedTimestamp, setSelectedTimestamp] = useState<string | null>(null);  // Currently selected timestamp (ns string from backend, for display)
   const [mappedTimestamps, setMappedTimestamps] = useState<{ [topic: string]: number }>({});  // Mapping from topic names to their respective timestamps at the selected reference
   const [mcapIdentifier, setMcapIdentifier] = useState<string | null>(null);  // MCAP identifier for the currently selected reference timestamp
   // Unified topics state: { topicName: messageType } - single source of truth for topics and their types
@@ -42,6 +45,7 @@ function App() {
   const [selectedRosbag, setSelectedRosbag] = useState<string | null>(null);  // Currently selected rosbag file identifier or name
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);  // Controls visibility of the file input dialog component
   const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);  // Controls visibility of the export dialog component
+  const [mcapBoundaries, setMcapBoundaries] = useState<number[]>([]);  // Start indices of each MCAP file within available timestamps
 
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
@@ -83,11 +87,10 @@ function App() {
     setSearchParams(next, { replace: true });
   };
 
-  // Helper: get basename (last path segment) of a rosbag path/id
-  const getRosbagBasename = (value: string | null | undefined) => {
+  // Helper: extract rosbag name, preserving parent for multipart rosbags.
+  const getRosbagName = (value: string | null | undefined): string | null | undefined => {
     if (!value) return value as any;
-    const parts = value.split('/');
-    return parts[parts.length - 1];
+    return extractRosbagName(value);
   };
 
   // Fetch unified topics (topicName -> messageType) from backend API
@@ -107,30 +110,23 @@ function App() {
     }
   };
 
-  // Fetch both available timestamps and their density information from backend
+  // Fetch timestamp metadata and MCAP boundaries from backend (single endpoint)
   const fetchAvailableTimestampsAndDensity = async () => {
     try {
-      const response = await fetch('/api/get-available-timestamps');
+      const response = await fetch('/api/get-timestamp-summary');
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch timestamps');
+        throw new Error(data.error || 'Failed to fetch timestamp summary');
       }
-      setAvailableTimestamps(data.availableTimestamps);
+      setTimestampCount(data.count ?? 0);
+      setFirstTimestampNs(data.firstTimestampNs ?? null);
+      setLastTimestampNs(data.lastTimestampNs ?? null);
+      setMcapBoundaries(
+        (data.mcapRanges ?? []).map((r: { startIndex: number }) => r.startIndex)
+      );
     } catch (error) {
       setError('Error fetching available timestamps');
       console.error('Error fetching available timestamps:', error);
-    }
-
-    try {
-      const response = await fetch('/api/get-timestamp-density');
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch timestamp density');
-      }
-      setTimestampDensity(data.timestampDensity);
-    } catch (error) {
-      setError('Error fetching timestamp density');
-      console.error('Error fetching timestamp density:', error);
     }
   };
 
@@ -174,28 +170,24 @@ function App() {
     }
   };
   
-  // Effect to update selected timestamp when available timestamps change
+  // Effect to select initial timestamp index when count changes
   useEffect(() => {
-    // If timestamps are available, select the first one by default
-    if (availableTimestamps.length > 0) {
-      // Check if there's a timestamp in the URL params first
+    if (timestampCount > 0) {
       const tsParam = searchParams.get('ts');
       const tsFromUrl = tsParam ? Number(tsParam) : null;
-      
-      // If there's a timestamp in the URL, set it as pending so the other effect can apply it
+
       if (tsFromUrl !== null && !Number.isNaN(tsFromUrl) && pendingTsRef.current === null) {
         pendingTsRef.current = tsFromUrl;
       }
-      
-      // If a timestamp is pending from URL (either in ref or URL params), let that effect apply it
+
       if (pendingTsRef.current === null && (tsFromUrl === null || Number.isNaN(tsFromUrl))) {
-        setSelectedTimestamp(availableTimestamps[0]); // Use first timestamp
-        handleSliderChange(availableTimestamps[0]); // Sync mapped timestamps on change
+        handleSliderChange(0); // Select first timestamp
       }
     } else {
-      setSelectedTimestamp(null); // Clear selection if no timestamps
+      setSelectedTimestampIndex(null);
+      setSelectedTimestamp(null);
     }
-  }, [availableTimestamps, searchParams]);
+  }, [timestampCount, searchParams]);
 
   // Function to refresh canvas list from backend
   const refreshCanvasList = useCallback(async () => {
@@ -217,38 +209,35 @@ function App() {
     refreshCanvasList();
   }, [refreshCanvasList]);
 
-  // Handler for when user changes the timestamp slider
-  const handleSliderChange = async (value: number) => {
-    isUpdatingTimestampRef.current = true; // Mark that we're updating from user action
-    setSelectedTimestamp(value); // Update selected timestamp in state
-    // Sync to URL if on /explore
+  // Handler for when user changes the timestamp slider (receives index)
+  const handleSliderChange = async (index: number) => {
+    isUpdatingTimestampRef.current = true;
+    setSelectedTimestampIndex(index);
+    // Sync index to URL if on /explore
     if (location.pathname.startsWith('/explore')) {
       const curr = searchParams.get('ts');
-      const next = String(value);
+      const next = String(index);
       if (curr !== next) updateSearchParams({ ts: next });
     }
-    
+
     try {
-      // Notify backend of new reference timestamp to get mapped timestamps
       const response = await fetch('/api/set-reference-timestamp', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ referenceTimestamp: value }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index }),
       });
 
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to set reference timestamp');
       }
-      setMappedTimestamps(data.mappedTimestamps); // Update mapped timestamps for topics
-      setMcapIdentifier(data.mcapIdentifier || null); // Update mcap identifier
+      setSelectedTimestamp(data.referenceTimestamp || null); // ns string for display
+      setMappedTimestamps(data.mappedTimestamps);
+      setMcapIdentifier(data.mcapIdentifier || null);
     } catch (error) {
       setError('Error sending reference timestamp');
       console.error('Error sending reference timestamp:', error);
     } finally {
-      // Reset the flag after a short delay to allow URL update to complete
       setTimeout(() => {
         isUpdatingTimestampRef.current = false;
       }, 100);
@@ -315,7 +304,7 @@ function App() {
     if (location.pathname.startsWith('/explore')) {
       if (selectedRosbag) {
         const curr = searchParams.get('rosbag');
-        const next = getRosbagBasename(selectedRosbag);
+        const next = getRosbagName(selectedRosbag);
         if (curr !== next) updateSearchParams({ rosbag: next as string });
       }
     }
@@ -333,12 +322,12 @@ function App() {
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
       if (!rosbagParam) return;
-      // Compare basenames to avoid full-path vs basename mismatches
-      if (getRosbagBasename(selectedRosbag) === rosbagParam) return;
+      // Compare rosbag names to avoid full-path vs name mismatches
+      if (getRosbagName(selectedRosbag) === rosbagParam) return;
       try {
         const res = await fetch('/api/get-file-paths');
         const data = await res.json();
-        const match = (data.paths as string[]).find((p) => p.split('/').pop() === rosbagParam);
+        const match = (data.paths as string[]).find((p) => getRosbagName(p) === rosbagParam);
         if (match) {
           await fetch('/api/set-file-paths', {
             method: 'POST',
@@ -395,10 +384,10 @@ function App() {
     //   }
     // }
 
-    // 3) Stash ts/canvas to apply when data is ready
+    // 3) Stash ts index to apply when data is ready
     if (tsParam) {
-      const tsNum = Number(tsParam);
-      if (!Number.isNaN(tsNum) && tsNum !== selectedTimestamp) pendingTsRef.current = tsNum;
+      const tsIndex = Number(tsParam);
+      if (!Number.isNaN(tsIndex) && tsIndex !== selectedTimestampIndex) pendingTsRef.current = tsIndex;
     }
     if (canvasParam) {
       const parsed = decodeCanvas(canvasParam);
@@ -409,7 +398,7 @@ function App() {
           pendingCanvasRef.current = parsed as { root: Node; metadata: { [id: number]: NodeMetadata } };
           pendingRosbagParamRef.current = rosbagParam;
           // If the currently selected rosbag already matches the URL rosbag, apply immediately
-          if (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam) {
+          if (!rosbagParam || getRosbagName(selectedRosbag) === rosbagParam) {
             const { root, metadata } = pendingCanvasRef.current;
             pendingCanvasRef.current = null;
             pendingRosbagParamRef.current = null;
@@ -421,28 +410,15 @@ function App() {
         }
       }
     }
-    // If timestamp param exists and rosbag already matches, apply immediately
-    // Skip if we're currently updating from user action to avoid double calls
-    if (tsParam && (!rosbagParam || getRosbagBasename(selectedRosbag) === rosbagParam) && !isUpdatingTimestampRef.current) {
-      const tsNum = Number(tsParam);
-      if (!Number.isNaN(tsNum) && tsNum !== selectedTimestamp) {
-        pendingTsRef.current = tsNum;
-        if (availableTimestamps && availableTimestamps.length > 0) {
-          // trigger timestamp application now; the timestamps-ready effect will normalize to nearest if needed
-          const target = pendingTsRef.current;
+    // If timestamp index param exists and rosbag already matches, apply immediately
+    if (tsParam && (!rosbagParam || getRosbagName(selectedRosbag) === rosbagParam) && !isUpdatingTimestampRef.current) {
+      const tsIndex = Number(tsParam);
+      if (!Number.isNaN(tsIndex) && tsIndex !== selectedTimestampIndex) {
+        pendingTsRef.current = tsIndex;
+        if (timestampCount > 0) {
+          const clamped = Math.max(0, Math.min(pendingTsRef.current, timestampCount - 1));
           pendingTsRef.current = null;
-          // If exact index unknown yet, call handleSliderChange with best guess when list is there
-          let chosen = target;
-          if (!availableTimestamps.includes(target)) {
-            let best = availableTimestamps[0];
-            let bestDiff = Math.abs(best - target);
-            for (const t of availableTimestamps) {
-              const diff = Math.abs(t - target);
-              if (diff < bestDiff) { best = t; bestDiff = diff; }
-            }
-            chosen = best;
-          }
-          handleSliderChange(chosen);
+          handleSliderChange(clamped);
         }
       }
     }
@@ -455,7 +431,7 @@ function App() {
     if (!pendingCanvasRef.current) return;
     const needRosbag = pendingRosbagParamRef.current;
     // Proceed when the selected rosbag basename matches the needed rosbag from URL
-    if (needRosbag && getRosbagBasename(selectedRosbag) !== needRosbag) return;
+    if (needRosbag && getRosbagName(selectedRosbag) !== needRosbag) return;
     const { root, metadata } = pendingCanvasRef.current;
     pendingCanvasRef.current = null;
     pendingRosbagParamRef.current = null;
@@ -467,29 +443,15 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRosbag]);
 
-  // Apply pending timestamp once timestamps are loaded
+  // Apply pending timestamp index once count is loaded
   useEffect(() => {
-    if (!availableTimestamps || availableTimestamps.length === 0) return;
+    if (timestampCount === 0) return;
     if (pendingTsRef.current !== null) {
-      // If exact match not found, pick nearest
-      const target = pendingTsRef.current;
-      let chosen = target;
-      if (!availableTimestamps.includes(target)) {
-        let best = availableTimestamps[0];
-        let bestDiff = Math.abs(best - target);
-        for (const t of availableTimestamps) {
-          const diff = Math.abs(t - target);
-          if (diff < bestDiff) {
-            best = t;
-            bestDiff = diff;
-          }
-        }
-        chosen = best;
-      }
+      const clamped = Math.max(0, Math.min(pendingTsRef.current, timestampCount - 1));
       pendingTsRef.current = null;
-      handleSliderChange(chosen);
+      handleSliderChange(clamped);
     }
-  }, [availableTimestamps]);
+  }, [timestampCount]);
 
 
   return (
@@ -504,8 +466,7 @@ function App() {
       />
       {/* Export dialog to export data based on timestamps, topics, and search marks */}
       <Export
-        timestamps={availableTimestamps}
-        timestampDensity={timestampDensity}
+        timestampCount={timestampCount}
         availableTopics={availableTopics}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
@@ -543,13 +504,16 @@ function App() {
                     currentMetadata={currentMetadata}
                   />
                   <TimestampPlayer
-                    availableTimestamps={availableTimestamps}
-                    timestampDensity={timestampDensity}
+                    timestampCount={timestampCount}
+                    firstTimestampNs={firstTimestampNs}
+                    lastTimestampNs={lastTimestampNs}
+                    selectedTimestampIndex={selectedTimestampIndex}
                     selectedTimestamp={selectedTimestamp}
                     onSliderChange={handleSliderChange}
                     selectedRosbag={selectedRosbag}
                     searchMarks={[]} // COMMENTED OUT: Search functionality disabled
                     setSearchMarks={() => {}} // COMMENTED OUT: Search functionality disabled
+                    mcapBoundaries={mcapBoundaries}
                   />
                 </>
               }
