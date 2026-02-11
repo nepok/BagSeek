@@ -130,10 +130,12 @@ def get_timestamp_summary():
                 return jsonify(empty_response), 200
             rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
 
+        logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: relative_rosbag_path=%s, rosbag_name=%s", relative_rosbag_path, rosbag_name)
         lookup_dir = Path(LOOKUP_TABLES) / rosbag_name
 
         # Fast path: precomputed summary.json
         summary_path = lookup_dir / 'summary.json'
+        logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: lookup_dir=%s, summary exists=%s", lookup_dir, summary_path.exists())
         if summary_path.exists():
             with open(summary_path, 'r') as f:
                 summary = json.load(f)
@@ -183,6 +185,9 @@ def get_timestamp_summary():
 
             first_ts = summary.get('first_timestamp_ns')
             last_ts = summary.get('last_timestamp_ns')
+            logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: returning %d mcapRanges for %s (IDs: %s)",
+                            len(mcap_ranges), rosbag_name,
+                            [r.get('mcapIdentifier') for r in mcap_ranges[:5]])
             return jsonify({
                 'count': summary.get('total_count', 0),
                 'firstTimestampNs': str(first_ts) if first_ts is not None else None,
@@ -192,6 +197,7 @@ def get_timestamp_summary():
 
         # Fallback: read pyarrow parquet metadata (file footers only)
         if not lookup_dir.exists():
+            logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: lookup_dir does NOT exist: %s -> returning empty", lookup_dir)
             return jsonify(empty_response), 200
 
         parquet_files = sorted(
@@ -199,6 +205,7 @@ def get_timestamp_summary():
             key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf'),
         )
         if not parquet_files:
+            logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: no parquet files in %s -> returning empty", lookup_dir)
             return jsonify(empty_response), 200
 
         total_count = 0
@@ -251,6 +258,7 @@ def get_timestamp_summary():
                 logging.warning(f"Failed to read parquet metadata from {pf_path}: {e}")
                 continue
 
+        logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary (fallback): returning %d mcapRanges for %s", len(mcap_ranges), rosbag_name)
         return jsonify({
             'count': total_count,
             'firstTimestampNs': str(global_first) if global_first is not None else None,

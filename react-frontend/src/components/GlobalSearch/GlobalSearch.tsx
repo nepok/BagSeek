@@ -339,8 +339,8 @@ const GlobalSearch: React.FC = () => {
     // Compute filtered rosbags based on positional filter
     const filteredAvailableRosbags = positionallyFilteredRosbags
         ? availableRosbags.filter(rosbagPath => {
-            const basename = getBasename(rosbagPath);
-            return positionallyFilteredRosbags.includes(basename);
+            const name = extractRosbagName(rosbagPath);
+            return positionallyFilteredRosbags.some(f => extractRosbagName(f) === name);
           })
         : availableRosbags;
 
@@ -388,7 +388,10 @@ const GlobalSearch: React.FC = () => {
         // Restore from in-memory first
         if (cacheRef.search !== undefined) setSearch(cacheRef.search);
         if (cacheRef.models !== undefined) setModels(cacheRef.models);
-        if (cacheRef.rosbags !== undefined) setRosbags(cacheRef.rosbags);
+        if (cacheRef.rosbags !== undefined) {
+            console.log(`\t\t[MCAP-DEBUG] cache restore: setting rosbags from cache (${cacheRef.rosbags.length}):`, cacheRef.rosbags);
+            setRosbags(cacheRef.rosbags);
+        }
         if (cacheRef.viewMode !== undefined) setViewMode(cacheRef.viewMode);
         if (cacheRef.searchResults !== undefined) setSearchResults(cacheRef.searchResults);
         if (cacheRef.marksPerTopic !== undefined) setMarksPerTopic(cacheRef.marksPerTopic as any);
@@ -434,16 +437,20 @@ const GlobalSearch: React.FC = () => {
         
         // Restore positional filter from sessionStorage
         const loadPositionalFilter = () => {
+          console.log('\t\t[MCAP-DEBUG] loadPositionalFilter() called');
           try {
             const positionalFilterRaw = sessionStorage.getItem('__BagSeekPositionalFilter');
             if (positionalFilterRaw) {
               const filtered = JSON.parse(positionalFilterRaw);
               if (Array.isArray(filtered) && filtered.length > 0) {
+                console.log(`\t\t[MCAP-DEBUG] positionallyFilteredRosbags set (${filtered.length}):`, filtered);
                 setPositionallyFilteredRosbags(filtered);
               } else {
+                console.log('\t\t[MCAP-DEBUG] positionallyFilteredRosbags cleared (empty array)');
                 setPositionallyFilteredRosbags(null);
               }
             } else {
+              console.log('\t\t[MCAP-DEBUG] positionallyFilteredRosbags cleared (no sessionStorage key)');
               setPositionallyFilteredRosbags(null);
             }
           } catch {}
@@ -453,11 +460,17 @@ const GlobalSearch: React.FC = () => {
             if (mcapFilterRaw) {
               const parsed = JSON.parse(mcapFilterRaw);
               if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                console.log(`\t\t[MCAP-DEBUG] pendingMcapIds set (${Object.keys(parsed).length} rosbags):`, Object.keys(parsed));
+                for (const [k, v] of Object.entries(parsed)) {
+                  console.log(`\t\t[MCAP-DEBUG]   "${k}": ${(v as string[]).length} mcap IDs -> [${(v as string[]).join(', ')}]`);
+                }
                 setPendingMcapIds(parsed);
               } else {
+                console.log('\t\t[MCAP-DEBUG] pendingMcapIds cleared (empty object)');
                 setPendingMcapIds(null);
               }
             } else {
+              console.log('\t\t[MCAP-DEBUG] pendingMcapIds cleared (no sessionStorage key)');
               setPendingMcapIds(null);
             }
           } catch {}
@@ -511,21 +524,42 @@ const GlobalSearch: React.FC = () => {
         }
     }, [availableModels]);
 
-    // Preselect default rosbag path once rosbags are loaded
+    // Preselect default rosbag path once rosbags are loaded (only when no positional filter)
     useEffect(() => {
-        if (availableRosbags.length > 0 && rosbags.length === 0) {
+        if (availableRosbags.length > 0 && rosbags.length === 0 && !positionallyFilteredRosbags?.length) {
             const match = availableRosbags.find(p => p === DEFAULT_ROSBAG_PATH);
             if (match) setRosbags([match]);
         }
     }, [availableRosbags]);
     
+    // When coming from MAP "Apply to Search", auto-select the filtered rosbags with full paths
+    useEffect(() => {
+        try {
+            if (sessionStorage.getItem('__BagSeekApplyToSearchJustNavigated') !== '1') {
+                console.log('\t\t[MCAP-DEBUG] auto-select effect: __BagSeekApplyToSearchJustNavigated is NOT "1", skipping');
+                return;
+            }
+        } catch { return; }
+        console.log(`\t\t[MCAP-DEBUG] auto-select effect: positionallyFilteredRosbags=${positionallyFilteredRosbags?.length ?? 'null'}, availableRosbags=${availableRosbags.length}`);
+        if (positionallyFilteredRosbags && positionallyFilteredRosbags.length > 0 && availableRosbags.length > 0) {
+            const normalizedFiltered = new Set(positionallyFilteredRosbags.map(f => extractRosbagName(f)));
+            const matched = availableRosbags.filter(p => normalizedFiltered.has(extractRosbagName(p)));
+            console.log(`\t\t[MCAP-DEBUG] auto-select: normalizedFiltered (${normalizedFiltered.size}):`, Array.from(normalizedFiltered));
+            console.log(`\t\t[MCAP-DEBUG] auto-select: matched (${matched.length}):`, matched);
+            if (matched.length > 0) {
+                setRosbags(matched);
+            }
+            try { sessionStorage.removeItem('__BagSeekApplyToSearchJustNavigated'); } catch {}
+        }
+    }, [positionallyFilteredRosbags, availableRosbags]);
+    
     // Filter out selected rosbags that don't match positional filter
     useEffect(() => {
         if (positionallyFilteredRosbags && rosbags.length > 0) {
-            const filtered = rosbags.filter(rosbagPath => {
-                const basename = getBasename(rosbagPath);
-                return positionallyFilteredRosbags.includes(basename);
-            });
+            const normalizedFiltered = new Set(positionallyFilteredRosbags.map(f => extractRosbagName(f)));
+            const filtered = rosbags.filter(rosbagPath =>
+                normalizedFiltered.has(extractRosbagName(rosbagPath))
+            );
             if (filtered.length !== rosbags.length) {
                 setRosbags(filtered);
             }
@@ -1036,6 +1070,8 @@ const GlobalSearch: React.FC = () => {
               onMcapFiltersChange={setMcapFilters}
               pendingMcapIds={pendingMcapIds}
               onPendingMcapIdsConsumed={() => {
+                console.log('\t\t[MCAP-DEBUG] onPendingMcapIdsConsumed called! Setting pendingMcapIds=null');
+                console.trace('\t\t[MCAP-DEBUG] consumed stack trace');
                 setPendingMcapIds(null);
                 sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
               }}

@@ -595,6 +595,7 @@ const PositionalOverview: React.FC = () => {
   const [loadingPolygonFiles, setLoadingPolygonFiles] = useState<boolean>(false);
   const [importingPolygon, setImportingPolygon] = useState<boolean>(false);
   const [exportingList, setExportingList] = useState<boolean>(false);
+  const [applyingToSearch, setApplyingToSearch] = useState<boolean>(false);
   const [offsetDistance, setOffsetDistance] = useState<number>(0);
   const [showPolygonPopper, setShowPolygonPopper] = useState<boolean>(false);
   const [showPolygonSaveField, setShowPolygonSaveField] = useState<boolean>(false);
@@ -3126,12 +3127,18 @@ const PositionalOverview: React.FC = () => {
                   size="small"
                   variant="contained"
                   color="primary"
-                  disabled={polygons.filter((p) => p.isClosed).length === 0}
+                  disabled={polygons.filter((p) => p.isClosed).length === 0 || applyingToSearch}
                 onClick={async () => {
+                  setApplyingToSearch(true);
+                  try {
                   // Get rosbags that overlap with closed polygons (using offset if applicable)
                   const closedPolygons = polygons.filter((p) => p.isClosed);
                   const overlappingRosbags: string[] = [];
                   const mcapFilterMap: Record<string, string[]> = {};
+
+                  console.log('\t\t[MCAP-DEBUG] === Apply to Search clicked ===');
+                  console.log('\t\t[MCAP-DEBUG] Total rosbags to check:', rosbags.length);
+                  console.log('\t\t[MCAP-DEBUG] Closed polygons:', closedPolygons.length);
 
                   // Re-check overlaps and collect per-rosbag MCAP IDs
                   for (const rosbag of rosbags) {
@@ -3141,9 +3148,15 @@ const PositionalOverview: React.FC = () => {
                       const mcapIds = await getMcapsInsidePolygons(rosbag.name, closedPolygons, offsetDistance);
                       if (mcapIds.size > 0) {
                         mcapFilterMap[rosbag.name] = Array.from(mcapIds);
+                        console.log(`\t\t[MCAP-DEBUG] Rosbag "${rosbag.name}": ${mcapIds.size} MCAPs inside polygons -> [${Array.from(mcapIds).join(', ')}]`);
+                      } else {
+                        console.log(`\t\t[MCAP-DEBUG] Rosbag "${rosbag.name}": overlaps but 0 MCAPs inside`);
                       }
                     }
                   }
+
+                  console.log(`\t\t[MCAP-DEBUG] overlappingRosbags (${overlappingRosbags.length}):`, overlappingRosbags);
+                  console.log(`\t\t[MCAP-DEBUG] mcapFilterMap keys (${Object.keys(mcapFilterMap).length}):`, Object.keys(mcapFilterMap));
 
                   // Store filtered rosbags, MCAP IDs, and polygons in sessionStorage
                   try {
@@ -3151,21 +3164,29 @@ const PositionalOverview: React.FC = () => {
                     sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
                     if (Object.keys(mcapFilterMap).length > 0) {
                       sessionStorage.setItem('__BagSeekPositionalMcapFilter', JSON.stringify(mcapFilterMap));
+                      console.log('\t\t[MCAP-DEBUG] Stored mcapFilterMap in sessionStorage');
                     } else {
                       sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+                      console.log('\t\t[MCAP-DEBUG] No mcapFilterMap to store (empty)');
                     }
+                    // Flag that we just applied so Search auto-selects the filtered rosbags
+                    sessionStorage.setItem('__BagSeekApplyToSearchJustNavigated', '1');
                     // Dispatch custom event for same-tab updates
                     window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
                   } catch (e) {
                     console.error('Failed to store positional filter:', e);
                   }
 
+                  console.log('\t\t[MCAP-DEBUG] Navigating to /search');
                   // Navigate to GlobalSearch
                   navigate('/search');
+                  } finally {
+                    setApplyingToSearch(false);
+                  }
                 }}
                 sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
               >
-                Apply to Search
+                {applyingToSearch ? 'Computing...' : 'Apply to Search'}
               </Button>
                 <Button
                   size="small"
@@ -3189,6 +3210,16 @@ const PositionalOverview: React.FC = () => {
                 >
                   Clear All
                 </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    handleExportList();
+                  }}
+                >
+                  Export List
+                </Button>
+
               </Box>
             </Box>
           </Box>

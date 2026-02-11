@@ -4,7 +4,6 @@ import {
   Collapse,
   IconButton,
   Slider,
-  TextField,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -25,6 +24,8 @@ export interface McapRangeMeta {
 export interface RosbagMcapFilter {
   ranges: McapRangeMeta[];
   windows: Array<[number, number]>; // [startIdx, endIdx] into ranges array
+  /** Stable IDs for React keys; parallel to windows */
+  windowIds?: string[];
 }
 
 // Full filter state keyed by rosbag path
@@ -38,6 +39,20 @@ interface McapRangeFilterProps {
   pendingMcapIds?: Record<string, string[]> | null;
   /** Called after pending MCAP IDs have been consumed (converted to windows). */
   onPendingMcapIdsConsumed?: () => void;
+}
+
+/** Generate a stable id for a window (for React keys). */
+function genWindowId() {
+  return `w-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** Ensure windowIds array exists and matches windows length. */
+function ensureWindowIds(filter: { windows: [number, number][]; windowIds?: string[] }) {
+  const { windows, windowIds = [] } = filter;
+  if (windowIds.length === windows.length) return windowIds;
+  const result = [...windowIds];
+  while (result.length < windows.length) result.push(genWindowId());
+  return result.slice(0, windows.length);
 }
 
 /** Convert a set of MCAP IDs to contiguous [startIdx, endIdx] windows into a ranges array. */
@@ -87,87 +102,272 @@ function formatNsToTime(nsStr: string | undefined): string {
   return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 
-/** Build slider marks: tick at every minute, label (MCAP ID + time) every 5min (10min if >5h). */
-function buildMarks(
-  ranges: McapRangeMeta[]
-): { value: number; label?: React.ReactNode }[] {
-  if (ranges.length < 2) return [];
+/** Format a nanosecond timestamp string to HH:MM:SS time-of-day. */
+function formatNsToTimeWithSeconds(nsStr: string | undefined): string {
+  const ms = nsToMs(nsStr);
+  if (ms === null) return '??:??:??';
+  const d = new Date(ms);
+  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
-  const maxIdx = ranges.length - 1;
+const ONE_MIN_MS = 60_000;
+const TEN_SEC_MS = 10_000;
+
+/** Custom track: top = whole MCAP IDs (by index), bottom = whole minutes (by time). Not aligned. */
+interface McapRangeTrackProps extends React.HTMLAttributes<HTMLSpanElement> {
+  ranges: McapRangeMeta[];
+  maxIdx: number;
+  value: [number, number];
+}
+
+function McapRangeTrack({
+  ranges,
+  maxIdx,
+  value,
+  style,
+  className,
+  ...other
+}: McapRangeTrackProps) {
+  const [wStart, wEnd] = value;
   const firstMs = nsToMs(ranges[0]?.firstTimestampNs);
   const lastMs = nsToMs(ranges[maxIdx]?.lastTimestampNs);
-  if (firstMs === null || lastMs === null) return [];
 
-  const durationH = (lastMs - firstMs) / 3_600_000;
-  const labelIntervalMin = durationH > 5 ? 10 : 5;
-  const ONE_MIN_MS = 60_000;
+  // Top: whole MCAP IDs only (0, 1, 2...) - positioned by index fraction
+  const idLabelStep = Math.max(1, Math.ceil(ranges.length / 40));
+  const shouldShowId = (i: number) =>
+    i % idLabelStep === 0 || i === wStart || i === wEnd;
 
-  const msValues = ranges.map((r) => nsToMs(r.firstTimestampNs));
-  const startMinute = Math.ceil(firstMs / ONE_MIN_MS) * ONE_MIN_MS;
+  // Bottom: whole minutes only - positioned by time fraction
+  const minuteMarks: { minuteMs: number; frac: number }[] = [];
+  if (firstMs !== null && lastMs !== null && lastMs > firstMs) {
+    const startMinute = Math.ceil(firstMs / ONE_MIN_MS) * ONE_MIN_MS;
+    const endMinute = Math.floor(lastMs / ONE_MIN_MS) * ONE_MIN_MS;
+    const durationMs = lastMs - firstMs;
+    for (let t = startMinute; t <= endMinute; t += ONE_MIN_MS) {
+      const frac = (t - firstMs) / durationMs;
+      minuteMarks.push({ minuteMs: t, frac });
+    }
+  }
+  const todLabelStep = Math.max(1, Math.ceil(minuteMarks.length / 40));
+  const shouldShowTod = (i: number) => i % todLabelStep === 0;
 
-  const marks: { value: number; label?: React.ReactNode }[] = [];
-  const usedIndices = new Set<number>();
-  const labelledIndices = new Set<number>();
-  let searchFrom = 0;
+  // Small ticks every 10 seconds, derived from minute grid so they align
+  const tenSecMarks: { ms: number; frac: number }[] = [];
+  if (firstMs !== null && lastMs !== null && lastMs > firstMs) {
+    const durationMs = lastMs - firstMs;
+    const startMinute = Math.ceil(firstMs / ONE_MIN_MS) * ONE_MIN_MS;
+    const endMinute = Math.floor(lastMs / ONE_MIN_MS) * ONE_MIN_MS;
+    // Partial first minute: 10s marks between firstMs and startMinute
+    for (let t = Math.ceil(firstMs / TEN_SEC_MS) * TEN_SEC_MS; t < startMinute; t += TEN_SEC_MS) {
+      tenSecMarks.push({ ms: t, frac: (t - firstMs) / durationMs });
+    }
+    // Full minutes: :10, :20, :30, :40, :50 within each minute (omit :00 = minute mark)
+    for (let minute = startMinute; minute <= lastMs; minute += ONE_MIN_MS) {
+      for (let s = 1; s <= 5; s++) {
+        const t = minute + s * TEN_SEC_MS;
+        if (t > lastMs) break;
+        tenSecMarks.push({ ms: t, frac: (t - firstMs) / durationMs });
+      }
+    }
+  }
 
-  const makeLabel = (idx: number, useLastTs?: boolean) => {
-    const r = ranges[idx];
-    if (!r) return undefined;
-    const time = useLastTs
-      ? formatNsToTime(r.lastTimestampNs)
-      : formatNsToTime(r.firstTimestampNs);
-    return (
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.2 }}>
-        <span>{r.mcapIdentifier}</span>
-        <span style={{ color: 'rgba(255,255,255,0.35)' }}>{time}</span>
-      </span>
-    );
+  const labelStyle = {
+    position: 'absolute' as const,
+    transform: 'translateX(-50%)',
+    fontSize: 9,
+    pointerEvents: 'none' as const,
+    whiteSpace: 'nowrap' as const,
   };
 
-  for (let t = startMinute; t <= lastMs; t += ONE_MIN_MS) {
-    let bestIdx = searchFrom;
-    let bestDist = Infinity;
-    for (let i = searchFrom; i < msValues.length; i++) {
-      const ms = msValues[i];
-      if (ms === null) continue;
-      const dist = Math.abs(ms - t);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestIdx = i;
-      }
-      if (ms > t + ONE_MIN_MS) break;
-    }
+  const tickStyle = {
+    position: 'absolute' as const,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: 1,
+    backgroundColor: 'currentColor',
+    pointerEvents: 'none' as const,
+  };
 
-    if (usedIndices.has(bestIdx)) continue;
-    usedIndices.add(bestIdx);
-    searchFrom = Math.max(0, bestIdx - 1);
-
-    const minuteOfDay = Math.round(t / ONE_MIN_MS);
-    const isLabelled = minuteOfDay % labelIntervalMin === 0;
-
-    if (isLabelled) {
-      labelledIndices.add(bestIdx);
-      marks.push({ value: bestIdx, label: makeLabel(bestIdx) });
-    } else {
-      marks.push({ value: bestIdx });
-    }
-  }
-
-  // Always include first and last with labels
-  if (!usedIndices.has(0)) marks.unshift({ value: 0 });
-  if (!labelledIndices.has(0)) {
-    const existing = marks.find((m) => m.value === 0);
-    if (existing) existing.label = makeLabel(0);
-    else marks.unshift({ value: 0, label: makeLabel(0) });
-  }
-  if (!usedIndices.has(maxIdx)) marks.push({ value: maxIdx });
-  if (!labelledIndices.has(maxIdx)) {
-    const existing = marks.find((m) => m.value === maxIdx);
-    if (existing) existing.label = makeLabel(maxIdx, true);
-    else marks.push({ value: maxIdx, label: makeLabel(maxIdx, true) });
-  }
-
-  return marks;
+  return (
+    <span
+      style={{
+        display: 'block',
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: '50%',
+        transform: 'translateY(-50%)',
+        pointerEvents: 'none',
+      }}
+    >
+      {/* "ID" label on left, same height as ID row */}
+      <div
+        style={{
+          position: 'absolute',
+          top: -23,
+          left: -22,
+          width: 20,
+          fontSize: 9,
+          color: 'rgba(255,255,255,1)',
+          whiteSpace: 'nowrap',
+          textAlign: 'center',
+          transform: 'translateX(-11px)',
+        }}
+      >
+        ID
+      </div>
+      {/* "TOD" label on left, same height as time row */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -25,
+          left: -22,
+          width: 20,
+          fontSize: 9,
+          color: 'rgba(255,255,255,1)',
+          whiteSpace: 'nowrap',
+          textAlign: 'center',
+          transform: 'translateX(-11px)',
+        }}
+      >
+        TOD
+      </div>
+      {/* Visual range fill between thumbs */}
+      {maxIdx > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${(wStart / maxIdx) * 100}%`,
+            width: `${((wEnd - wStart) / maxIdx) * 100}%`,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            height: 8,
+            backgroundColor: 'rgba(180, 159, 204, 0.05)',
+            borderRadius: 4,
+            pointerEvents: 'none',
+            border: '1px solid rgba(180, 159, 204, 0.4)',
+          }}
+        />
+      )}
+      {/* ID labels above + ticks pointing down to slider */}
+      <div
+        style={{
+          position: 'absolute',
+          top: -23,
+          left: 0,
+          right: 0,
+          height: 0,
+        }}
+      >
+        {ranges.map((r, i) => {
+          if (!shouldShowId(i)) return null;
+          const frac = maxIdx > 0 ? i / maxIdx : 0;
+          const isActive = i === wStart || i === wEnd;
+          return (
+            <div
+              key={`id-${i}`}
+              style={{
+                ...labelStyle,
+                left: `${frac * 100}%`,
+                color: isActive ? '#90caf9' : 'rgba(255,255,255,0.5)',
+                fontWeight: isActive ? 600 : 400,
+              }}
+            >
+              {r.mcapIdentifier}
+              {/* Tick under ID pointing down to slider */}
+              <div
+                style={{
+                  ...tickStyle,
+                  top: '100%',
+                  marginTop: 2,
+                  height: 5,
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* MUI track bar (selected range) - must use original style/className for positioning */}
+      <span className={className} style={style} {...other} />
+      {/* Small ticks every 10 seconds - no labels */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -8,
+          left: 0,
+          right: 0,
+          height: 0,
+        }}
+      >
+        {tenSecMarks.map((m) => (
+          <div
+            key={`10s-${m.ms}`}
+            style={{
+              ...tickStyle,
+              left: `${m.frac * 100}%`,
+              bottom: 0,
+              height: 3,
+              opacity: 0.4,
+            }}
+          />
+        ))}
+      </div>
+      {/* Minute ticks - longer downward, slightly less transparent */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -8,
+          left: 0,
+          right: 0,
+          height: 0,
+        }}
+      >
+        {minuteMarks.map((m) => (
+          <div
+            key={`min-tick-${m.minuteMs}`}
+            style={{
+              ...tickStyle,
+              left: `${m.frac * 100}%`,
+              top: -3,
+              height: 8,
+              opacity: 0.6,
+            }}
+          />
+        ))}
+      </div>
+      {/* TOD labels below (only where shown) - no ticks, ticks are above */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -14,
+          left: 0,
+          right: 0,
+          height: 0,
+        }}
+      >
+        {minuteMarks.map((m, i) => {
+          if (!shouldShowTod(i)) return null;
+          const ns = BigInt(Math.round(m.minuteMs)) * BigInt(1_000_000);
+          const timeStr = formatNsToTime(String(ns));
+          return (
+            <div
+              key={`tod-${m.minuteMs}`}
+              style={{
+                ...labelStyle,
+                left: `${m.frac * 100}%`,
+                top: '100%',
+                marginTop: 2,
+                color: 'rgba(255,255,255,0.35)',
+                fontWeight: 400,
+              }}
+            >
+              {timeStr}
+            </div>
+          );
+        })}
+      </div>
+    </span>
+  );
 }
 
 const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
@@ -187,10 +387,15 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
 
   // Fetch MCAP metadata for selected rosbags that aren't cached yet
   useEffect(() => {
+    console.log(`\t\t[MCAP-DEBUG] fetch-meta effect: selectedRosbags=${selectedRosbags.length}, cached=${Object.keys(metaCache.current).length}, loading=${loading.size}`);
     const toFetch = selectedRosbags.filter(
       (r) => !metaCache.current[r] && !loading.has(r)
     );
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) {
+      console.log('\t\t[MCAP-DEBUG] fetch-meta: nothing to fetch');
+      return;
+    }
+    console.log(`\t\t[MCAP-DEBUG] fetch-meta: fetching ${toFetch.length} rosbags:`, toFetch);
 
     setLoading((prev) => {
       const next = new Set(prev);
@@ -214,13 +419,28 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
           })
         );
         metaCache.current[rosbag] = ranges;
+        console.log(`\t\t[MCAP-DEBUG] fetch-meta: "${rosbag}" -> ${ranges.length} ranges, IDs=[${ranges.map(r => r.mcapIdentifier).join(',')}]`);
 
-        // Initialize filter state for this rosbag if not present (no windows = full range)
+        // Initialize filter state for this rosbag if not present (pre-add full-range window so thumbs are movable)
         if (!filtersRef.current[rosbag]) {
-          onMcapFiltersChange({ ...filtersRef.current, [rosbag]: { ranges, windows: [] } });
+          const maxIdx = Math.max(0, ranges.length - 1);
+          console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with full-range window [0, ${maxIdx}], filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+          const updated = {
+            ...filtersRef.current,
+            [rosbag]: {
+              ranges,
+              windows: [[0, maxIdx] as [number, number]],
+              windowIds: [genWindowId()],
+            },
+          };
+          // Update ref synchronously so concurrent async callbacks see accumulated state
+          filtersRef.current = updated;
+          onMcapFiltersChange(updated);
+        } else {
+          console.log(`\t\t[MCAP-DEBUG] fetch-meta: "${rosbag}" already has filter state, NOT overwriting`);
         }
       } catch (e) {
-        console.error(`Failed to fetch MCAP metadata for ${rosbag}:`, e);
+        console.error(`\t\t[MCAP-DEBUG] fetch-meta: FAILED for "${rosbag}":`, e);
       } finally {
         setLoading((prev) => {
           const next = new Set(prev);
@@ -231,11 +451,52 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
     });
   }, [selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Ensure windowIds exist and are persisted (for stable React keys)
+  useEffect(() => {
+    let changed = false;
+    const next = { ...mcapFilters };
+    for (const rosbag of selectedRosbags) {
+      const filter = next[rosbag];
+      if (!filter?.windows?.length) continue;
+      const ids = ensureWindowIds(filter);
+      if (ids !== filter.windowIds) {
+        next[rosbag] = { ...filter, windowIds: ids };
+        changed = true;
+      }
+    }
+    if (changed) onMcapFiltersChange(next);
+  }, [mcapFilters, selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ensure every rosbag with ranges has at least one window (full range) so thumbs are always movable
+  useEffect(() => {
+    let changed = false;
+    const next = { ...mcapFilters };
+    for (const rosbag of selectedRosbags) {
+      const filter = next[rosbag];
+      if (!filter?.ranges?.length) continue;
+      if (filter.windows.length === 0) {
+        const maxIdx = Math.max(0, filter.ranges.length - 1);
+        console.log(`\t\t[MCAP-DEBUG] ensure-full-range: "${extractRosbagName(rosbag)}" has 0 windows, resetting to [0, ${maxIdx}]`);
+        next[rosbag] = {
+          ...filter,
+          windows: [[0, maxIdx] as [number, number]],
+          windowIds: [genWindowId()],
+        };
+        changed = true;
+      }
+    }
+    if (changed) {
+      console.log('\t\t[MCAP-DEBUG] ensure-full-range: CHANGED, calling onMcapFiltersChange');
+      onMcapFiltersChange(next);
+    }
+  }, [mcapFilters, selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Clean up filters for deselected rosbags
   useEffect(() => {
     const rosbagSet = new Set(selectedRosbags);
     const toRemove = Object.keys(mcapFilters).filter((r) => !rosbagSet.has(r));
     if (toRemove.length > 0) {
+      console.log(`\t\t[MCAP-DEBUG] cleanup: removing ${toRemove.length} deselected rosbags:`, toRemove.map(r => extractRosbagName(r)));
       const next = { ...mcapFilters };
       toRemove.forEach((r) => delete next[r]);
       onMcapFiltersChange(next);
@@ -244,41 +505,96 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
 
   // Apply pending MCAP IDs from the positional filter once ranges are loaded
   useEffect(() => {
-    if (!pendingMcapIds) return;
+    console.log(`\t\t[MCAP-DEBUG] pending effect: pendingMcapIds=${pendingMcapIds ? Object.keys(pendingMcapIds).length + ' keys' : 'null'}, selectedRosbags=${selectedRosbags.length}, mcapFilters keys=${Object.keys(mcapFilters).length}`);
+    if (!pendingMcapIds) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: pendingMcapIds is null, returning');
+      return;
+    }
+    // Don't process until rosbags have been selected (auto-select may not have run yet)
+    if (selectedRosbags.length === 0) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: selectedRosbags is empty, waiting for auto-select');
+      return;
+    }
 
-    // Check if all rosbags in pendingMcapIds have their ranges loaded
-    const allLoaded = Object.keys(pendingMcapIds).every(
-      (rosbag) => mcapFilters[rosbag]?.ranges?.length
-    );
-    if (!allLoaded) return;
+    // Resolve pendingMcapIds keys (map uses rosbag name) to full paths from selectedRosbags
+    const resolveKey = (key: string) =>
+      selectedRosbags.find((p) => extractRosbagName(p) === key || p === key) ?? key;
 
+    // Only consider rosbags that are actually in the current selection
+    const pendingEntries = Object.entries(pendingMcapIds);
+    const relevantEntries = pendingEntries.filter(([key]) => {
+      const rosbag = resolveKey(key);
+      const isRelevant = selectedRosbags.includes(rosbag);
+      if (!isRelevant) {
+        console.log(`\t\t[MCAP-DEBUG] pending effect: key="${key}" -> resolved="${rosbag}" NOT in selectedRosbags`);
+      }
+      return isRelevant;
+    });
+
+    console.log(`\t\t[MCAP-DEBUG] pending effect: ${pendingEntries.length} pending, ${relevantEntries.length} relevant`);
+
+    // If no relevant entries (all pending rosbags lack embeddings), consume and return
+    if (relevantEntries.length === 0) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: NO relevant entries -> consuming');
+      onPendingMcapIdsConsumed?.();
+      return;
+    }
+
+    // Wait until all relevant rosbags have their ranges loaded
+    const allLoaded = relevantEntries.every(([key]) => {
+      const rosbag = resolveKey(key);
+      const hasRanges = mcapFilters[rosbag]?.ranges?.length;
+      if (!hasRanges) {
+        console.log(`\t\t[MCAP-DEBUG] pending effect: "${key}" -> "${rosbag}" NOT loaded yet (ranges=${mcapFilters[rosbag]?.ranges?.length ?? 'undefined'})`);
+      }
+      return hasRanges;
+    });
+    if (!allLoaded) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: not all loaded, waiting...');
+      return;
+    }
+
+    console.log('\t\t[MCAP-DEBUG] pending effect: ALL loaded, applying windows...');
     const next = { ...mcapFilters };
     let applied = false;
-    for (const [rosbag, mcapIds] of Object.entries(pendingMcapIds)) {
+    for (const [key, mcapIds] of relevantEntries) {
+      const rosbag = resolveKey(key);
       const filter = next[rosbag];
       if (!filter || filter.ranges.length === 0) continue;
       const windows = mcapIdsToWindows(filter.ranges, mcapIds);
+      console.log(`\t\t[MCAP-DEBUG] pending effect: "${key}" -> ${mcapIds.length} mcapIds -> ${windows.length} windows: ${JSON.stringify(windows)}`);
       if (windows.length > 0) {
-        next[rosbag] = { ...filter, windows };
+        next[rosbag] = {
+          ...filter,
+          windows,
+          windowIds: windows.map(() => genWindowId()),
+        };
         applied = true;
       }
     }
     if (applied) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: APPLIED windows, calling onMcapFiltersChange');
+      filtersRef.current = next;
       onMcapFiltersChange(next);
       setExpanded(true);
+    } else {
+      console.log('\t\t[MCAP-DEBUG] pending effect: nothing applied (no windows produced)');
     }
+    console.log('\t\t[MCAP-DEBUG] pending effect: consuming pendingMcapIds');
     onPendingMcapIdsConsumed?.();
-  }, [pendingMcapIds, mcapFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingMcapIds, mcapFilters, selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addWindow = (rosbag: string) => {
     const filter = mcapFilters[rosbag];
     if (!filter) return;
     const maxIdx = Math.max(0, filter.ranges.length - 1);
+    const ids = ensureWindowIds(filter);
     const next = {
       ...mcapFilters,
       [rosbag]: {
         ...filter,
         windows: [...filter.windows, [0, maxIdx] as [number, number]],
+        windowIds: [...ids, genWindowId()],
       },
     };
     onMcapFiltersChange(next);
@@ -288,14 +604,33 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   const removeWindow = (rosbag: string, windowIdx: number) => {
     const filter = mcapFilters[rosbag];
     if (!filter) return;
-    const next = {
-      ...mcapFilters,
-      [rosbag]: {
-        ...filter,
-        windows: filter.windows.filter((_, i) => i !== windowIdx),
-      },
-    };
-    onMcapFiltersChange(next);
+    const maxIdx = Math.max(0, filter.ranges.length - 1);
+    const [wStart, wEnd] = filter.windows[windowIdx] ?? [0, maxIdx];
+    // Do nothing when full range is selected
+    if (wStart === 0 && wEnd === maxIdx && filter.windows.length <= 1) return;
+    const ids = ensureWindowIds(filter);
+    // If removing the last window, reset to full range instead of leaving empty
+    if (filter.windows.length <= 1) {
+      const next = {
+        ...mcapFilters,
+        [rosbag]: {
+          ...filter,
+          windows: [[0, maxIdx] as [number, number]],
+          windowIds: [genWindowId()],
+        },
+      };
+      onMcapFiltersChange(next);
+    } else {
+      const next = {
+        ...mcapFilters,
+        [rosbag]: {
+          ...filter,
+          windows: filter.windows.filter((_, i) => i !== windowIdx),
+          windowIds: ids.filter((_, i) => i !== windowIdx),
+        },
+      };
+      onMcapFiltersChange(next);
+    }
   };
 
   const updateWindow = (
@@ -322,16 +657,28 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   );
 
   // Only show rosbags that have MCAP metadata loaded and more than 1 MCAP
-  const rosbagEntries = selectedRosbags
-    .map((r) => ({ rosbag: r, filter: mcapFilters[r] }))
-    .filter((e) => e.filter && e.filter.ranges.length > 1);
+  const allEntries = selectedRosbags.map((r) => ({ rosbag: r, filter: mcapFilters[r] }));
+  const rosbagEntries = allEntries.filter((e) => e.filter && e.filter.ranges.length > 1);
+  const hiddenSingleMcap = allEntries.filter((e) => e.filter && e.filter.ranges.length === 1);
+  const hiddenNoFilter = allEntries.filter((e) => !e.filter);
+  const hiddenEmptyRanges = allEntries.filter((e) => e.filter && e.filter.ranges.length === 0);
+  console.log(`\t\t[MCAP-DEBUG] rosbagEntries: ${rosbagEntries.length} shown, ${hiddenSingleMcap.length} hidden (1 mcap), ${hiddenNoFilter.length} hidden (no filter), ${hiddenEmptyRanges.length} hidden (empty ranges), total selected=${selectedRosbags.length}`);
+  if (hiddenNoFilter.length > 0) {
+    console.log(`\t\t[MCAP-DEBUG] rosbagEntries hidden (no filter):`, hiddenNoFilter.map(e => extractRosbagName(e.rosbag)));
+  }
+  rosbagEntries.forEach(e => {
+    const w = e.filter!.windows;
+    const maxIdx = e.filter!.ranges.length - 1;
+    const isFullRange = w.length === 1 && w[0][0] === 0 && w[0][1] === maxIdx;
+    console.log(`\t\t[MCAP-DEBUG] rosbagEntry: "${extractRosbagName(e.rosbag)}" ranges=${e.filter!.ranges.length} windows=${JSON.stringify(w)} fullRange=${isFullRange}`);
+  });
 
   if (rosbagEntries.length === 0) return null;
 
   return (
     <Box
       sx={{
-        border: '1px solid rgba(255, 255, 255, 0.12)',
+        border: '1px solid rgba(255, 255, 255, 0.23)',
         borderRadius: 1,
         mb: 1,
         overflow: 'hidden',
@@ -346,7 +693,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
           px: 1.5,
           py: 0.5,
           cursor: 'pointer',
-          '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.04)' },
+          '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.06)' },
         }}
       >
         <ExpandMoreIcon
@@ -373,7 +720,14 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
 
       {/* Body */}
       <Collapse in={expanded}>
-        <Box sx={{ px: 1.5, pb: 1.5 }}>
+        <Box
+          sx={{
+            px: 2,
+            pt: 1,
+            pb: 1.5,
+            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          }}
+        >
           {rosbagEntries.map(({ rosbag, filter }) => {
             const { ranges, windows } = filter!;
             const maxIdx = ranges.length - 1;
@@ -383,10 +737,16 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
               ranges[maxIdx]?.lastTimestampNs
             );
 
-            const marks = buildMarks(ranges);
-
             return (
-              <Box key={rosbag} sx={{ mt: 1 }}>
+              <Box
+                key={rosbag}
+                sx={{
+                  mt: 1,
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: 1,
+                  p: 1,
+                }}
+              >
                 {/* Rosbag header */}
                 <Box
                   sx={{
@@ -394,6 +754,8 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     mb: 0.5,
+                    pb: 0.5,
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
                   }}
                 >
                   <Typography
@@ -429,35 +791,31 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                   </IconButton>
                 </Box>
 
-                {/* Windows */}
-                {windows.length === 0 && (
-                  <Typography
-                    variant="caption"
-                    sx={{ color: 'rgba(255,255,255,0.3)', ml: 1 }}
-                  >
-                    Full range (no filter)
-                  </Typography>
-                )}
+                {/* Slider(s): one per window (always at least one, pre-added as full range) */}
                 {windows.map((window, wIdx) => {
                   const [wStart, wEnd] = window;
-                  const startMcap = ranges[wStart];
-                  const endMcap = ranges[wEnd];
+                  const windowIds = ensureWindowIds(filter!);
+                  const windowId = windowIds[wIdx] ?? `fallback-${wIdx}`;
 
                   return (
                     <Box
-                      key={wIdx}
-                      sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}
+                      key={windowId}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        mb: 0.5,
+                        p: 1,
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: 1,
+                      }}
                     >
-                      {/* Range slider */}
-                      <Box sx={{ flexGrow: 1, px: 1 }}>
+                      {/* Range slider with custom track (ID above, TOD below) */}
+                      <Box sx={{ flexGrow: 1, pl: 5, pr: 1 }}>
                         <Slider
                           value={[wStart, wEnd]}
                           onChange={(_, newValue) =>
-                            updateWindow(
-                              rosbag,
-                              wIdx,
-                              newValue as [number, number]
-                            )
+                            updateWindow(rosbag, wIdx, newValue as [number, number])
                           }
                           min={0}
                           max={maxIdx}
@@ -465,30 +823,36 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                           valueLabelFormat={(idx) => {
                             const r = ranges[idx];
                             if (!r) return String(idx);
-                            return `MCAP ${r.mcapIdentifier} (${formatNsToTime(r.firstTimestampNs)})`;
+                            return `MCAP ${r.mcapIdentifier} (${formatNsToTimeWithSeconds(r.firstTimestampNs)})`;
                           }}
-                          marks={marks}
+                          components={{
+                            Track: (props) => (
+                              <McapRangeTrack
+                                {...props}
+                                ranges={ranges}
+                                maxIdx={maxIdx}
+                                value={[wStart, wEnd]}
+                              />
+                            ),
+                          }}
                           sx={{
-                            mb: 3,
-                            '& .MuiSlider-mark': {
-                              height: 4,
-                              width: 1.5,
-                              backgroundColor: 'rgba(255,255,255,0.2)',
-                            },
-                            '& .MuiSlider-markLabel': {
-                              fontSize: '0.55rem',
-                              color: 'rgba(255,255,255,0.5)',
-                              whiteSpace: 'nowrap',
-                            },
+                            my: 1, // Equal space above and below for ID/TOD labels, centers slider in box
                           }}
                         />
                       </Box>
 
-                      {/* Remove button */}
+                      {/* Remove button - disabled when only one window */}
                       <IconButton
                         size="small"
                         onClick={() => removeWindow(rosbag, wIdx)}
-                        sx={{ color: 'rgba(255,255,255,0.4)' }}
+                        disabled={windows.length <= 1}
+                        sx={{
+                          color: 'rgba(255,255,255,0.4)',
+                          '&.Mui-disabled': {
+                            color: 'rgba(255,255,255,0.15)',
+                            opacity: 0.6,
+                          },
+                        }}
                       >
                         <CloseIcon fontSize="small" />
                       </IconButton>
