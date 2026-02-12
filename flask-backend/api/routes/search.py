@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from flask import Blueprint, jsonify, request
 import open_clip
 from ..config import EMBEDDINGS, LOOKUP_TABLES, OPEN_CLIP_MODELS, MAX_K, GEMMA_AVAILABLE, gemma_tokenizer, gemma_model
-from ..state import SEARCH_PROGRESS
+from ..state import SEARCH_PROGRESS, start_new_search, is_search_cancelled, cancel_current_search
 from ..utils.rosbag import load_lookup_tables_for_rosbag
 from ..utils.clip import get_text_embedding, load_agriclip, resolve_custom_checkpoint, tokenize_texts
 
@@ -68,11 +68,25 @@ def get_search_status():
     return jsonify(SEARCH_PROGRESS)
 
 
+@search_bp.route('/api/cancel-search', methods=['POST'])
+def cancel_search():
+    """Cancel the currently running search."""
+    cancel_current_search()
+    SEARCH_PROGRESS["status"] = "idle"
+    SEARCH_PROGRESS["progress"] = -1
+    SEARCH_PROGRESS["message"] = "Search cancelled."
+    logging.info("[SEARCH] Search cancelled by user")
+    return jsonify({'cancelled': True})
+
+
 @search_bp.route('/api/search', methods=['GET'])
 def search():
     # ---- Debug logging for paths
     logging.debug("[SEARCH] LOOKUP_TABLES=%s (exists=%s)", LOOKUP_TABLES, LOOKUP_TABLES.exists() if LOOKUP_TABLES else False)
     logging.debug("[SEARCH] EMBEDDINGS=%s (exists=%s)", EMBEDDINGS, EMBEDDINGS.exists() if EMBEDDINGS else False)
+
+    # ---- Register this search (supersedes any running search)
+    search_id = start_new_search()
 
     # ---- Initial status
     SEARCH_PROGRESS["status"] = "running"
@@ -94,6 +108,7 @@ def search():
 
     # ---- Parse inputs
     mcap_filter_raw = request.args.get('mcapFilter', default=None, type=str)
+    topics_raw = request.args.get('topics', default=None, type=str)
     try:
         models_list = [m.strip() for m in models.split(",") if m.strip()]  # Filter out empty model names
         # Use rosbag paths directly - frontend sends relative paths that match preprocessing output
@@ -102,6 +117,7 @@ def search():
         k_subsample = max(1, int(accuracy))
         # Parse optional MCAP filter: { "rosbag_path": [[startId, endId], ...], ... }
         mcap_filter = json.loads(mcap_filter_raw) if mcap_filter_raw else None
+        topics_list = [t.strip() for t in topics_raw.split(",") if t.strip()] if topics_raw else None
     except Exception as e:
         logging.exception("[C] Failed parsing inputs")
         return jsonify({'error': f'Invalid inputs: {e}'}), 400
@@ -123,6 +139,10 @@ def search():
         logging.debug("[SEARCH] total_steps=%d device=%s torch.cuda.is_available()=%s", total_steps, device, torch.cuda.is_available())
 
         for model_name in models_list:
+            if is_search_cancelled(search_id):
+                logging.info("[SEARCH] Cancelled before model %s", model_name)
+                break
+
             model = None
             tokenizer = None
             query_embedding = None
@@ -162,6 +182,10 @@ def search():
             query_embedding = query_embedding.astype("float32", copy=False)
 
             for rosbag_name in rosbags_list:
+                if is_search_cancelled(search_id):
+                    logging.info("[SEARCH] Cancelled before rosbag %s", rosbag_name)
+                    break
+
                 # Progress tracking: each (model, rosbag) pair gets a slice of 0-99%
                 base_progress = (step_count / total_steps) * 0.99
                 step_range = 0.99 / total_steps
@@ -262,6 +286,15 @@ def search():
                         logging.debug("[SEARCH] SKIP: No rows after MCAP filter for %s/%s", model_name, rosbag_name)
                         continue
 
+                # ---- Filter by topics (optional)
+                if topics_list and "topic" in mf.columns:
+                    pre_topic_count = len(mf)
+                    mf = mf[mf["topic"].isin(topics_list)]
+                    logging.info("[SEARCH-DEBUG] Topic filter: %d -> %d rows", pre_topic_count, len(mf))
+                    if mf.empty:
+                        logging.debug("[SEARCH] SKIP: No rows after topic filter for %s/%s", model_name, rosbag_name)
+                        continue
+
                 # ---- Subsample per topic
                 parts, per_topic_counts_before, per_topic_counts_after = [], {}, {}
                 for topic, df_t in mf.groupby("topic", sort=False):
@@ -325,6 +358,10 @@ def search():
                 t_chunks_start = time.perf_counter()
 
                 for shard_id, df_s in mf_sel.groupby("shard_id", sort=False):
+                    if is_search_cancelled(search_id):
+                        logging.info("[SEARCH] Cancelled during shard processing")
+                        break
+
                     shard_path = shards_dir / shard_id
                     if not shard_path.is_file():
                         continue
@@ -544,6 +581,15 @@ def search():
             # Cleanup GPU per model
             del model
             torch.cuda.empty_cache()
+
+        # ---- Check for cancellation before post-processing
+        if is_search_cancelled(search_id):
+            logging.info("[SEARCH] Search cancelled, skipping post-processing")
+            torch.cuda.empty_cache()
+            SEARCH_PROGRESS["status"] = "cancelled"
+            SEARCH_PROGRESS["progress"] = 0.0
+            SEARCH_PROGRESS["message"] = "Search cancelled."
+            return jsonify({'cancelled': True, 'results': [], 'marksPerTopic': {}})
 
         # ---- Post processing
         all_results = sorted([r for r in all_results if isinstance(r, dict)], key=lambda x: x['similarityScore'])

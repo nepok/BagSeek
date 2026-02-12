@@ -312,6 +312,7 @@ const GlobalSearch: React.FC = () => {
     const searchIconRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
     const hasAttemptedRefreshForPositionalMismatchRef = useRef<string | null>(null);
 
     const [models, setModels] = useState<string[]>([]);
@@ -716,6 +717,14 @@ const GlobalSearch: React.FC = () => {
                 return; // No rosbags/models available at all
             }
             
+            // Cancel any running search (frontend fetch + backend processing)
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+            fetch('/api/cancel-search', { method: 'POST' }).catch(() => {});
+            const abortController = new AbortController();
+            abortControllerRef.current = abortController;
+
             // Clear UI before starting a new search
             setSearchResults([]);
             setMarksPerTopic({});
@@ -731,7 +740,7 @@ const GlobalSearch: React.FC = () => {
                 let queryToUse = search;
                 if (enhancePrompt) {
                     try {
-                        const enhanceResponse = await fetch(`/api/enhance-prompt?prompt=${encodeURIComponent(search)}`);
+                        const enhanceResponse = await fetch(`/api/enhance-prompt?prompt=${encodeURIComponent(search)}`, { signal: abortController.signal });
                         const enhanceData = await enhanceResponse.json();
                         if (enhanceData.enhanced) {
                             queryToUse = enhanceData.enhanced;
@@ -740,11 +749,12 @@ const GlobalSearch: React.FC = () => {
                             setEnhancedPrompt(enhanceData.enhanced);
                         }
                     } catch (error) {
+                        if (error instanceof DOMException && error.name === 'AbortError') return;
                         console.error('Failed to enhance prompt:', error);
                         // Continue with original prompt if enhancement fails
                     }
                 }
-                
+
                 // Compute effective rosbags/models based on topic filter
                 let effectiveModels = effectiveModelsPre;
                 let effectiveRosbags = effectiveRosbagsPre;
@@ -788,14 +798,16 @@ const GlobalSearch: React.FC = () => {
                   params.topics = selectedTopics.join(',');
                 }
                 const queryParams = new URLSearchParams(params).toString();
-                const response = await fetch(`/api/search?${queryParams}`, { method: 'GET' });
+                const response = await fetch(`/api/search?${queryParams}`, { method: 'GET', signal: abortController.signal });
                 const data = await response.json();
+                if (data.cancelled) return; // Search was superseded, ignore results
                 setSearchResults(data.results || []);
                 setMarksPerTopic(data.marksPerTopic || {});
                 setSearchDone(true);
                 setConfirmedModels(models);
                 setConfirmedRosbags(rosbags);
             } catch (error) {
+                if (error instanceof DOMException && error.name === 'AbortError') return; // Cancelled, not an error
                 console.error('Search failed', error);
                 // Leave UI empty on failure since we cleared before starting
                 setSearchDone(true);

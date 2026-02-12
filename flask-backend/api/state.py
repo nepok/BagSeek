@@ -3,6 +3,7 @@
 Manages shared global state including caches, progress tracking, and runtime variables.
 Thread-safe access is provided via locks for mutable state.
 """
+import uuid
 from pathlib import Path
 from threading import Lock
 import pandas as pd
@@ -87,6 +88,32 @@ def update_search_progress(status: str = None, progress: float = None, message: 
             SEARCH_PROGRESS["progress"] = progress
         if message is not None:
             SEARCH_PROGRESS["message"] = message
+
+
+# Search cancellation via generation ID
+_search_id_lock = Lock()
+_current_search_id: str | None = None
+
+
+def start_new_search() -> str:
+    """Mark a new search as current, superseding any running search. Returns the new search ID."""
+    global _current_search_id
+    with _search_id_lock:
+        _current_search_id = uuid.uuid4().hex
+        return _current_search_id
+
+
+def is_search_cancelled(search_id: str) -> bool:
+    """Check if the given search has been superseded by a newer one."""
+    with _search_id_lock:
+        return _current_search_id != search_id
+
+
+def cancel_current_search() -> None:
+    """Cancel the current search (without starting a new one)."""
+    global _current_search_id
+    with _search_id_lock:
+        _current_search_id = None
 
 
 SEARCHED_ROSBAGS: list[str] = []
