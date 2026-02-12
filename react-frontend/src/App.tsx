@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Box } from '@mui/material';
+import { Box, Slider, Typography } from '@mui/material';
 import Header from './components/Header/Header';
 import TimestampPlayer from './components/TimestampPlayer/TimestampPlayer';
 import './App.css';
@@ -10,8 +10,31 @@ import Export from './components/Export/Export';
 import { useError } from './components/ErrorContext/ErrorContext';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
 import PositionalOverview from './components/PositionalOverview/PositionalOverview';
+import TractorLoader from './components/TractorLoader/TractorLoader';
 import { sortTopicsObject } from './utils/topics';
 import { extractRosbagName } from './utils/rosbag';
+
+function TractorDebugPage() {
+  const [progress, setProgress] = useState(0);
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', width: '100%', gap: 3 }}>
+      <TractorLoader progress={progress} />
+      <Box sx={{ width: 'calc(100% - 100px)', px: '50px' }}>
+        <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.5)', mb: 1 }}>
+          Progress: {Math.round(progress)}%
+        </Typography>
+        <Slider
+          value={progress}
+          onChange={(_, v) => setProgress(v as number)}
+          min={0}
+          max={100}
+          step={1}
+          valueLabelDisplay="auto"
+        />
+      </Box>
+    </Box>
+  );
+}
 
 interface Node {
   id: number;
@@ -518,8 +541,13 @@ function App() {
                 </>
               }
             />
-            <Route path="/search" element={<GlobalSearch />} />
+            <Route path="/search" element={
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <GlobalSearch />
+              </Box>
+            } />
             <Route path="/positional-overview" element={<PositionalOverview />} />
+            <Route path="/tractor" element={<TractorDebugPage />} />
             <Route path="*" element={<Navigate to="/explore" replace />} />
           </Routes>
         </Box>
