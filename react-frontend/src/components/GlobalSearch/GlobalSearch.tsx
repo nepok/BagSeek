@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import DownloadIcon from '@mui/icons-material/Download';
+import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import RoomIcon from '@mui/icons-material/Room';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -76,14 +77,18 @@ type SearchResultItem = {
   minuteOfDay: string;
   model: string;
   mcap_identifier?: string;
+  shard_id?: string;
+  row_in_shard?: number;
 };
 
 function ResultImageCard({
   result,
   onOpenExplore,
+  onSearchWithImage,
 }: {
   result: SearchResultItem;
   onOpenExplore: () => void;
+  onSearchWithImage: () => void;
 }) {
   const { still, onPointerEnter, onPointerMove, onPointerLeave } = useHoverStill(500, 3);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -286,6 +291,10 @@ function ResultImageCard({
         <MenuItem onClick={handleDownload} disabled={!imageUrl}>
           <DownloadIcon sx={{ fontSize: 18, mr: 1 }} />
           Download image
+        </MenuItem>
+        <MenuItem onClick={() => { setContextMenu(null); onSearchWithImage(); }}>
+          <ImageSearchIcon sx={{ fontSize: 18, mr: 1 }} />
+          Search with this image
         </MenuItem>
       </Menu>
     </Box>
@@ -829,6 +838,93 @@ const GlobalSearch: React.FC = () => {
         }
     };
 
+    const handleSearchWithImage = async (result: {
+        rosbag: string;
+        topic: string;
+        mcap_identifier?: string;
+        model?: string;
+        shard_id?: string;
+        row_in_shard?: number;
+    }) => {
+        const hasDirect = result?.shard_id != null && result?.row_in_shard != null && result?.model;
+        const hasManifest = result?.rosbag && result?.topic && result?.mcap_identifier;
+        if (!hasDirect && !hasManifest) return;
+
+        const effectiveRosbagsPre = rosbags.length > 0 ? rosbags : [...rosbagsToUse];
+        const effectiveModelsPre = models.length > 0 ? models : [...availableModels];
+        if (effectiveRosbagsPre.length === 0 || effectiveModelsPre.length === 0) return;
+
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        fetch('/api/cancel-search', { method: 'POST' }).catch(() => {});
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
+        setSearchResults([]);
+        setMarksPerTopic({});
+        setConfirmedModels(models);
+        setConfirmedRosbags(rosbags);
+        setSearchDone(false);
+        setDisplayedResultsCount(initial_render_limit);
+        setSearchStatus({ progress: 0, status: 'running', message: 'Searching by image...' });
+        startStatusPolling();
+
+        try {
+            let effectiveModels = effectiveModelsPre;
+            let effectiveRosbags = effectiveRosbagsPre;
+            if (selectedTopics.length > 0) {
+                if (topicAvailableRosbags) effectiveRosbags = effectiveRosbagsPre.filter(r => topicAvailableRosbags.has(r));
+                if (topicAvailableModels) effectiveModels = effectiveModelsPre.filter(m => topicAvailableModels.has(m));
+            }
+            if (effectiveRosbags.length === 0 || effectiveModels.length === 0) {
+                setSearchDone(true);
+                setSearchStatus({ progress: 0, status: 'done', message: 'No rosbags/models available for selected topics.' });
+                return;
+            }
+
+            const mcapFilterParam: Record<string, [number, number][]> = {};
+            for (const [rosbag, filter] of Object.entries(mcapFilters)) {
+                if (filter.windows.length > 0 && filter.ranges.length > 0) {
+                    mcapFilterParam[rosbag] = filter.windows.map(([startIdx, endIdx]) => [
+                        parseInt(filter.ranges[startIdx]?.mcapIdentifier ?? '0', 10),
+                        parseInt(filter.ranges[endIdx]?.mcapIdentifier ?? '0', 10),
+                    ]);
+                }
+            }
+
+            const params: Record<string, string> = {
+                imageRosbag: result.rosbag,
+                models: effectiveModels.join(','),
+                rosbags: effectiveRosbags.join(','),
+                timeRange: timeRange.join(','),
+                accuracy: sampling.toString(),
+            };
+            if (result.topic) params.imageTopic = result.topic;
+            if (result.mcap_identifier) params.imageMcapIdentifier = result.mcap_identifier;
+            if (result.model) params.imageModel = result.model;
+            if (result.shard_id != null) params.imageShardId = String(result.shard_id);
+            if (result.row_in_shard != null) params.imageRowInShard = String(result.row_in_shard);
+            if (Object.keys(mcapFilterParam).length > 0) {
+                params.mcapFilter = JSON.stringify(mcapFilterParam);
+            }
+            if (selectedTopics.length > 0) {
+                params.topics = selectedTopics.join(',');
+            }
+            const queryParams = new URLSearchParams(params).toString();
+            const response = await fetch(`/api/search-by-image?${queryParams}`, { method: 'GET', signal: abortController.signal });
+            const data = await response.json();
+            if (data.cancelled) return;
+            setSearchResults(data.results || []);
+            setMarksPerTopic(data.marksPerTopic || {});
+            setSearchDone(true);
+        } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') return;
+            console.error('Search by image failed', error);
+            setSearchDone(true);
+        }
+    };
+
     const openExplorePage = (result: { rosbag: string; topic: string; timestamp: string }) => {
         if (!result || !result.rosbag || !result.topic || !result.timestamp) return;
         // Cache current tab before navigating
@@ -1310,6 +1406,7 @@ const GlobalSearch: React.FC = () => {
                           <ResultImageCard
                             result={result as any}
                             onOpenExplore={() => openExplorePage(result)}
+                            onSearchWithImage={() => handleSearchWithImage(result)}
                           />
                         )}
                       </Box>

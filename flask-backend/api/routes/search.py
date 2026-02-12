@@ -20,6 +20,103 @@ from ..utils.clip import get_text_embedding, load_agriclip, resolve_custom_check
 search_bp = Blueprint('search', __name__)
 
 
+def _get_image_embedding_direct(
+    model_name: str,
+    rosbag_name: str,
+    shard_id: str,
+    row_in_shard: int,
+) -> np.ndarray | None:
+    """
+    Load a precomputed image embedding directly from shard by position (no manifest lookup).
+    Use when exact shard_id and row_in_shard are known from a search result.
+    """
+    base = EMBEDDINGS / model_name / rosbag_name
+    shards_dir = base / "shards"
+    shard_path = shards_dir / shard_id
+
+    if not shard_path.is_file():
+        logging.debug("[SEARCH-BY-IMAGE] Shard not found for direct load: %s", shard_path)
+        return None
+
+    try:
+        arr = np.load(shard_path, mmap_mode="r")
+        if arr.dtype != np.float32:
+            arr = arr.astype(np.float32, copy=False)
+        embedding = arr[int(row_in_shard)].copy()
+        return embedding
+    except Exception as e:
+        logging.debug("[SEARCH-BY-IMAGE] Failed direct load from %s row %s: %s", shard_path, row_in_shard, e)
+        return None
+
+
+def _get_image_embedding_from_shards(
+    model_name: str,
+    rosbag_name: str,
+    topic: str,
+    mcap_identifier: str,
+) -> np.ndarray | None:
+    """
+    Look up a precomputed image embedding from the manifest and shards.
+
+    Args:
+        model_name: Embedding model name (e.g. 'ViT-B-16-quickgelu__openai')
+        rosbag_name: Rosbag path containing the image
+        topic: Image topic (e.g. '/camera/image_raw')
+        mcap_identifier: MCAP identifier for the image
+
+    Returns:
+        Embedding vector as float32 numpy array, or None if not found.
+    """
+    base = EMBEDDINGS / model_name / rosbag_name
+    manifest_path = base / "manifest.parquet"
+    shards_dir = base / "shards"
+
+    if not manifest_path.is_file() or not shards_dir.is_dir():
+        logging.debug("[SEARCH-BY-IMAGE] Missing manifest or shards for %s/%s", model_name, rosbag_name)
+        return None
+
+    try:
+        mf = pd.read_parquet(
+            manifest_path,
+            columns=["topic", "shard_id", "row_in_shard", "mcap_identifier"],
+        )
+    except Exception as e:
+        logging.debug("[SEARCH-BY-IMAGE] Failed to read manifest %s: %s", manifest_path, e)
+        return None
+
+    mask = (mf["topic"] == topic) & (mf["mcap_identifier"].astype(str) == str(mcap_identifier))
+    matches = mf.loc[mask]
+
+    if matches.empty:
+        logging.debug(
+            "[SEARCH-BY-IMAGE] No matching row for topic=%s mcap_id=%s in %s/%s",
+            topic,
+            mcap_identifier,
+            model_name,
+            rosbag_name,
+        )
+        return None
+
+    row = matches.iloc[0]
+    shard_id = row["shard_id"]
+    row_in_shard = int(row["row_in_shard"])
+    shard_path = shards_dir / shard_id
+
+    if not shard_path.is_file():
+        logging.debug("[SEARCH-BY-IMAGE] Shard not found: %s", shard_path)
+        return None
+
+    try:
+        arr = np.load(shard_path, mmap_mode="r")
+        if arr.dtype != np.float32:
+            arr = arr.astype(np.float32, copy=False)
+        embedding = arr[row_in_shard].copy()
+        return embedding
+    except Exception as e:
+        logging.debug("[SEARCH-BY-IMAGE] Failed to load embedding from %s row %d: %s", shard_path, row_in_shard, e)
+        return None
+
+
 @search_bp.route('/api/enhance-prompt', methods=['GET'])
 def enhance_prompt_endpoint():
     """Enhance a user prompt using the gemma model."""
@@ -548,6 +645,8 @@ def search():
                         'timestamp': ts_str,
                         'minuteOfDay': minute_str,
                         'mcap_identifier': m["mcap_identifier"],
+                        'shard_id': m["shard_id"],
+                        'row_in_shard': m["row_in_shard"],
                         'model': model_name
                     })
 
@@ -644,5 +743,427 @@ def search():
         SEARCH_PROGRESS["message"] = f"Search failed. Error ID: {error_id}"
         return jsonify({
             'error': 'Search failed. Please try again.',
+            'error_id': error_id
+        }), 500
+
+
+@search_bp.route('/api/search-by-image', methods=['GET'])
+def search_by_image():
+    """
+    Same as /api/search but uses a precomputed image embedding as the query vector
+    instead of embedding text. The source image is identified by imageRosbag,
+    imageTopic, and imageMcapIdentifier.
+    """
+    # ---- Debug logging for paths
+    logging.debug("[SEARCH-BY-IMAGE] LOOKUP_TABLES=%s (exists=%s)", LOOKUP_TABLES, LOOKUP_TABLES.exists() if LOOKUP_TABLES else False)
+    logging.debug("[SEARCH-BY-IMAGE] EMBEDDINGS=%s (exists=%s)", EMBEDDINGS, EMBEDDINGS.exists() if EMBEDDINGS else False)
+
+    # ---- Register this search (supersedes any running search)
+    search_id = start_new_search()
+
+    # ---- Initial status
+    SEARCH_PROGRESS["status"] = "running"
+    SEARCH_PROGRESS["progress"] = 0.00
+
+    # ---- Inputs
+    image_rosbag = request.args.get('imageRosbag', default=None, type=str)
+    image_topic = request.args.get('imageTopic', default=None, type=str)
+    image_mcap_identifier = request.args.get('imageMcapIdentifier', default=None, type=str)
+    image_model = request.args.get('imageModel', default=None, type=str)
+    image_shard_id = request.args.get('imageShardId', default=None, type=str)
+    image_row_in_shard = request.args.get('imageRowInShard', default=None, type=str)
+    models = request.args.get('models', default=None, type=str)
+    rosbags = request.args.get('rosbags', default=None, type=str)
+    timeRange = request.args.get('timeRange', default=None, type=str)
+    accuracy = request.args.get('accuracy', default=None, type=int)
+
+    # ---- Validate inputs
+    if image_rosbag is None:
+        return jsonify({'error': 'No imageRosbag provided'}), 400
+    has_direct = image_model and image_shard_id and image_row_in_shard
+    has_manifest = image_topic and image_mcap_identifier
+    if not has_direct and not has_manifest:
+        return jsonify({'error': 'Provide either (imageModel, imageShardId, imageRowInShard) or (imageTopic, imageMcapIdentifier)'}), 400
+    if models is None:             return jsonify({'error': 'No models provided'}), 400
+    if rosbags is None:            return jsonify({'error': 'No rosbags provided'}), 400
+    if timeRange is None:          return jsonify({'error': 'No time range provided'}), 400
+    if accuracy is None:          return jsonify({'error': 'No accuracy provided'}), 400
+
+    # ---- Parse inputs
+    mcap_filter_raw = request.args.get('mcapFilter', default=None, type=str)
+    topics_raw = request.args.get('topics', default=None, type=str)
+    try:
+        models_list = [m.strip() for m in models.split(",") if m.strip()]
+        rosbags_list = [r.strip() for r in rosbags.split(",") if r.strip()]
+        time_start, time_end = map(int, timeRange.split(","))
+        k_subsample = max(1, int(accuracy))
+        mcap_filter = json.loads(mcap_filter_raw) if mcap_filter_raw else None
+        topics_list = [t.strip() for t in topics_raw.split(",") if t.strip()] if topics_raw else None
+    except Exception as e:
+        logging.exception("[SEARCH-BY-IMAGE] Failed parsing inputs")
+        return jsonify({'error': f'Invalid inputs: {e}'}), 400
+
+    if not models_list:
+        return jsonify({'error': 'No valid models provided (empty or whitespace-only)'}), 400
+    if not rosbags_list:
+        return jsonify({'error': 'No valid rosbags provided (empty or whitespace-only)'}), 400
+
+    # When using exact embedding (shard_id, row_in_shard), ensure the source model is in the list
+    if has_direct and image_model and image_model not in models_list:
+        models_list = [image_model] + [m for m in models_list if m != image_model]
+
+    # ---- State
+    marks: dict[tuple, set] = {}
+    all_results: list[dict] = []
+
+    try:
+        total_steps = max(1, len(models_list) * len(rosbags_list))
+        step_count = 0
+
+        for model_name in models_list:
+            if is_search_cancelled(search_id):
+                logging.info("[SEARCH-BY-IMAGE] Cancelled before model %s", model_name)
+                break
+
+            # Load precomputed image embedding: prefer direct (shard_id, row_in_shard) when available
+            if model_name == image_model and has_direct:
+                try:
+                    row_val = int(image_row_in_shard)
+                except (TypeError, ValueError):
+                    query_embedding = None
+                else:
+                    query_embedding = _get_image_embedding_direct(
+                        model_name, image_rosbag, image_shard_id, row_val
+                    )
+            else:
+                if has_manifest:
+                    query_embedding = _get_image_embedding_from_shards(
+                        model_name, image_rosbag, image_topic, image_mcap_identifier
+                    )
+                else:
+                    query_embedding = None
+            if query_embedding is None:
+                logging.debug("[SEARCH-BY-IMAGE] No embedding for source image in model %s; skipping", model_name)
+                continue
+
+            query_embedding = query_embedding.astype("float32", copy=False)
+
+            for rosbag_name in rosbags_list:
+                if is_search_cancelled(search_id):
+                    logging.info("[SEARCH-BY-IMAGE] Cancelled before rosbag %s", rosbag_name)
+                    break
+
+                base_progress = (step_count / total_steps) * 0.99
+                step_range = 0.99 / total_steps
+
+                def update_progress(embeddings_processed: int, total_embeddings: int, message_suffix: str = ""):
+                    if total_embeddings > 0:
+                        within_step = (embeddings_processed / total_embeddings) * step_range
+                    else:
+                        within_step = 0
+                    SEARCH_PROGRESS["status"] = "running"
+                    SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
+                    SEARCH_PROGRESS["message"] = (
+                        f"Searching by image...\n\n"
+                        f"Model: {model_name}\n"
+                        f"Rosbag: {rosbag_name}\n"
+                        f"Progress: {embeddings_processed:,} / {total_embeddings:,} embeddings\n"
+                        f"(Sampling every {k_subsample}th embedding)"
+                        + (f"\n{message_suffix}" if message_suffix else "")
+                    )
+
+                SEARCH_PROGRESS["status"] = "running"
+                SEARCH_PROGRESS["progress"] = round(base_progress, 3)
+                SEARCH_PROGRESS["message"] = (
+                    f"Loading manifest...\n\n"
+                    f"Model: {model_name}\n"
+                    f"Rosbag: {rosbag_name}"
+                )
+                step_count += 1
+
+                base = EMBEDDINGS / model_name / rosbag_name
+                manifest_path = base / "manifest.parquet"
+                shards_dir = base / "shards"
+
+                if not manifest_path.is_file() or not shards_dir.is_dir():
+                    logging.debug("[SEARCH-BY-IMAGE] SKIP: Missing manifest or shards for %s/%s", model_name, rosbag_name)
+                    continue
+
+                needed_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp"]
+                try:
+                    import pyarrow.parquet as pq
+                    available_cols = set(pq.read_schema(manifest_path).names)
+                except Exception as e:
+                    logging.debug("[SEARCH-BY-IMAGE] Could not read schema: %s", e)
+                    head_df = pd.read_parquet(manifest_path)
+                    available_cols = set(head_df.columns)
+
+                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier"]
+                missing = [c for c in required_cols if c not in available_cols]
+                if missing:
+                    logging.debug("[SEARCH-BY-IMAGE] Manifest missing columns %s", missing)
+                    continue
+
+                has_reference_timestamp = "reference_timestamp" in available_cols
+                has_reference_timestamp_index = "reference_timestamp_index" in available_cols
+                cols_to_read = required_cols.copy()
+                if has_reference_timestamp:
+                    cols_to_read.append("reference_timestamp")
+                if has_reference_timestamp_index:
+                    cols_to_read.append("reference_timestamp_index")
+
+                mf = pd.read_parquet(manifest_path, columns=cols_to_read)
+
+                mf = mf.loc[(mf["minute_of_day"] >= time_start) & (mf["minute_of_day"] <= time_end)]
+                if mf.empty:
+                    logging.debug("[SEARCH-BY-IMAGE] SKIP: No rows in time window for %s/%s", model_name, rosbag_name)
+                    continue
+
+                if mcap_filter and rosbag_name in mcap_filter and "mcap_identifier" in mf.columns:
+                    allowed_ranges = mcap_filter[rosbag_name]
+                    mcap_ids = mf["mcap_identifier"].astype(int)
+                    mask = pd.Series(False, index=mf.index)
+                    for range_start, range_end in allowed_ranges:
+                        mask |= (mcap_ids >= int(range_start)) & (mcap_ids <= int(range_end))
+                    mf = mf.loc[mask]
+                    if mf.empty:
+                        continue
+
+                if topics_list and "topic" in mf.columns:
+                    mf = mf[mf["topic"].isin(topics_list)]
+                    if mf.empty:
+                        continue
+
+                parts, per_topic_counts_before, per_topic_counts_after = [], {}, {}
+                for topic, df_t in mf.groupby("topic", sort=False):
+                    per_topic_counts_before[topic] = len(df_t)
+                    sort_cols = [c for c in ["timestamp_ns"] if c in df_t.columns]
+                    if sort_cols:
+                        df_t = df_t.sort_values(sort_cols)
+                    parts.append(df_t.iloc[::k_subsample])
+                mf_sel = pd.concat(parts, ignore_index=True) if parts else mf.iloc[0:0]
+                for topic, df_t in mf_sel.groupby("topic", sort=False):
+                    per_topic_counts_after[topic] = len(df_t)
+
+                if mf_sel.empty:
+                    continue
+
+                aligned_data = pd.DataFrame()
+                if not has_reference_timestamp_index:
+                    lookup_dir = (LOOKUP_TABLES / rosbag_name) if LOOKUP_TABLES else None
+                    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
+                else:
+                    pass
+
+                t_rosbag_start = time.perf_counter()
+                chunks: list[np.ndarray] = []
+                meta_for_row: list[dict] = []
+                shards_touched = 0
+                bytes_read = 0
+
+                total_embeddings = len(mf_sel)
+                embeddings_processed = 0
+                last_progress_update = 0
+                progress_update_interval = 1000
+
+                update_progress(embeddings_processed, total_embeddings)
+
+                for shard_id, df_s in mf_sel.groupby("shard_id", sort=False):
+                    if is_search_cancelled(search_id):
+                        break
+
+                    shard_path = shards_dir / shard_id
+                    if not shard_path.is_file():
+                        continue
+
+                    rows = df_s["row_in_shard"].to_numpy(np.int64)
+                    rows.sort()
+                    shards_touched += 1
+
+                    meta_map = {}
+                    for r in df_s.itertuples(index=False):
+                        topic_str = r.topic
+                        topic_folder = topic_str.replace("/", "__")
+                        meta_entry = {
+                            "timestamp_ns": int(r.timestamp_ns),
+                            "topic": topic_str.replace("__", "/"),
+                            "topic_folder": topic_folder,
+                            "minute_of_day": int(r.minute_of_day),
+                            "mcap_identifier": str(r.mcap_identifier),
+                            "shard_id": shard_id,
+                            "row_in_shard": int(r.row_in_shard),
+                        }
+                        if has_reference_timestamp and hasattr(r, 'reference_timestamp'):
+                            ref_ts = r.reference_timestamp
+                            meta_entry["reference_timestamp"] = str(ref_ts) if pd.notna(ref_ts) else None
+                        if has_reference_timestamp_index and hasattr(r, 'reference_timestamp_index'):
+                            ref_ts_idx = r.reference_timestamp_index
+                            meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
+                        meta_map[int(r.row_in_shard)] = meta_entry
+
+                    arr = np.load(shard_path, mmap_mode="r")
+                    if arr.dtype != np.float32:
+                        arr = arr.astype("float32", copy=False)
+
+                    ranges = []
+                    start = prev = int(rows[0])
+                    for rr in rows[1:]:
+                        rr = int(rr)
+                        if rr == prev + 1:
+                            prev = rr
+                        else:
+                            ranges.append((start, prev))
+                            start = prev = rr
+                    ranges.append((start, prev))
+
+                    for a, b in ranges:
+                        sl = arr[a:b+1]
+                        chunks.append(sl)
+                        bytes_read += sl.nbytes
+                        for i in range(a, b + 1):
+                            meta_for_row.append(meta_map[i])
+                        embeddings_processed += (b - a + 1)
+                        if embeddings_processed - last_progress_update >= progress_update_interval:
+                            update_progress(embeddings_processed, total_embeddings)
+                            last_progress_update = embeddings_processed
+
+                if not chunks:
+                    continue
+
+                update_progress(total_embeddings, total_embeddings, "Running FAISS search...")
+
+                t0 = time.perf_counter()
+                X = np.vstack(chunks).astype("float32", copy=False)
+
+                if X.shape[0] != len(meta_for_row):
+                    continue
+
+                dim = X.shape[1]
+                M = 32
+                index = faiss.IndexHNSWFlat(dim, M)
+                index.hnsw.efSearch = 64
+                index.hnsw.efConstruction = 40
+                index.add(X)
+
+                q = query_embedding.reshape(1, -1)
+                D, I = index.search(q, MAX_K)
+
+                if D.size == 0 or I.size == 0:
+                    continue
+
+                ref_ts_to_indices: dict[str, list[int]] = {}
+                value_to_ref_ts: dict[str, set[str]] = {}
+
+                if has_reference_timestamp_index:
+                    pass
+                elif not aligned_data.empty and 'Reference Timestamp' in aligned_data.columns:
+                    ref_ts_col = aligned_data['Reference Timestamp'].astype(str)
+                    for ref_ts, group in aligned_data.groupby(ref_ts_col, sort=False):
+                        ref_ts_to_indices[ref_ts] = group.index.tolist()
+                    stacked = aligned_data.astype(str).stack()
+                    idx_to_ref = ref_ts_col.to_dict()
+                    stacked_with_ref = pd.DataFrame({
+                        'value': stacked.values,
+                        'ref_ts': [idx_to_ref[idx[0]] for idx in stacked.index]
+                    })
+                    for val, group in stacked_with_ref.groupby('value', sort=False):
+                        value_to_ref_ts[val] = set(group['ref_ts'].unique())
+
+                model_results: list[dict] = []
+                for i, (dist, idx) in enumerate(zip(D[0], I[0]), start=1):
+                    if idx < 0 or idx >= len(meta_for_row):
+                        continue
+                    m = meta_for_row[int(idx)]
+                    ts_ns = m["timestamp_ns"]
+                    ts_str = str(ts_ns)
+                    berlin_tz = ZoneInfo("Europe/Berlin")
+                    minute_str = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).astimezone(berlin_tz).strftime("%H:%M")
+
+                    model_results.append({
+                        'rank': i,
+                        'rosbag': rosbag_name,
+                        'similarityScore': float(dist),
+                        'topic': m["topic"],
+                        'timestamp': ts_str,
+                        'minuteOfDay': minute_str,
+                        'mcap_identifier': m["mcap_identifier"],
+                        'shard_id': m["shard_id"],
+                        'row_in_shard': m["row_in_shard"],
+                        'model': model_name
+                    })
+
+                    if has_reference_timestamp_index:
+                        ref_ts_idx = m.get("reference_timestamp_index")
+                        if ref_ts_idx is not None:
+                            key = (model_name, rosbag_name, m["topic"])
+                            marks.setdefault(key, set()).add(ref_ts_idx)
+                    elif ts_str in value_to_ref_ts:
+                        matching_ref_timestamps = value_to_ref_ts[ts_str]
+                        match_indices: list[int] = []
+                        for ref_ts in matching_ref_timestamps:
+                            if ref_ts in ref_ts_to_indices:
+                                match_indices.extend(ref_ts_to_indices[ref_ts])
+                        if match_indices:
+                            key = (model_name, rosbag_name, m["topic"])
+                            marks.setdefault(key, set()).update(match_indices)
+
+                all_results.extend(model_results)
+
+        if is_search_cancelled(search_id):
+            logging.info("[SEARCH-BY-IMAGE] Search cancelled, skipping post-processing")
+            SEARCH_PROGRESS["status"] = "cancelled"
+            SEARCH_PROGRESS["progress"] = 0.0
+            SEARCH_PROGRESS["message"] = "Search cancelled."
+            return jsonify({'cancelled': True, 'results': [], 'marksPerTopic': {}})
+
+        all_results = sorted([r for r in all_results if isinstance(r, dict)], key=lambda x: x['similarityScore'])
+        for rank, result in enumerate(all_results, 1):
+            result['rank'] = rank
+        filtered_results = all_results
+
+        marksPerTopic: dict = {}
+        for result in filtered_results:
+            model = result['model']
+            rosbag = result['rosbag']
+            topic = result['topic']
+            marksPerTopic.setdefault(model, {}).setdefault(rosbag, {}).setdefault(topic, {'marks': []})
+
+        for key, indices in marks.items():
+            model_key, rosbag_key, topic_key = key
+            if (
+                model_key in marksPerTopic
+                and rosbag_key in marksPerTopic[model_key]
+                and topic_key in marksPerTopic[model_key][rosbag_key]
+            ):
+                marksPerTopic[model_key][rosbag_key][topic_key]['marks'].extend(
+                    {'value': idx} for idx in indices
+                )
+
+        if not filtered_results:
+            SEARCH_PROGRESS["status"] = "done"
+            SEARCH_PROGRESS["progress"] = 1.0
+            SEARCH_PROGRESS["message"] = "No results found for the given image."
+        else:
+            SEARCH_PROGRESS["status"] = "done"
+            SEARCH_PROGRESS["progress"] = 1.0
+
+        return jsonify({
+            'imageIdentifier': {
+                'rosbag': image_rosbag,
+                'topic': image_topic,
+                'mcapIdentifier': image_mcap_identifier,
+            },
+            'results': filtered_results,
+            'marksPerTopic': marksPerTopic
+        })
+
+    except Exception as e:
+        error_id = str(uuid.uuid4())[:8]
+        logging.exception(f"[SEARCH-BY-IMAGE] Search failed [error_id={error_id}]")
+        SEARCH_PROGRESS["status"] = "error"
+        SEARCH_PROGRESS["progress"] = 0.0
+        SEARCH_PROGRESS["message"] = f"Search failed. Error ID: {error_id}"
+        return jsonify({
+            'error': 'Search by image failed. Please try again.',
             'error_id': error_id
         }), 500
