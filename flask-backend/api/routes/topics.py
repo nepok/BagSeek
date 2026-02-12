@@ -62,6 +62,7 @@ def get_available_image_topics():
             return jsonify({'availableTopics': {}}), 200
 
         results = {}
+        all_topic_types = {}
 
         for model_param in model_params:
             model_path = os.path.join(ADJACENT_SIMILARITIES, model_param)
@@ -92,13 +93,18 @@ def get_available_image_topics():
                 except Exception as e:
                     logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
 
+                # Accumulate topic types for response
+                for t in topics:
+                    if t in topic_types and t not in all_topic_types:
+                        all_topic_types[t] = topic_types[t]
+
                 # Return topics as-is (sorting is now handled in frontend)
                 model_entry[rosbag_name] = topics
 
             if model_entry:
                 results[model_param] = model_entry
 
-        return jsonify({'availableTopics': results}), 200
+        return jsonify({'availableTopics': results, 'topicTypes': all_topic_types}), 200
 
     except Exception as e:
         logging.error(f"Error scanning adjacent similarities: {e}")
