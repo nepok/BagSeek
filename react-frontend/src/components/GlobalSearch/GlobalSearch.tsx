@@ -1,4 +1,4 @@
-import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse } from '@mui/material';
+import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu } from '@mui/material';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
@@ -9,6 +9,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { extractRosbagName } from '../../utils/rosbag';
 import { sortTopics } from '../../utils/topics';
 import McapRangeFilter, { McapRangeFilterItem, McapFilterState, formatNsToTime } from '../McapRangeFilter/McapRangeFilter';
@@ -80,15 +81,14 @@ type SearchResultItem = {
 function ResultImageCard({
   result,
   onOpenExplore,
-  onOpenDownload,
 }: {
   result: SearchResultItem;
   onOpenExplore: () => void;
-  onOpenDownload: () => void;
 }) {
   const { still, onPointerEnter, onPointerMove, onPointerLeave } = useHoverStill(500, 3);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number } | null>(null);
 
   useEffect(() => {
     if (!result.topic || !result.timestamp || !result.mcap_identifier) {
@@ -124,12 +124,41 @@ function ResultImageCard({
     fetchImage();
   }, [result.topic, result.timestamp, result.mcap_identifier]);
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ mouseX: e.clientX, mouseY: e.clientY });
+  };
+
+  const handleDownload = () => {
+    setContextMenu(null);
+    if (!imageUrl) return;
+    const formatMatch = imageUrl.match(/data:image\/([^;]+)/);
+    const format = formatMatch ? formatMatch[1] : 'jpeg';
+    const extension = format === 'png' ? 'png' : 'jpg';
+    const byteCharacters = atob(imageUrl.split(',')[1]);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: `image/${format}` });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${result.rosbag}_${result.timestamp}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Box
-      sx={{ position: 'relative', width: '100%' }}
+      sx={{ position: 'relative', width: '100%', cursor: 'context-menu' }}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
+      onContextMenu={handleContextMenu}
     >
       {isLoading ? (
         <Box
@@ -230,14 +259,14 @@ function ResultImageCard({
         onClick={onOpenExplore}
         sx={{
           position: 'absolute',
-          top: '45%',
+          top: '50%',
           right: 6,
           transform: 'translateY(-50%)',
           bgcolor: 'rgba(120, 170, 200, 0.6)',
           color: 'white',
-          p: 0.5,
+          p: 0.75,
           '& svg': {
-            fontSize: 18,
+            fontSize: 22,
           },
           '&:hover': {
             bgcolor: 'rgba(120, 170, 200, 0.8)',
@@ -246,54 +275,19 @@ function ResultImageCard({
       >
         <KeyboardArrowRightIcon />
       </IconButton>
-      <IconButton
-        size="small"
-        color="primary"
-        onClick={() => {
-          if (imageUrl) {
-            // Extract format from data URL (e.g., "data:image/jpeg;base64,..." or "data:image/png;base64,...")
-            const formatMatch = imageUrl.match(/data:image\/([^;]+)/);
-            const format = formatMatch ? formatMatch[1] : 'jpeg';
-            const extension = format === 'png' ? 'png' : 'jpg';
-            
-            // Convert base64 to blob and download
-            const byteCharacters = atob(imageUrl.split(',')[1]);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], { type: `image/${format}` });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `${result.rosbag}_${result.timestamp}.${extension}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-          } else {
-            onOpenDownload();
-          }
-        }}
-        sx={{
-          position: 'absolute',
-          top: '55%',
-          right: 6,
-          transform: 'translateY(-50%)',
-          bgcolor: 'rgba(120, 170, 200, 0.6)',
-          color: 'white',
-          p: 0.5,
-          '& svg': {
-            fontSize: 18,
-          },
-          '&:hover': {
-            bgcolor: 'rgba(120, 170, 200, 0.8)',
-          },
-        }}
+
+      {/* Right-click context menu */}
+      <Menu
+        open={contextMenu !== null}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
       >
-        <DownloadIcon />
-      </IconButton>
+        <MenuItem onClick={handleDownload} disabled={!imageUrl}>
+          <DownloadIcon sx={{ fontSize: 18, mr: 1 }} />
+          Download image
+        </MenuItem>
+      </Menu>
     </Box>
   );
 }
@@ -343,7 +337,6 @@ const GlobalSearch: React.FC = () => {
     const [expandedTopics, setExpandedTopics] = useState(true);
     const [expandedTimeRange, setExpandedTimeRange] = useState(true);
     const [expandedSampling, setExpandedSampling] = useState(true);
-    const [expandedModels, setExpandedModels] = useState(true);
 
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
@@ -817,14 +810,6 @@ const GlobalSearch: React.FC = () => {
 
     const rosbagsToUse = positionallyFilteredRosbags ? filteredAvailableRosbags : availableRosbags;
 
-    const handleModelToggle = (name: string) => {
-        if (name === "ALL") {
-            setModels(models.length === availableModels.length ? [] : [...availableModels]);
-        } else {
-            setModels(models.includes(name) ? models.filter(m => m !== name) : [...models, name]);
-        }
-    };
-
     const handleRosbagToggle = (name: string) => {
         if (name === "ALL") {
             setRosbags(rosbags.length === rosbagsToUse.length ? [] : [...rosbagsToUse]);
@@ -1129,41 +1114,6 @@ const GlobalSearch: React.FC = () => {
                             </Collapse>
                         </Box>
 
-                        {/* Models - collapsible */}
-                        <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1 }}>
-                            <Box onClick={() => setExpandedModels(!expandedModels)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1.5, py: 0.75, cursor: 'pointer', '&:hover': { backgroundColor: 'rgba(255,255,255,0.06)' }, borderBottom: expandedModels ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
-                                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                    <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Models</Typography>
-                                    {models.length > 0 && models.length < availableModels.length && (
-                                        <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main' }}>{models.length}</Box>
-                                    )}
-                                </Box>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <IconButton
-                                        size="small"
-                                        onClick={(e) => { e.stopPropagation(); handleModelToggle('ALL'); }}
-                                        title="Toggle all"
-                                        sx={{ color: models.length === availableModels.length && availableModels.length > 0 ? 'primary.main' : 'rgba(255,255,255,0.4)', p: 0.25 }}
-                                    >
-                                        <SelectAllIcon sx={{ fontSize: 16 }} />
-                                    </IconButton>
-                                    <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedModels ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
-                                </Box>
-                            </Box>
-                            <Collapse in={expandedModels}>
-                                <Box sx={{ py: 0.5, px: 1 }}>
-                                    {availableModels.map((name) => {
-                                        const isTopicAvailable = !topicAvailableModels || topicAvailableModels.has(name);
-                                        return (
-                                            <Box key={name} onClick={() => isTopicAvailable && handleModelToggle(name)} sx={{ display: 'flex', alignItems: 'center', py: 0, cursor: isTopicAvailable ? 'pointer' : 'default', opacity: isTopicAvailable ? 1 : 0.5, '&:hover': isTopicAvailable ? { bgcolor: 'rgba(255,255,255,0.04)' } : {}, borderRadius: 0.5, px: 0.5 }}>
-                                                <Checkbox size="small" checked={models.includes(name)} disabled={!isTopicAvailable} sx={{ p: 0.5 }} />
-                                                <ListItemText primary={name} primaryTypographyProps={{ fontSize: '0.75rem' }} />
-                                            </Box>
-                                        );
-                                    })}
-                                </Box>
-                            </Collapse>
-                        </Box>
                     </Box>
                 )}
             </Box>
@@ -1183,41 +1133,104 @@ const GlobalSearch: React.FC = () => {
                     px: 2,
                 }}
             >
-            <Box ref={searchIconRef}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <TextField
-                        sx={{ flex: 1, minWidth: 0 }}
-                        label="Search"
-                        variant="outlined"
-                        value={search}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                            setSearch(e.target.value);
-                            // Clear enhanced prompt when user starts typing
-                            if (enhancedPrompt) {
-                                setEnhancedPrompt('');
-                            }
-                        }}
-                        onKeyDown={handleKeyDown}
-                        InputProps={{
-                            sx: {
-                                '& input': {
-                                    color: 'white',
-                                }
-                            }
-                        }}
-                    />
-                    <FormControlLabel
-                      control={<Checkbox checked={enhancePrompt} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setEnhancePrompt(event.target.checked)} />}
-                      label="ENHANCE"
-                      sx={{
-                        ml: 0.0,
-                        color: 'rgba(255,255,255,0.7)',
-                        userSelect: 'none',
-                        '& .MuiFormControlLabel-label': {
-                          fontSize: '0.875rem',
-                        }
-                      }}
-                    />
+            <Box
+              ref={searchIconRef}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                border: '1px solid rgba(255,255,255,0.23)',
+                borderRadius: '999px',
+                px: 0.5,
+                '&:focus-within': { borderColor: 'primary.main' },
+              }}
+            >
+                {/* Model select - left side (fixed width so divider stays put) */}
+                <Box sx={{ width: 180, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                  <Select
+                    multiple
+                    value={models}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setModels(typeof val === 'string' ? val.split(',') : val);
+                    }}
+                    displayEmpty
+                    renderValue={(selected) => {
+                      if (selected.length === 0) return 'All models';
+                      if (selected.length === 1) return selected[0];
+                      if (selected.length === availableModels.length) return 'All models';
+                      return `${selected.length} models`;
+                    }}
+                    variant="standard"
+                    disableUnderline
+                    sx={{
+                      width: '100%',
+                      pl: 1.5,
+                      color: 'rgba(255,255,255,0.7)',
+                      fontSize: '0.8rem',
+                      '.MuiSvgIcon-root': { color: 'rgba(255,255,255,0.4)' },
+                      '&:before, &:after': { display: 'none' },
+                    }}
+                  >
+                    {availableModels.map((name) => (
+                      <MenuItem key={name} value={name} sx={{ py: 0.25 }}>
+                        <Checkbox size="small" checked={models.includes(name)} sx={{ p: 0.5 }} />
+                        <ListItemText primary={name} primaryTypographyProps={{ fontSize: '0.75rem' }} />
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </Box>
+
+                {/* Divider */}
+                <Box sx={{ width: '1px', height: 24, bgcolor: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
+
+                {/* Search input - center, takes remaining space */}
+                <input
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    if (enhancedPrompt) setEnhancedPrompt('');
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Search..."
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: 'none',
+                    outline: 'none',
+                    background: 'transparent',
+                    color: 'white',
+                    fontSize: '0.95rem',
+                    padding: '14px 12px',
+                  }}
+                />
+
+                {/* Divider */}
+                <Box sx={{ width: '1px', height: 24, bgcolor: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
+
+                {/* Enhance toggle - right side (fixed width so divider stays put) */}
+                <Box sx={{ width: 110, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={enhancePrompt}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>) => setEnhancePrompt(event.target.checked)}
+                        icon={<AutoFixHighIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.35)', transition: 'all 0.2s' }} />}
+                        checkedIcon={<AutoFixHighIcon sx={{ fontSize: 24, color: 'primary.main', filter: 'drop-shadow(0 0 5px rgba(144,202,249,0.6))', transition: 'all 0.2s' }} />}
+                        sx={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      />
+                    }
+                    label="ENHANCE"
+                    sx={{
+                      ml: 0,
+                      mr: 0,
+                      color: enhancePrompt ? 'primary.main' : 'rgba(255,255,255,0.4)',
+                      userSelect: 'none',
+                      whiteSpace: 'nowrap',
+                      transition: 'color 0.2s',
+                      '& .MuiFormControlLabel-label': { fontSize: '0.75rem' },
+                    }}
+                  />
                 </Box>
             </Box>
 
@@ -1297,7 +1310,6 @@ const GlobalSearch: React.FC = () => {
                           <ResultImageCard
                             result={result as any}
                             onOpenExplore={() => openExplorePage(result)}
-                            onOpenDownload={() => {}}
                           />
                         )}
                       </Box>
