@@ -8,7 +8,10 @@ const darkTheme = createTheme({
       main: '#B49FCC',
     },
     secondary: {
-      main: '#B3D6C6',
+      main: '#B3D6B9',
+    },
+    warning: {
+      main: '#E8C872',
     },
   },
   
