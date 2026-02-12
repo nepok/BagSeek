@@ -19,10 +19,28 @@ export_bp = Blueprint('export', __name__)
 SAFE_ROSBAG_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
 
 
+def _make_export_parent_folder(relative_rosbag_path: str) -> str:
+    """Build a safe parent folder name from relative rosbag path: path_export."""
+    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', relative_rosbag_path.replace('/', '_').strip('_'))
+    return f"{safe}_export" if safe else "export"
+
+
 def _export_rosbag_batch(exports_list: list) -> tuple:
     """Process multiple exports sequentially. Each item is a single-export request."""
     total = len(exports_list)
     first_source = exports_list[0].get("source_rosbag") if exports_list else None
+
+    output_parent = None
+    if first_source and total > 1:
+        try:
+            p = Path(str(first_source))
+            if p.is_absolute():
+                rel = str(p.relative_to(ROSBAGS))
+            else:
+                rel = str(first_source)
+            output_parent = _make_export_parent_folder(rel)
+        except (ValueError, TypeError):
+            pass
 
     for idx, item in enumerate(exports_list):
         if not isinstance(item, dict):
@@ -38,6 +56,8 @@ def _export_rosbag_batch(exports_list: list) -> tuple:
         req_data = dict(item)
         if not req_data.get("source_rosbag") and first_source:
             req_data["source_rosbag"] = first_source
+        if output_parent is not None:
+            req_data["output_parent"] = output_parent
 
         err = _run_single_export(req_data)
         if err is not None:
@@ -64,6 +84,7 @@ def _run_single_export(data: dict):
     end_mcap_id_raw = data.get("end_mcap_id")
     mcap_ranges_raw = data.get("mcap_ranges")
     source_rosbag = data.get("source_rosbag")
+    output_parent = data.get("output_parent")
 
     if not new_rosbag_name:
         EXPORT_PROGRESS["status"] = "error"
@@ -157,7 +178,11 @@ def _run_single_export(data: dict):
     else:
         input_rosbag_dir = ROSBAGS / selected_rosbag_str
 
-    output_rosbag_base = EXPORT
+    if output_parent and isinstance(output_parent, str) and '..' not in output_parent and '/' not in output_parent:
+        safe_parent = output_parent
+    else:
+        safe_parent = None
+    output_rosbag_base = EXPORT / safe_parent if safe_parent else EXPORT
     output_rosbag_dir = output_rosbag_base / new_rosbag_name
 
     def extract_mcap_id(mcap_path: Path) -> str:
