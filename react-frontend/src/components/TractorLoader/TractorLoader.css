@@ -1,0 +1,415 @@
+/* ============ CONTAINER ============ */
+
+.tractor-loader {
+  position: relative;
+  width: calc(100% - 100px);
+  margin: 0 50px;
+  height: 200px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0a0a1a 0%, #151528 50%, #1a1a2e 100%);
+  border-radius: 12px;
+}
+
+/* ============ VIGNETTE (side fades) ============ */
+
+.vignette {
+  position: absolute;
+  inset: -20px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, #121212 0%, transparent 8%, transparent 92%, #121212 100%),
+    linear-gradient(180deg, transparent 0%, transparent 70%, rgba(18, 18, 18, 0.6) 100%);
+  z-index: 10;
+}
+
+/* ============ STARS ============ */
+
+.stars {
+  position: absolute;
+  inset: 0;
+}
+
+.star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: #fff;
+  border-radius: 50%;
+  animation: twinkle 3s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.9; }
+}
+
+/* ============ WORLD ============ */
+
+.world {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  bottom: 0;
+  left: 0;
+}
+
+/* ground */
+.world::before {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 65px;
+  background: repeating-linear-gradient(
+    90deg,
+    #1a3010 0px,
+    #1a3010 70px,
+    #172b0e 70px,
+    #172b0e 140px
+  );
+}
+
+/* rolling hills */
+.world::after {
+  content: "";
+  position: absolute;
+  bottom: 60px;
+  width: 100%;
+  height: 60px;
+  background:
+    radial-gradient(ellipse 120px 55px at 70px 55px, #1e3812 100%, transparent 100%),
+    radial-gradient(ellipse 90px 40px at 200px 55px, #1b3310 100%, transparent 100%),
+    radial-gradient(ellipse 140px 50px at 350px 55px, #1e3812 100%, transparent 100%);
+  background-size: 420px 60px;
+  background-repeat: repeat-x;
+}
+
+/* ============ TIRE TRACKS ============ */
+
+.tire-tracks-backwheel {
+  position: absolute;
+  bottom: 48px;
+  left: 0;
+  height: 6px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(40, 80, 40, 0.4) 30%,
+    rgba(40, 80, 40, 0.5) 50%,
+    rgba(40, 80, 40, 0.4) 70%,
+    transparent 100%
+  );
+  width: var(--track-w-backwheel, 20px);
+  z-index: 3;
+  border-radius: 0 2px 2px 0;
+}
+
+.tire-tracks-frontwheel {
+  position: absolute;
+  bottom: 51px;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(40, 80, 40, 0.4) 30%,
+    rgba(40, 80, 40, 0.5) 50%,
+    rgba(40, 80, 40, 0.4) 70%,
+    transparent 100%
+  );
+  width: var(--track-w-frontwheel, 20px);
+  z-index: 3;
+  border-radius: 0 2px 2px 0;
+}
+
+/* ============ TRACTOR ============ */
+
+.tractor {
+  position: absolute;
+  left: var(--tractor-x, 10px);
+  bottom: 50px;
+  animation: bounce 0.35s ease-in-out infinite alternate;
+  z-index: 5;
+}
+
+@keyframes bounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(var(--bounce-y, -0.5px)); }
+}
+
+/* ============ CHASSIS ============ */
+
+.tractor-chassis {
+  position: absolute;
+  width: 70px;
+  height: 8px;
+  background: linear-gradient(180deg, #2a6e2e, #256528);
+  bottom: 10px;
+  left: -4px;
+  border-radius: 2px;
+  box-shadow: inset 0 -2px rgba(0,0,0,0.2);
+}
+
+/* ============ HOOD (engine) ============ */
+
+.tractor-hood {
+  position: absolute;
+  width: 38px;
+  height: 20px;
+  background: linear-gradient(180deg, #388e3c, #2e7d32);
+  border-radius: 2px 6px 2px 2px;
+  left: 25px;
+  bottom: 16px;
+  box-shadow: inset 0 -3px rgba(0,0,0,0.2);
+}
+
+.hood-grille {
+  position: absolute;
+  right: 0;
+  top: 3px;
+  width: 3px;
+  height: 14px;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(0,0,0,0.3) 0px,
+    rgba(0,0,0,0.3) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+  border-radius: 0 2px 2px 0;
+}
+
+/* ============ CAB ============ */
+
+.tractor-cab {
+  position: absolute;
+  width: 30px;
+  height: 36px;
+  background: linear-gradient(180deg, #2e7d32, #266b29);
+  border-radius: 3px 3px 0 0;
+  bottom: 16px;
+  left: -4px;
+  box-shadow: inset 0 -3px rgba(0,0,0,0.15);
+}
+
+.cab-roof {
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  right: -2px;
+  height: 4px;
+  background: #245a22;
+  border-radius: 3px 3px 0 0;
+}
+
+.cab-window {
+  position: absolute;
+  background: linear-gradient(180deg, rgba(100, 180, 255, 0.3), rgba(60, 130, 200, 0.15));
+  border: 1px solid rgba(100, 180, 255, 0.2);
+}
+
+.cab-window-side {
+  top: 4px;
+  left: 3px;
+  width: 12px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+.cab-window-front {
+  top: 4px;
+  right: 3px;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* ============ FENDERS ============ */
+
+.tractor-fender-back {
+  position: absolute;
+  width: 30px;
+  height: 10px;
+  background: #266b29;
+  border-radius: 10px 10px 0 0;
+  left: -8px;
+  bottom: 14px;
+}
+
+.tractor-fender-front {
+  position: absolute;
+  width: 16px;
+  height: 6px;
+  background: #266b29;
+  border-radius: 6px 6px 0 0;
+  left: 54px;
+  bottom: 10px;
+}
+
+/* ============ WHEELS ============ */
+
+.wheel {
+  position: absolute;
+  border-radius: 50%;
+  background: #1a1a1a;
+  border: 3px solid #2a2a2a;
+}
+
+.wheel-rim {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  border: 2px solid #333;
+}
+
+.wheel-hub {
+  position: absolute;
+  width: 28%;
+  height: 28%;
+  background: #555;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+.wheel-spoke {
+  position: absolute;
+  width: 2px;
+  height: 100%;
+  background: #383838;
+  left: calc(50% - 1px);
+  top: 0;
+}
+
+.wheel-spoke.spoke-2 {
+  transform: rotate(60deg);
+}
+
+.wheel-spoke.spoke-3 {
+  transform: rotate(120deg);
+}
+
+.wheel-back {
+  width: 36px;
+  height: 36px;
+  left: -10px;
+  bottom: -3px;
+  transform: rotate(var(--back-rot, 0deg));
+}
+
+.wheel-front {
+  width: 20px;
+  height: 20px;
+  left: 51px;
+  bottom: -3px;
+  transform: rotate(var(--front-rot, 0deg));
+}
+
+/* ============ EXHAUST ============ */
+
+.exhaust {
+  position: absolute;
+  left: 38px;
+  bottom: 36px;
+}
+
+.exhaust::before {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 8px;
+  background: #444;
+  border-radius: 2px 2px 0 0;
+  bottom: 0;
+  left: 0;
+}
+
+.smoke {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: rgba(180, 180, 180, 0.25);
+  border-radius: 50%;
+  left: -2px;
+  bottom: 8px;
+  animation: puff 2s ease-out infinite;
+}
+
+.smoke-2 {
+  animation-delay: 0.7s;
+  width: 6px;
+  height: 6px;
+}
+
+.smoke-3 {
+  animation-delay: 1.4s;
+  width: 10px;
+  height: 10px;
+}
+
+@keyframes puff {
+  0% {
+    opacity: 0.45;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-18px, -35px) scale(2.5);
+  }
+}
+
+/* ============ LIDAR ============ */
+
+.lidar {
+  position: absolute;
+  width: 6px;
+  height: 5px;
+  background: #222;
+  top: -7px;
+  right: -1px;
+  border-radius: 2px 2px 1px 1px;
+  z-index: 5;
+}
+
+.lidar-beam {
+  position: absolute;
+  width: 150px;
+  height: 150px;
+  left: calc(50% - 75px);
+  top: 2px;
+  transform-origin: 50% 0%;
+  transform: rotate(-25deg);
+  animation: scanGround 2s ease-in-out infinite alternate;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 40, 40, 0.8) 0%,
+    rgba(255, 40, 40, 0.35) 50%,
+    rgba(255, 40, 40, 0) 100%
+  );
+  clip-path: polygon(50% 0%, 42% 100%, 58% 100%);
+  filter: blur(0.3px);
+}
+
+@keyframes scanGround {
+  0% {
+    transform: rotate(-55deg);
+  }
+  100% {
+    transform: rotate(-75deg);
+  }
+}
+
+/* ============ PROGRESS LABEL ============ */
+
+.progress-label {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: monospace;
+  z-index: 11;
+}
