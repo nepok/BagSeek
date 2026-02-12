@@ -339,6 +339,28 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             <IosShareIcon />
           </IconButton>
         </Tooltip>
+
+        {/* Smart Farming Lab logo - always visible, links to Smart Farming Lab */}
+        <Button
+          component="a"
+          href="https://research.uni-leipzig.de/smart-farming/#/"
+          target="_blank"
+          rel="noopener noreferrer"
+          sx={{
+            minWidth: 0,
+            p: 0.5,
+            marginLeft: 1,
+            color: 'inherit',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+            '& .MuiTouchRipple-root': { borderRadius: 4 },
+          }}
+        >
+            <img
+              src="/smart-farming-lab-logo.png"
+              alt="Smart Farming Lab"
+              style={{ height: 32, width: 'auto', display: 'block', filter: 'grayscale(100%)' }}
+            />
+        </Button>
       </Box>
     </Box>
   );
