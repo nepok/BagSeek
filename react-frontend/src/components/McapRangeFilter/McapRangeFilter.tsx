@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
+  CircularProgress,
   Collapse,
   IconButton,
   Slider,
@@ -47,12 +48,18 @@ interface McapRangeFilterProps {
   logicOnly?: boolean;
   /** When true, skip applying pending MCAP IDs until refresh completes (avoids consuming before rosbags are complete). */
   deferPendingUntilAfterRefresh?: boolean;
+  /** Called when the set of rosbags currently loading MCAP metadata changes. Use to show loading state in McapRangeFilterItem. */
+  onLoadingChange?: (loading: Set<string>) => void;
 }
 
 export interface McapRangeFilterItemProps {
   rosbag: string;
   mcapFilters: McapFilterState;
   onMcapFiltersChange: (filters: McapFilterState) => void;
+  /** When true, remove left margin so the filter aligns with content above (e.g. in Export sidebar). */
+  noIndent?: boolean;
+  /** When true, show loading animation while MCAP ranges are being fetched. */
+  isLoading?: boolean;
 }
 
 /** Format nanosecond timestamp to HH:MM time-of-day. Exported for use in Rosbag select. */
@@ -347,11 +354,38 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
   rosbag,
   mcapFilters,
   onMcapFiltersChange,
+  noIndent = false,
+  isLoading = false,
 }) => {
   const filter = mcapFilters[rosbag];
   // Local draft values while dragging — keyed by window index. Only the actively
   // dragged window has an entry; all others read from the committed filter state.
   const [drafts, setDrafts] = useState<Record<number, [number, number]>>({});
+
+  if (isLoading && (!filter || filter.ranges.length <= 1)) {
+    return (
+      <Box
+        className="mcap-range-filter"
+        sx={{
+          mt: 0.75,
+          mb: 0.5,
+          ml: noIndent ? 0 : 2.5,
+          border: '1px solid rgba(255, 255, 255, 0.15)',
+          borderRadius: 1,
+          p: 1.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
+        }}
+      >
+        <CircularProgress size={20} sx={{ color: 'rgba(255,255,255,0.5)' }} />
+        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.5)' }}>
+          Loading MCAP ranges…
+        </Typography>
+      </Box>
+    );
+  }
 
   if (!filter || filter.ranges.length <= 1) return null;
 
@@ -414,7 +448,7 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
       sx={{
         mt: 0.75,
         mb: 0.5,
-        ml: 2.5,
+        ml: noIndent ? 0 : 2.5,
         border: '1px solid rgba(255, 255, 255, 0.15)',
         borderRadius: 1,
         p: 1,
@@ -484,7 +518,7 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
               <TextField
                 key={`${windowId}-begin-${beginId}`}
                 size="small"
-                label="Begin ID"
+                label="Start ID"
                 defaultValue={beginId}
                 onBlur={handleBeginIdBlur}
                 onKeyDown={(e) => {
@@ -557,6 +591,8 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
   );
 }, (prev, next) =>
   prev.rosbag === next.rosbag &&
+  prev.noIndent === next.noIndent &&
+  prev.isLoading === next.isLoading &&
   prev.mcapFilters[prev.rosbag] === next.mcapFilters[next.rosbag]
 );
 
@@ -569,6 +605,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   rosbagsToPreload,
   logicOnly = false,
   deferPendingUntilAfterRefresh = false,
+  onLoadingChange,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState<Set<string>>(new Set());
@@ -598,6 +635,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
     setLoading((prev) => {
       const next = new Set(prev);
       toFetch.forEach((r) => next.add(r));
+      onLoadingChange?.(next);
       return next;
     });
 
@@ -664,6 +702,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
         setLoading((prev) => {
           const next = new Set(prev);
           next.delete(rosbag);
+          onLoadingChange?.(next);
           return next;
         });
       }

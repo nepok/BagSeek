@@ -10,6 +10,7 @@ import 'leaflet.heat';
 import './PositionalOverview.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { extractRosbagName } from '../../utils/rosbag';
 import { inflatePathsD, PathsD, PathD, JoinType, EndType } from 'clipper2-ts';
 
 type RosbagPoint = {
@@ -589,6 +590,7 @@ const PositionalOverview: React.FC = () => {
     lon: number;
   } | null>(null);
   const [rosbagOverlapStatus, setRosbagOverlapStatus] = useState<Map<string, boolean>>(new Map());
+  const [mcapOverlapIds, setMcapOverlapIds] = useState<Set<string> | null>(null);
   const [checkingOverlap, setCheckingOverlap] = useState<boolean>(false);
   const [polygonFiles, setPolygonFiles] = useState<string[]>([]);
   const [selectedPolygonFile, setSelectedPolygonFile] = useState<string>('');
@@ -656,7 +658,32 @@ const PositionalOverview: React.FC = () => {
             });
 
           setRosbags(meta);
-          setSelectedIndex(meta.length ? meta.length - 1 : 0);
+          // Pre-select: 1) positional filter match, 2) last MAP selection (sessionStorage), 3) last rosbag
+          let idx = meta.length ? meta.length - 1 : 0;
+          try {
+            if (meta.length > 0) {
+              // Try positional filter first (from Apply to Search)
+              const filterRaw = sessionStorage.getItem('__BagSeekPositionalFilter');
+              if (filterRaw) {
+                const filterNames: string[] = JSON.parse(filterRaw);
+                if (Array.isArray(filterNames) && filterNames.length > 0) {
+                  const filterNorm = new Set(filterNames.map((n) => extractRosbagName(String(n).trim())));
+                  const match = meta.findIndex((m) => filterNorm.has(extractRosbagName(m.name)));
+                  if (match >= 0) idx = match;
+                }
+              }
+              // Fallback: last selected rosbag in MAP (for when opening MAP directly)
+              if (idx === meta.length - 1) {
+                const lastMap = sessionStorage.getItem('__BagSeekMapSelectedRosbag');
+                if (lastMap) {
+                  const lastNorm = extractRosbagName(lastMap.trim());
+                  const match = meta.findIndex((m) => extractRosbagName(m.name) === lastNorm);
+                  if (match >= 0) idx = match;
+                }
+              }
+            }
+          } catch {}
+          setSelectedIndex(idx);
         }
       } catch (fetchError) {
         if (!cancelled) {
@@ -987,6 +1014,16 @@ const PositionalOverview: React.FC = () => {
     return () => {
       cancelled = true;
     };
+  }, [rosbags, selectedIndex]);
+
+  // Persist selected rosbag so Export (and future visits) can use it
+  useEffect(() => {
+    const selected = rosbags[selectedIndex];
+    if (selected?.name) {
+      try {
+        sessionStorage.setItem('__BagSeekMapSelectedRosbag', selected.name);
+      } catch {}
+    }
   }, [rosbags, selectedIndex]);
 
   useEffect(() => {
@@ -2397,6 +2434,45 @@ const PositionalOverview: React.FC = () => {
     };
   }, [polygons, rosbags, offsetDistance]);
 
+  // MCAP overlap: which MCAPs are inside polygons (for MCAP slider background when showMcaps)
+  useEffect(() => {
+    const closedPolygons = polygons.filter((p) => p.isClosed);
+    const sel = rosbags[selectedIndex];
+
+    if (closedPolygons.length === 0 || !showMcaps || availableMcaps.length === 0 || !sel) {
+      setMcapOverlapIds(null);
+      return;
+    }
+
+    let cancelled = false;
+    getMcapsInsidePolygons(sel.name, closedPolygons, offsetDistance).then((ids) => {
+      if (!cancelled) setMcapOverlapIds(ids);
+    });
+    return () => { cancelled = true; };
+  }, [polygons, rosbags, selectedIndex, availableMcaps, showMcaps, offsetDistance]);
+
+  // Persist highlighted MCAP IDs to Export (MAP live selection - highlighted MCAPs in slider)
+  useEffect(() => {
+    const sel = rosbags[selectedIndex];
+    const closedPolygons = polygons.filter((p) => p.isClosed);
+    if (!sel || closedPolygons.length === 0) {
+      try {
+        sessionStorage.removeItem('__BagSeekMapMcapFilter');
+      } catch {}
+      return;
+    }
+    if (mcapOverlapIds === null || mcapOverlapIds.size === 0) {
+      try {
+        sessionStorage.removeItem('__BagSeekMapMcapFilter');
+      } catch {}
+      return;
+    }
+    try {
+      sessionStorage.setItem('__BagSeekMapMcapFilter', JSON.stringify({ [sel.name]: Array.from(mcapOverlapIds) }));
+      window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
+    } catch {}
+  }, [polygons, rosbags, selectedIndex, mcapOverlapIds]);
+
   const fetchAllPoints = useCallback(async () => {
     if (loadingAllPoints || allPointsLoaded) {
       return;
@@ -2602,6 +2678,40 @@ const PositionalOverview: React.FC = () => {
                 pointerEvents: 'auto', // Enable pointer events for this container
               }}
             >
+              {/* Background indicator for MCAPs outside polygons (like rosbag slider) */}
+              {availableMcaps.length > 0 && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    left: '16px',
+                    right: '16px',
+                    height: '4px',
+                    display: 'flex',
+                    gap: 0,
+                    pointerEvents: 'none',
+                    zIndex: 0,
+                  }}
+                >
+                  {availableMcaps.map((mcap, index) => {
+                    const overlaps = mcapOverlapIds === null || mcapOverlapIds.has(mcap.id);
+                    const segmentWidth = 100 / availableMcaps.length;
+                    return (
+                      <Box
+                        key={mcap.id}
+                        sx={{
+                          width: `${segmentWidth}%`,
+                          height: '100%',
+                          backgroundColor: (theme) =>
+                            overlaps
+                              ? `${theme.palette.primary.main}40`
+                              : 'rgba(30, 30, 30, 0.4)',
+                          borderRadius: index === 0 ? '2px 0 0 2px' : index === availableMcaps.length - 1 ? '0 2px 2px 0' : '0',
+                        }}
+                      />
+                    );
+                  })}
+                </Box>
+              )}
               <Slider
                 value={Math.min(selectedMcapIndex, Math.max(availableMcaps.length - 1, 0))}
                 onChange={(_, value) => {
@@ -3209,6 +3319,7 @@ const PositionalOverview: React.FC = () => {
                       sessionStorage.removeItem('__BagSeekPositionalFilter');
                       sessionStorage.removeItem('__BagSeekPositionalPolygons');
                       sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+                      sessionStorage.removeItem('__BagSeekMapMcapFilter');
                     } catch (e) {
                       console.error('Failed to clear positional filter:', e);
                     }

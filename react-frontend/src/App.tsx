@@ -493,8 +493,8 @@ function App() {
         availableTopics={availableTopics}
         isVisible={isExportDialogVisible}
         onClose={() => setIsExportDialogVisible(false)}
-        searchMarks={[]} // COMMENTED OUT: Search functionality disabled
         selectedRosbag={selectedRosbag}
+        preSelectedRosbag={selectedRosbag}
       />
       {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -507,7 +507,7 @@ function App() {
           handleAddCanvas={handleAddCanvas}
           handleResetCanvas={handleResetCanvas}
           availableTopics={availableTopics}
-          canvasList={canvasList}
+          canvasList={canvasList}    
           refreshCanvasList={refreshCanvasList}
         />
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

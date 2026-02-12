@@ -15,6 +15,41 @@ from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for
 topics_bp = Blueprint('topics', __name__)
 
 
+@topics_bp.route('/api/get-topics-for-rosbag', methods=['GET'])
+def get_topics_for_rosbag():
+    """Returns topics dict for a given rosbag (by path or name).
+
+    Query: ?rosbag=<path_or_name>
+    Response: { topics: { "/camera/image": "sensor_msgs/msg/Image", ... } }
+    """
+    try:
+        rosbag_param = request.args.get('rosbag')
+        if not rosbag_param:
+            return jsonify({'topics': {}}), 200
+
+        rosbag_name = extract_rosbag_name_from_path(rosbag_param)
+        topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
+
+        if not os.path.exists(topics_json_path):
+            return jsonify({'topics': {}}), 200
+
+        with open(topics_json_path, 'r') as f:
+            topics_data = json.load(f)
+
+        topics_dict = topics_data.get("topics", {})
+        if isinstance(topics_dict, dict):
+            topic_types = topics_dict
+        else:
+            topics_list = topics_dict if isinstance(topics_dict, list) else []
+            topic_types = {t: "" for t in topics_list}
+
+        return jsonify({'topics': topic_types}), 200
+
+    except Exception as e:
+        logging.error(f"Error reading topics for rosbag: {e}")
+        return jsonify({'topics': {}}), 200
+
+
 @topics_bp.route('/api/get-available-topics', methods=['GET'])
 def get_available_rosbag_topics():
     """Returns unified topics dict: { topic_name: message_type }

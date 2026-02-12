@@ -90,7 +90,6 @@ function ResultImageCard({
   onOpenExplore: () => void;
   onSearchWithImage: () => void;
 }) {
-  const { still, onPointerEnter, onPointerMove, onPointerLeave } = useHoverStill(500, 3);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number } | null>(null);
@@ -159,11 +158,9 @@ function ResultImageCard({
 
   return (
     <Box
-      sx={{ position: 'relative', width: '100%', cursor: 'context-menu' }}
-      onPointerEnter={onPointerEnter}
-      onPointerMove={onPointerMove}
-      onPointerLeave={onPointerLeave}
+      sx={{ position: 'relative', width: '100%', cursor: 'pointer' }}
       onContextMenu={handleContextMenu}
+      onClick={() => onOpenExplore()}
     >
       {isLoading ? (
         <Box
@@ -259,28 +256,6 @@ function ResultImageCard({
           maxWidth: '35%',
         }}
       />
-      <IconButton
-        color="primary"
-        onClick={onOpenExplore}
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          right: 6,
-          transform: 'translateY(-50%)',
-          bgcolor: 'rgba(120, 170, 200, 0.6)',
-          color: 'white',
-          p: 0.75,
-          '& svg': {
-            fontSize: 22,
-          },
-          '&:hover': {
-            bgcolor: 'rgba(120, 170, 200, 0.8)',
-          },
-        }}
-      >
-        <KeyboardArrowRightIcon />
-      </IconButton>
-
       {/* Right-click context menu */}
       <Menu
         open={contextMenu !== null}
@@ -325,6 +300,7 @@ const GlobalSearch: React.FC = () => {
     const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>([]);
     const [timeRange, setTimeRange] = useState<number[]>([0, 1439]);
     const [mcapFilters, setMcapFilters] = useState<McapFilterState>({});
+    const [loadingMcapRosbags, setLoadingMcapRosbags] = useState<Set<string>>(new Set());
     // Pending MCAP IDs from positional filter (map view), keyed by rosbag name
     const [pendingMcapIds, setPendingMcapIds] = useState<Record<string, string[]> | null>(null);
     const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
@@ -977,6 +953,7 @@ const GlobalSearch: React.FC = () => {
                 }}
                 logicOnly
                 deferPendingUntilAfterRefresh={isRefreshingFilePaths}
+                onLoadingChange={setLoadingMcapRosbags}
             />
             {/* Collapsible filter sidebar - stays below header, part of content area */}
             <Box
@@ -991,61 +968,120 @@ const GlobalSearch: React.FC = () => {
                     overflow: 'hidden',
                 }}
             >
-                {/* Toggle button - always visible */}
+                {/* Top bar: "Filters" label + pill counts + toggle button */}
                 <Box
                     sx={{
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: filtersOpen ? 'flex-end' : 'center',
+                        justifyContent: filtersOpen ? 'space-between' : 'center',
                         py: 1,
-                        px: filtersOpen ? 1 : 0,
+                        px: filtersOpen ? 1.5 : 0,
                         borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
                         minHeight: 48,
                         flexShrink: 0,
+                        gap: 1,
                     }}
                 >
-                    <IconButton
-                        onClick={() => setFiltersOpen(!filtersOpen)}
-                        sx={{ color: 'rgba(255,255,255,0.7)' }}
-                        aria-label={filtersOpen ? 'Collapse filters' : 'Expand filters'}
-                    >
-                        {filtersOpen ? <ChevronLeftIcon /> : <FilterListIcon />}
-                    </IconButton>
+                    {filtersOpen ? (
+                        <>
+                            <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.87)', fontWeight: 500, flexShrink: 0 }}>
+                                Filters
+                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 1, minWidth: 0 }}>
+                                <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main', whiteSpace: 'nowrap' }}>
+                                    {rosbags.length}{availableRosbags.length > 0 ? `/${availableRosbags.length}` : ''} rosbags
+                                </Box>
+
+                                <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main', whiteSpace: 'nowrap' }}>
+                                    {selectedTopics.length}{allTopics.length > 0 ? `/${allTopics.length}` : ''} topics
+                                </Box>
+                                <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.warning.main}59`, color: 'warning.main', whiteSpace: 'nowrap' }}>
+                                    {valueLabelFormat(timeRange[0])} – {valueLabelFormat(timeRange[1])}
+                                </Box>
+                                <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.info.main}59`, color: 'info.main', whiteSpace: 'nowrap' }}>
+                                    {sampling}
+                                </Box>
+                                <IconButton
+                                    onClick={() => setFiltersOpen(!filtersOpen)}
+                                    size="small"
+                                    sx={{ color: 'rgba(255,255,255,0.7)', p: 0.25 }}
+                                    aria-label="Collapse filters"
+                                >
+                                    <ChevronLeftIcon sx={{ fontSize: 20 }} />
+                                </IconButton>
+                            </Box>
+                        </>
+                    ) : (
+                        <IconButton
+                            onClick={() => setFiltersOpen(!filtersOpen)}
+                            sx={{ color: 'rgba(255,255,255,0.7)' }}
+                            aria-label="Expand filters"
+                        >
+                            <FilterListIcon />
+                        </IconButton>
+                    )}
                 </Box>
 
                 {/* Filter content - shown when expanded */}
                 {filtersOpen && (
                     <Box sx={{ overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0, py: 1.5, px: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                        {/* Positional Filter */}
-                        <Button
-                            variant={positionallyFilteredRosbags ? "contained" : "outlined"}
-                            color={"primary"}
-                            fullWidth
-                            onClick={(e) => {
-                                if (e.ctrlKey || e.metaKey) {
-                                    setPositionallyFilteredRosbags(null);
-                                    setPendingMcapIds(null);
-                                    try {
-                                        sessionStorage.removeItem('__BagSeekPositionalFilter');
-                                        sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
-                                    } catch {}
-                                } else {
-                                    navigate('/positional-overview');
-                                }
-                            }}
-                            sx={{ whiteSpace: 'nowrap' }}
-                        >
-                            <RoomIcon />
-                            <Typography variant="body2" sx={{ ml: 1 }}>Positional Filter</Typography>
+                        {/* Positional Filter + CLEAR */}
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            <Button
+                                variant={positionallyFilteredRosbags ? "contained" : "outlined"}
+                                color={"primary"}
+                                fullWidth
+                                onClick={(e) => {
+                                    if (e.ctrlKey || e.metaKey) {
+                                        setPositionallyFilteredRosbags(null);
+                                        setPendingMcapIds(null);
+                                        setRosbags([]);
+                                        try {
+                                            sessionStorage.removeItem('__BagSeekPositionalFilter');
+                                            sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+                                            sessionStorage.removeItem('__BagSeekMapMcapFilter');
+                                            window.dispatchEvent(new CustomEvent('__BagSeekPositionalFilterChanged'));
+                                        } catch {}
+                                    } else {
+                                        navigate('/positional-overview');
+                                    }
+                                }}
+                                sx={{ whiteSpace: 'nowrap', flex: 1 }}
+                            >
+                                <RoomIcon />
+                                <Typography variant="body2" sx={{ ml: 1 }}>Positional Filter</Typography>
+                                {positionallyFilteredRosbags && (
+                                    <Chip
+                                        label={positionallyFilteredRosbags.length}
+                                        size="small"
+                                        color="primary"
+                                        sx={{ ml: 1, height: 20, fontSize: '0.7rem', '& .MuiChip-label': { px: 0.75 } }}
+                                    />
+                                )}
+                            </Button>
                             {positionallyFilteredRosbags && (
-                                <Chip
-                                    label={positionallyFilteredRosbags.length}
+                                <Button
                                     size="small"
-                                    color="primary"
-                                    sx={{ ml: 1, height: 20, fontSize: '0.7rem', '& .MuiChip-label': { px: 0.75 } }}
-                                />
+                                    variant="outlined"
+                                    onClick={() => {
+                                        setPositionallyFilteredRosbags(null);
+                                        setPendingMcapIds(null);
+                                        setRosbags([]);
+                                        try {
+                                            sessionStorage.removeItem('__BagSeekPositionalFilter');
+                                            sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
+                                            sessionStorage.removeItem('__BagSeekMapMcapFilter');
+                                            window.dispatchEvent(new CustomEvent('__BagSeekPositionalFilterChanged'));
+                                        } catch (e) {
+                                            console.error('Failed to clear positional filter:', e);
+                                        }
+                                    }}
+                                    sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                                >
+                                    CLEAR
+                                </Button>
                             )}
-                        </Button>
+                        </Box>
 
                         {/* Rosbags - collapsible */}
                         <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1 }}>
@@ -1064,8 +1100,8 @@ const GlobalSearch: React.FC = () => {
                             >
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                     <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Rosbags</Typography>
-                                    {rosbags.length > 0 && rosbags.length < rosbagsToUse.length && (
-                                        <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main' }}>{rosbags.length}</Box>
+                                    {availableRosbags.length > 0 && (
+                                        <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main' }}>{rosbags.length}/{availableRosbags.length}</Box>
                                     )}
                                 </Box>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -1113,7 +1149,7 @@ const GlobalSearch: React.FC = () => {
                                                 </Box>
                                                 {isSelected && (
                                                     <Box onClick={(e) => e.stopPropagation()}>
-                                                        <McapRangeFilterItem rosbag={name} mcapFilters={mcapFilters} onMcapFiltersChange={setMcapFilters} />
+                                                        <McapRangeFilterItem rosbag={name} mcapFilters={mcapFilters} onMcapFiltersChange={setMcapFilters} isLoading={loadingMcapRosbags.has(name)} />
                                                     </Box>
                                                 )}
                                             </Box>
@@ -1128,8 +1164,8 @@ const GlobalSearch: React.FC = () => {
                             <Box onClick={() => setExpandedTopics(!expandedTopics)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1.5, py: 0.75, cursor: 'pointer', '&:hover': { backgroundColor: 'rgba(255,255,255,0.06)' }, borderBottom: expandedTopics ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                     <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Topics</Typography>
-                                    {selectedTopics.length > 0 && (
-                                        <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main' }}>{selectedTopics.length}</Box>
+                                    {allTopics.length > 0 && (
+                                        <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main' }}>{selectedTopics.length}/{allTopics.length}</Box>
                                     )}
                                 </Box>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -1159,9 +1195,12 @@ const GlobalSearch: React.FC = () => {
                         {/* Time Range - collapsible */}
                         <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1 }}>
                             <Box onClick={() => setExpandedTimeRange(!expandedTimeRange)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1.5, py: 0.75, cursor: 'pointer', '&:hover': { backgroundColor: 'rgba(255,255,255,0.06)' }, borderBottom: expandedTimeRange ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
-                                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
-                                    Time Range: {valueLabelFormat(timeRange[0])} – {valueLabelFormat(timeRange[1])}
-                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Time Range</Typography>
+                                    <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.warning.main}59`, color: 'warning.main' }}>
+                                        {valueLabelFormat(timeRange[0])} – {valueLabelFormat(timeRange[1])}
+                                    </Box>
+                                </Box>
                                 <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedTimeRange ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                             </Box>
                             <Collapse in={expandedTimeRange}>
@@ -1180,7 +1219,7 @@ const GlobalSearch: React.FC = () => {
                                             { value: 1080, label: '18:00' },
                                             { value: 1439, label: '23:59' },
                                         ]}
-                                        sx={{ mt: 0.5 }}
+                                        sx={{ mt: 0.5, fontSize: '0.65rem', '& .MuiSlider-valueLabel': { fontSize: '0.65rem' }, '& .MuiSlider-markLabel': { fontSize: '0.65rem' } }}
                                     />
                                 </Box>
                             </Collapse>
@@ -1189,7 +1228,12 @@ const GlobalSearch: React.FC = () => {
                         {/* Sampling - collapsible */}
                         <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1 }}>
                             <Box onClick={() => setExpandedSampling(!expandedSampling)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1.5, py: 0.75, cursor: 'pointer', '&:hover': { backgroundColor: 'rgba(255,255,255,0.06)' }, borderBottom: expandedSampling ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
-                                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Sampling: {sampling}</Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>Sampling</Typography>
+                                    <Box sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.info.main}59`, color: 'info.main' }}>
+                                        {sampling}
+                                    </Box>
+                                </Box>
                                 <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedSampling ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                             </Box>
                             <Collapse in={expandedSampling}>
@@ -1204,7 +1248,7 @@ const GlobalSearch: React.FC = () => {
                                         scale={(index) => samplingSteps[index]}
                                         valueLabelFormat={() => `${sampling}`}
                                         valueLabelDisplay="auto"
-                                        sx={{ mt: 0.5, '& .MuiSlider-track': { display: 'none' }, '& .MuiSlider-mark': { backgroundColor: 'currentColor' } }}
+                                        sx={{ mt: 0.5, fontSize: '0.65rem', '& .MuiSlider-track': { display: 'none' }, '& .MuiSlider-mark': { backgroundColor: 'currentColor' }, '& .MuiSlider-valueLabel': { fontSize: '0.65rem' }, '& .MuiSlider-markLabel': { fontSize: '0.65rem' } }}
                                     />
                                 </Box>
                             </Collapse>
@@ -1355,22 +1399,45 @@ const GlobalSearch: React.FC = () => {
               <Box
                 sx={{
                   flex: 1,
+                  minHeight: 0,
                   padding: 4,
                   background: '#121212',
                   borderRadius: '8px',
                   display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
                   flexDirection: 'column',
                   mt: 2,
                   mb: 2,
                 }}
               >
-                {searchStatus.status !== 'done' && (
-                  <TractorLoader progress={searchStatus.progress} />
-                )}
+                {/* TractorLoader fixed at 1/3 of space */}
+                <Box
+                  sx={{
+                    flex: '0 0 50%',
+                    minHeight: 120,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {searchStatus.status !== 'done' && (
+                    <TractorLoader progress={searchStatus.progress} />
+                  )}
+                </Box>
+                {/* Message fixed below */}
                 {searchStatus.message && (
-                  <Typography variant="body1" sx={{ mt: 2, color: 'white', textAlign: 'center', whiteSpace: 'pre-line' }}>
+                  <Typography
+                    variant="body1"
+                    sx={{
+                      flex: 1,
+                      minHeight: 0,
+                      overflowY: 'auto',
+                      mt: 2,
+                      color: 'white',
+                      textAlign: 'center',
+                      whiteSpace: 'pre-line',
+                      fontSize: '0.875rem',
+                    }}
+                  >
                     {searchStatus.message}
                   </Typography>
                 )}
