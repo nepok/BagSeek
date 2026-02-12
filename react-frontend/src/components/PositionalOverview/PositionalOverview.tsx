@@ -594,6 +594,7 @@ const PositionalOverview: React.FC = () => {
   const [selectedPolygonFile, setSelectedPolygonFile] = useState<string>('');
   const [loadingPolygonFiles, setLoadingPolygonFiles] = useState<boolean>(false);
   const [importingPolygon, setImportingPolygon] = useState<boolean>(false);
+  const [isRestoringPolygons, setIsRestoringPolygons] = useState<boolean>(false);
   const [exportingList, setExportingList] = useState<boolean>(false);
   const [applyingToSearch, setApplyingToSearch] = useState<boolean>(false);
   const [offsetDistance, setOffsetDistance] = useState<number>(0);
@@ -685,6 +686,7 @@ const PositionalOverview: React.FC = () => {
         const parsed = JSON.parse(cachedPolygons);
         if (Array.isArray(parsed) && parsed.length > 0) {
           isRestoringRef.current = true;
+          setIsRestoringPolygons(true);
           setPolygons(parsed);
           prevPolygonCountRef.current = parsed.length;
           // If there's an active (non-closed) polygon, set it as active
@@ -695,6 +697,7 @@ const PositionalOverview: React.FC = () => {
           // Reset flag after a short delay to allow state update
           setTimeout(() => {
             isRestoringRef.current = false;
+            setIsRestoringPolygons(false);
           }, 0);
         }
       }
@@ -3127,7 +3130,7 @@ const PositionalOverview: React.FC = () => {
                   size="small"
                   variant="contained"
                   color="primary"
-                  disabled={polygons.filter((p) => p.isClosed).length === 0 || applyingToSearch}
+                  disabled={polygons.filter((p) => p.isClosed).length === 0 || applyingToSearch || importingPolygon || isRestoringPolygons}
                 onClick={async () => {
                   setApplyingToSearch(true);
                   try {
@@ -3158,10 +3161,10 @@ const PositionalOverview: React.FC = () => {
                   console.log(`\t\t[MCAP-DEBUG] overlappingRosbags (${overlappingRosbags.length}):`, overlappingRosbags);
                   console.log(`\t\t[MCAP-DEBUG] mcapFilterMap keys (${Object.keys(mcapFilterMap).length}):`, Object.keys(mcapFilterMap));
 
-                  // Store filtered rosbags, MCAP IDs, and polygons in sessionStorage
+                  // Store filtered rosbags, MCAP IDs, and navigation flag in sessionStorage.
+                  // Critical data first — polygon backup last (largest payload, non-essential for search).
                   try {
                     sessionStorage.setItem('__BagSeekPositionalFilter', JSON.stringify(overlappingRosbags));
-                    sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
                     if (Object.keys(mcapFilterMap).length > 0) {
                       sessionStorage.setItem('__BagSeekPositionalMcapFilter', JSON.stringify(mcapFilterMap));
                       console.log('\t\t[MCAP-DEBUG] Stored mcapFilterMap in sessionStorage');
@@ -3169,12 +3172,16 @@ const PositionalOverview: React.FC = () => {
                       sessionStorage.removeItem('__BagSeekPositionalMcapFilter');
                       console.log('\t\t[MCAP-DEBUG] No mcapFilterMap to store (empty)');
                     }
-                    // Flag that we just applied so Search auto-selects the filtered rosbags
                     sessionStorage.setItem('__BagSeekApplyToSearchJustNavigated', '1');
-                    // Dispatch custom event for same-tab updates
                     window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
                   } catch (e) {
                     console.error('Failed to store positional filter:', e);
+                  }
+                  // Polygon backup stored separately — not needed for search, only for restoring MAP view
+                  try {
+                    sessionStorage.setItem('__BagSeekPositionalPolygons', JSON.stringify(polygons));
+                  } catch (e) {
+                    console.warn('Could not persist polygon data (storage quota may be full):', e);
                   }
 
                   console.log('\t\t[MCAP-DEBUG] Navigating to /search');
@@ -3186,7 +3193,7 @@ const PositionalOverview: React.FC = () => {
                 }}
                 sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
               >
-                {applyingToSearch ? 'Computing...' : 'Apply to Search'}
+                {applyingToSearch ? 'Computing...' : isRestoringPolygons ? 'Restoring...' : 'Apply to Search'}
               </Button>
                 <Button
                   size="small"
