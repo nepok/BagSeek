@@ -58,6 +58,7 @@ const Export: React.FC<ExportProps> = ({
   const [includeRosbagName, setIncludeRosbagName] = useState(true);
   const [includeMcapRange, setIncludeMcapRange] = useState(false);
   const [includePartNumber, setIncludePartNumber] = useState(false);
+  const [useSameCustomText, setUseSameCustomText] = useState(false);
   const [userCustomExportPart, setUserCustomExportPart] = useState('');
   const [userCustomExportParts, setUserCustomExportParts] = useState<string[]>([]);
 
@@ -188,11 +189,10 @@ const Export: React.FC<ExportProps> = ({
     setUserCustomExportPart(customPart.replace(/\//g, '_'));
   };
   const handleExportPartChange = (index: number, value: string) => {
-    setUserCustomExportParts((prev) => {
-      const next = [...prev];
-      next[index] = value.replace(/\//g, '_');
-      return next;
-    });
+    const sanitized = value.replace(/\//g, '_');
+    setUserCustomExportParts((prev) =>
+      useSameCustomText ? prev.map(() => sanitized) : prev.map((v, i) => (i === index ? sanitized : v))
+    );
   };
 
   // Load pending MCAP IDs: MAP live highlighted MCAPs first, then Apply-to-Search filter
@@ -357,12 +357,14 @@ const Export: React.FC<ExportProps> = ({
       const p: string[] = [];
       if (includeRosbagName && rosbagName) p.push(rosbagName);
       if (includeMcapRange && pd.mcapRangeSuffix) p.push(pd.mcapRangeSuffix.replace(/^_/, ''));
-      const custom = (userCustomExportParts[i] ?? '').trim();
+      const custom = useSameCustomText
+        ? (userCustomExportParts[0] ?? '').trim()
+        : (userCustomExportParts[i] ?? '').trim();
       if (custom) p.push(custom);
       if (includePartNumber) p.push(`export_Part_${i + 1}`);
       return p.join('_');
     });
-  }, [selectedRosbagPath, includeRosbagName, includeMcapRange, includePartNumber, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix]);
+  }, [selectedRosbagPath, includeRosbagName, includeMcapRange, includePartNumber, useSameCustomText, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix]);
 
   const builtExportName = builtExportNames[0] ?? '';
 
@@ -971,20 +973,28 @@ const Export: React.FC<ExportProps> = ({
                   <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setIncludeRosbagName((v) => !v)}>
                     <Checkbox size="small" checked={includeRosbagName} sx={{ p: 0.5 }} />
                     <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.87)', cursor: 'pointer' }}>
-                      Include Rosbag Name
+                      Rosbag Name
                     </Typography>
                   </Box>
                   <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setIncludeMcapRange((v) => !v)}>
                     <Checkbox size="small" checked={includeMcapRange} disabled={!mcapRangeSuffix && partCount <= 1} sx={{ p: 0.5 }} />
                     <Typography variant="body2" sx={{ fontSize: '0.8rem', color: (mcapRangeSuffix || partCount > 1) ? 'rgba(255,255,255,0.87)' : 'rgba(255,255,255,0.5)', cursor: (mcapRangeSuffix || partCount > 1) ? 'pointer' : 'default' }}>
-                      Include MCAP Range
+                      MCAP Range
                     </Typography>
                   </Box>
                   {partCount > 1 && (
                     <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setIncludePartNumber((v) => !v)}>
                       <Checkbox size="small" checked={includePartNumber} sx={{ p: 0.5 }} />
                       <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.87)', cursor: 'pointer' }}>
-                        Include Part Number
+                        Part Number
+                      </Typography>
+                    </Box>
+                  )}
+                  {partCount > 1 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setUseSameCustomText((v) => !v)}>
+                      <Checkbox size="small" checked={useSameCustomText} sx={{ p: 0.5 }} />
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.87)', cursor: 'pointer' }}>
+                        Shared custom text
                       </Typography>
                     </Box>
                   )}
