@@ -13,6 +13,9 @@ const darkTheme = createTheme({
     warning: {
       main: '#E8C872',
     },
+    info: {
+      main: '#8BA9C8',
+    },
   },
   
 });
