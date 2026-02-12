@@ -24,9 +24,10 @@ interface RosbagOverviewProps {
             };
         };
     };
+    selectedTopics?: string[];
 }
 
-const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic }) => {
+const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic, selectedTopics }) => {
     const PREVIEW_W = 240; // fixed preview width in px
     const PREVIEW_HALF = PREVIEW_W / 2;
     const navigate = useNavigate();
@@ -306,7 +307,10 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                     {modelRosbags.map((rosbag) => {
                                         const rosbagName = extractRosbagName(rosbag);
-                                        const rosbagTopics = topics[model]?.[rosbagName] || [];
+                                        const rosbagTopicsAll = topics[model]?.[rosbagName] || [];
+                                        const rosbagTopics = selectedTopics && selectedTopics.length > 0
+                                            ? rosbagTopicsAll.filter(t => selectedTopics.includes(t))
+                                            : rosbagTopicsAll;
                                         const rosbagKey = `${model}|${rosbagName}`;
                                         // Default to expanded (true) if not explicitly set to false
                                         const isRosbagExpanded = expandedRosbags[rosbagKey] !== false;
