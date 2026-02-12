@@ -4,12 +4,14 @@ import {
   Collapse,
   IconButton,
   Slider,
+  TextField,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { extractRosbagName } from '../../utils/rosbag';
+import './McapRangeFilter.css';
 
 // Per-MCAP metadata from the backend
 export interface McapRangeMeta {
@@ -39,6 +41,26 @@ interface McapRangeFilterProps {
   pendingMcapIds?: Record<string, string[]> | null;
   /** Called after pending MCAP IDs have been consumed (converted to windows). */
   onPendingMcapIdsConsumed?: () => void;
+  /** Additional rosbags to preload metadata for (e.g. dropdown display). */
+  rosbagsToPreload?: string[];
+  /** When true, only run effects (fetch, etc.) and render nothing. Use when embedding MCAP UI inline elsewhere. */
+  logicOnly?: boolean;
+  /** When true, skip applying pending MCAP IDs until refresh completes (avoids consuming before rosbags are complete). */
+  deferPendingUntilAfterRefresh?: boolean;
+}
+
+export interface McapRangeFilterItemProps {
+  rosbag: string;
+  mcapFilters: McapFilterState;
+  onMcapFiltersChange: (filters: McapFilterState) => void;
+}
+
+/** Format nanosecond timestamp to HH:MM time-of-day. Exported for use in Rosbag select. */
+export function formatNsToTime(nsStr: string | undefined): string {
+  const ms = nsToMs(nsStr);
+  if (ms === null) return '??:??';
+  const d = new Date(ms);
+  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 
 /** Generate a stable id for a window (for React keys). */
@@ -60,9 +82,9 @@ function mcapIdsToWindows(
   ranges: McapRangeMeta[],
   mcapIds: string[]
 ): [number, number][] {
-  const idSet = new Set(mcapIds);
+  const idSet = new Set(mcapIds.map((id) => String(id)));
   const indices = ranges
-    .map((r, i) => (idSet.has(r.mcapIdentifier) ? i : -1))
+    .map((r, i) => (idSet.has(String(r.mcapIdentifier)) ? i : -1))
     .filter((i) => i >= 0)
     .sort((a, b) => a - b);
 
@@ -94,14 +116,6 @@ function nsToMs(nsStr: string | undefined): number | null {
   }
 }
 
-/** Format a nanosecond timestamp string to HH:MM time-of-day. */
-function formatNsToTime(nsStr: string | undefined): string {
-  const ms = nsToMs(nsStr);
-  if (ms === null) return '??:??';
-  const d = new Date(ms);
-  return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-}
-
 /** Format a nanosecond timestamp string to HH:MM:SS time-of-day. */
 function formatNsToTimeWithSeconds(nsStr: string | undefined): string {
   const ms = nsToMs(nsStr);
@@ -111,7 +125,7 @@ function formatNsToTimeWithSeconds(nsStr: string | undefined): string {
 }
 
 const ONE_MIN_MS = 60_000;
-const TEN_SEC_MS = 10_000;
+const labelStepFraction = 14;
 
 /** Custom track: top = whole MCAP IDs (by index), bottom = whole minutes (by time). Not aligned. */
 interface McapRangeTrackProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -133,9 +147,8 @@ function McapRangeTrack({
   const lastMs = nsToMs(ranges[maxIdx]?.lastTimestampNs);
 
   // Top: whole MCAP IDs only (0, 1, 2...) - positioned by index fraction
-  const idLabelStep = Math.max(1, Math.ceil(ranges.length / 40));
-  const shouldShowId = (i: number) =>
-    i % idLabelStep === 0 || i === wStart || i === wEnd;
+  const idLabelStep = Math.max(1, Math.ceil(ranges.length / labelStepFraction));
+  const shouldShowId = (i: number) => i % idLabelStep === 0;
 
   // Bottom: whole minutes only - positioned by time fraction
   const minuteMarks: { minuteMs: number; frac: number }[] = [];
@@ -148,28 +161,8 @@ function McapRangeTrack({
       minuteMarks.push({ minuteMs: t, frac });
     }
   }
-  const todLabelStep = Math.max(1, Math.ceil(minuteMarks.length / 40));
+  const todLabelStep = Math.max(1, Math.ceil(minuteMarks.length / labelStepFraction));
   const shouldShowTod = (i: number) => i % todLabelStep === 0;
-
-  // Small ticks every 10 seconds, derived from minute grid so they align
-  const tenSecMarks: { ms: number; frac: number }[] = [];
-  if (firstMs !== null && lastMs !== null && lastMs > firstMs) {
-    const durationMs = lastMs - firstMs;
-    const startMinute = Math.ceil(firstMs / ONE_MIN_MS) * ONE_MIN_MS;
-    const endMinute = Math.floor(lastMs / ONE_MIN_MS) * ONE_MIN_MS;
-    // Partial first minute: 10s marks between firstMs and startMinute
-    for (let t = Math.ceil(firstMs / TEN_SEC_MS) * TEN_SEC_MS; t < startMinute; t += TEN_SEC_MS) {
-      tenSecMarks.push({ ms: t, frac: (t - firstMs) / durationMs });
-    }
-    // Full minutes: :10, :20, :30, :40, :50 within each minute (omit :00 = minute mark)
-    for (let minute = startMinute; minute <= lastMs; minute += ONE_MIN_MS) {
-      for (let s = 1; s <= 5; s++) {
-        const t = minute + s * TEN_SEC_MS;
-        if (t > lastMs) break;
-        tenSecMarks.push({ ms: t, frac: (t - firstMs) / durationMs });
-      }
-    }
-  }
 
   const labelStyle = {
     position: 'absolute' as const,
@@ -262,15 +255,14 @@ function McapRangeTrack({
         {ranges.map((r, i) => {
           if (!shouldShowId(i)) return null;
           const frac = maxIdx > 0 ? i / maxIdx : 0;
-          const isActive = i === wStart || i === wEnd;
           return (
             <div
               key={`id-${i}`}
               style={{
                 ...labelStyle,
                 left: `${frac * 100}%`,
-                color: isActive ? '#90caf9' : 'rgba(255,255,255,0.5)',
-                fontWeight: isActive ? 600 : 400,
+                color: 'rgba(255,255,255,0.5)',
+                fontWeight: 400,
               }}
             >
               {r.mcapIdentifier}
@@ -289,7 +281,7 @@ function McapRangeTrack({
       </div>
       {/* MUI track bar (selected range) - must use original style/className for positioning */}
       <span className={className} style={style} {...other} />
-      {/* Small ticks every 10 seconds - no labels */}
+      {/* Minute ticks for TOD: bigger for labeled, smaller for unlabeled */}
       <div
         style={{
           position: 'absolute',
@@ -299,47 +291,27 @@ function McapRangeTrack({
           height: 0,
         }}
       >
-        {tenSecMarks.map((m) => (
-          <div
-            key={`10s-${m.ms}`}
-            style={{
-              ...tickStyle,
-              left: `${m.frac * 100}%`,
-              bottom: 0,
-              height: 3,
-              opacity: 0.4,
-            }}
-          />
-        ))}
-      </div>
-      {/* Minute ticks - longer downward, slightly less transparent */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: -8,
-          left: 0,
-          right: 0,
-          height: 0,
-        }}
-      >
-        {minuteMarks.map((m) => (
-          <div
-            key={`min-tick-${m.minuteMs}`}
-            style={{
-              ...tickStyle,
-              left: `${m.frac * 100}%`,
-              top: -3,
-              height: 8,
-              opacity: 0.6,
-            }}
-          />
-        ))}
+        {minuteMarks.map((m, i) => {
+          const hasLabel = shouldShowTod(i);
+          return (
+            <div
+              key={`min-tick-${m.minuteMs}`}
+              style={{
+                ...tickStyle,
+                left: `${m.frac * 100}%`,
+                ...(hasLabel
+                  ? { top: -3, height: 5, opacity: 0.6 }
+                  : { bottom: 0, height: 3, opacity: 0.4 }),
+              }}
+            />
+          );
+        })}
       </div>
       {/* TOD labels below (only where shown) - no ticks, ticks are above */}
       <div
         style={{
           position: 'absolute',
-          bottom: -14,
+          bottom: -12,
           left: 0,
           right: 0,
           height: 0,
@@ -370,12 +342,233 @@ function McapRangeTrack({
   );
 }
 
+/** Per-rosbag MCAP range UI for inline use (e.g. inside Rosbag selector). */
+export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.memo(({
+  rosbag,
+  mcapFilters,
+  onMcapFiltersChange,
+}) => {
+  const filter = mcapFilters[rosbag];
+  // Local draft values while dragging — keyed by window index. Only the actively
+  // dragged window has an entry; all others read from the committed filter state.
+  const [drafts, setDrafts] = useState<Record<number, [number, number]>>({});
+
+  if (!filter || filter.ranges.length <= 1) return null;
+
+  const { ranges, windows } = filter;
+  const maxIdx = ranges.length - 1;
+  const globalFirstTime = formatNsToTime(ranges[0]?.firstTimestampNs);
+  const globalLastTime = formatNsToTime(ranges[maxIdx]?.lastTimestampNs);
+
+  const addWindow = () => {
+    const ids = ensureWindowIds(filter);
+    onMcapFiltersChange({
+      ...mcapFilters,
+      [rosbag]: {
+        ...filter,
+        windows: [...filter.windows, [0, maxIdx] as [number, number]],
+        windowIds: [...ids, genWindowId()],
+      },
+    });
+  };
+
+  const removeWindow = (windowIdx: number) => {
+    const [wStart, wEnd] = filter.windows[windowIdx] ?? [0, maxIdx];
+    if (wStart === 0 && wEnd === maxIdx && filter.windows.length <= 1) return;
+    const ids = ensureWindowIds(filter);
+    if (filter.windows.length <= 1) {
+      onMcapFiltersChange({
+        ...mcapFilters,
+        [rosbag]: {
+          ...filter,
+          windows: [[0, maxIdx] as [number, number]],
+          windowIds: [genWindowId()],
+        },
+      });
+    } else {
+      onMcapFiltersChange({
+        ...mcapFilters,
+        [rosbag]: {
+          ...filter,
+          windows: filter.windows.filter((_, i) => i !== windowIdx),
+          windowIds: ids.filter((_, i) => i !== windowIdx),
+        },
+      });
+    }
+  };
+
+  const commitWindow = (windowIdx: number, value: [number, number]) => {
+    setDrafts((d) => { const next = { ...d }; delete next[windowIdx]; return next; });
+    onMcapFiltersChange({
+      ...mcapFilters,
+      [rosbag]: {
+        ...filter,
+        windows: filter.windows.map((w, i) => (i === windowIdx ? value : w)),
+      },
+    });
+  };
+
+  return (
+    <Box
+      className="mcap-range-filter"
+      sx={{
+        mt: 0.75,
+        mb: 0.5,
+        ml: 2.5,
+        border: '1px solid rgba(255, 255, 255, 0.15)',
+        borderRadius: 1,
+        p: 1,
+      }}
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 0.5,
+          pb: 0.5,
+          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+        }}
+      >
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'rgba(255,255,255,0.6)',
+            fontSize: '0.7rem',
+          }}
+        >
+          {ranges.length} MCAPs · {globalFirstTime} – {globalLastTime}
+        </Typography>
+        <IconButton
+          size="small"
+          onClick={addWindow}
+          title="Add MCAP range"
+          sx={{ color: 'rgba(255,255,255,0.5)' }}
+        >
+          <AddIcon fontSize="small" />
+        </IconButton>
+      </Box>
+      {windows.map((window, wIdx) => {
+        const draft = drafts[wIdx];
+        const [wStart, wEnd] = draft ?? window;
+        const windowIds = ensureWindowIds(filter);
+        const windowId = windowIds[wIdx] ?? `fallback-${wIdx}`;
+        const beginId = ranges[wStart]?.mcapIdentifier ?? '';
+        const endId = ranges[wEnd]?.mcapIdentifier ?? '';
+
+        const handleBeginIdBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+          const val = e.target.value.trim();
+          const idx = ranges.findIndex((r) => r.mcapIdentifier === val);
+          if (idx >= 0) commitWindow(wIdx, [idx, Math.max(idx, wEnd)]);
+        };
+        const handleEndIdBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+          const val = e.target.value.trim();
+          const idx = ranges.findIndex((r) => r.mcapIdentifier === val);
+          if (idx >= 0) commitWindow(wIdx, [Math.min(idx, wStart), idx]);
+        };
+
+        return (
+          <Box
+            key={windowId}
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.5,
+              mb: 0.5,
+              p: 1,
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: 1,
+            }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+              <TextField
+                key={`${windowId}-begin-${beginId}`}
+                size="small"
+                label="Begin ID"
+                defaultValue={beginId}
+                onBlur={handleBeginIdBlur}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
+                sx={{
+                  flex: 1,
+                  '& .MuiInputBase-input': { fontSize: '0.75rem' },
+                  '& .MuiInputLabel-root': { fontSize: '0.75rem' },
+                }}
+              />
+              <TextField
+                key={`${windowId}-end-${endId}`}
+                size="small"
+                label="End ID"
+                defaultValue={endId}
+                onBlur={handleEndIdBlur}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
+                sx={{
+                  flex: 1,
+                  '& .MuiInputBase-input': { fontSize: '0.75rem' },
+                  '& .MuiInputLabel-root': { fontSize: '0.75rem' },
+                }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{ flexGrow: 1, pl: 5, pr: 1 }}>
+                <Slider
+                  value={[wStart, wEnd]}
+                  onChange={(_, newValue) =>
+                    setDrafts((d) => ({ ...d, [wIdx]: newValue as [number, number] }))
+                  }
+                  onChangeCommitted={(_, newValue) =>
+                    commitWindow(wIdx, newValue as [number, number])
+                  }
+                  min={0}
+                  max={maxIdx}
+                  valueLabelDisplay="off"
+                  components={{
+                    Track: (props) => (
+                      <McapRangeTrack
+                        {...props}
+                        ranges={ranges}
+                        maxIdx={maxIdx}
+                        value={[wStart, wEnd]}
+                      />
+                    ),
+                  }}
+                  sx={{ my: 1 }}
+                />
+              </Box>
+              <IconButton
+                size="small"
+                onClick={() => removeWindow(wIdx)}
+                disabled={windows.length <= 1}
+                sx={{
+                  color: 'rgba(255,255,255,0.4)',
+                  '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)', opacity: 0.6 },
+                }}
+              >
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}, (prev, next) =>
+  prev.rosbag === next.rosbag &&
+  prev.mcapFilters[prev.rosbag] === next.mcapFilters[next.rosbag]
+);
+
 const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   selectedRosbags,
   mcapFilters,
   onMcapFiltersChange,
   pendingMcapIds,
   onPendingMcapIdsConsumed,
+  rosbagsToPreload,
+  logicOnly = false,
+  deferPendingUntilAfterRefresh = false,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState<Set<string>>(new Set());
@@ -384,11 +577,16 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   // Ref to latest mcapFilters to avoid stale closures in async callbacks
   const filtersRef = useRef(mcapFilters);
   filtersRef.current = mcapFilters;
+  // Ref to latest pendingMcapIds so fetch-meta callbacks can apply them inline
+  const pendingRef = useRef(pendingMcapIds);
+  pendingRef.current = pendingMcapIds;
 
-  // Fetch MCAP metadata for selected rosbags that aren't cached yet
+  // Fetch MCAP metadata for selected rosbags + preload list (e.g. for dropdown display) that aren't cached yet
   useEffect(() => {
-    console.log(`\t\t[MCAP-DEBUG] fetch-meta effect: selectedRosbags=${selectedRosbags.length}, cached=${Object.keys(metaCache.current).length}, loading=${loading.size}`);
-    const toFetch = selectedRosbags.filter(
+    const toPreload = rosbagsToPreload ?? [];
+    const allToConsider = Array.from(new Set([...selectedRosbags, ...toPreload]));
+    console.log(`\t\t[MCAP-DEBUG] fetch-meta effect: selectedRosbags=${selectedRosbags.length}, preload=${toPreload.length}, cached=${Object.keys(metaCache.current).length}, loading=${loading.size}`);
+    const toFetch = allToConsider.filter(
       (r) => !metaCache.current[r] && !loading.has(r)
     );
     if (toFetch.length === 0) {
@@ -421,17 +619,38 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
         metaCache.current[rosbag] = ranges;
         console.log(`\t\t[MCAP-DEBUG] fetch-meta: "${rosbag}" -> ${ranges.length} ranges, IDs=[${ranges.map(r => r.mcapIdentifier).join(',')}]`);
 
-        // Initialize filter state for this rosbag if not present (pre-add full-range window so thumbs are movable)
+        // Initialize filter state for this rosbag if not present
         if (!filtersRef.current[rosbag]) {
           const maxIdx = Math.max(0, ranges.length - 1);
-          console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with full-range window [0, ${maxIdx}], filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+          let windows: [number, number][] = [[0, maxIdx]];
+          let windowIds = [genWindowId()];
+
+          // Apply pending MCAP IDs inline (from positional/map filter) instead of full range
+          const pending = pendingRef.current;
+          if (pending) {
+            const rosbagName = extractRosbagName(rosbag);
+            const pendingKey = Object.keys(pending).find(
+              (k) => k === rosbagName || k === rosbag
+            );
+            if (pendingKey) {
+              const pendingWindows = mcapIdsToWindows(ranges, pending[pendingKey]);
+              if (pendingWindows.length > 0) {
+                windows = pendingWindows;
+                windowIds = pendingWindows.map(() => genWindowId());
+                console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with PENDING windows ${JSON.stringify(windows)} (from ${pending[pendingKey].length} mcapIds), filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+              } else {
+                console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with full-range window [0, ${maxIdx}] (pending mcapIds produced 0 windows), filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+              }
+            } else {
+              console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with full-range window [0, ${maxIdx}], filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+            }
+          } else {
+            console.log(`\t\t[MCAP-DEBUG] fetch-meta: initializing "${rosbag}" with full-range window [0, ${maxIdx}], filtersRef has ${Object.keys(filtersRef.current).length} entries before`);
+          }
+
           const updated = {
             ...filtersRef.current,
-            [rosbag]: {
-              ranges,
-              windows: [[0, maxIdx] as [number, number]],
-              windowIds: [genWindowId()],
-            },
+            [rosbag]: { ranges, windows, windowIds },
           };
           // Update ref synchronously so concurrent async callbacks see accumulated state
           filtersRef.current = updated;
@@ -449,7 +668,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
         });
       }
     });
-  }, [selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedRosbags, rosbagsToPreload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ensure windowIds exist and are persisted (for stable React keys)
   useEffect(() => {
@@ -491,23 +710,27 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
     }
   }, [mcapFilters, selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clean up filters for deselected rosbags
+  // Clean up filters for rosbags that are neither selected nor in preload (dropdown)
   useEffect(() => {
-    const rosbagSet = new Set(selectedRosbags);
-    const toRemove = Object.keys(mcapFilters).filter((r) => !rosbagSet.has(r));
+    const keepSet = new Set([...selectedRosbags, ...(rosbagsToPreload ?? [])]);
+    const toRemove = Object.keys(mcapFilters).filter((r) => !keepSet.has(r));
     if (toRemove.length > 0) {
       console.log(`\t\t[MCAP-DEBUG] cleanup: removing ${toRemove.length} deselected rosbags:`, toRemove.map(r => extractRosbagName(r)));
       const next = { ...mcapFilters };
       toRemove.forEach((r) => delete next[r]);
       onMcapFiltersChange(next);
     }
-  }, [selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedRosbags, rosbagsToPreload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply pending MCAP IDs from the positional filter once ranges are loaded
   useEffect(() => {
-    console.log(`\t\t[MCAP-DEBUG] pending effect: pendingMcapIds=${pendingMcapIds ? Object.keys(pendingMcapIds).length + ' keys' : 'null'}, selectedRosbags=${selectedRosbags.length}, mcapFilters keys=${Object.keys(mcapFilters).length}`);
+    console.log(`\t\t[MCAP-DEBUG] pending effect: pendingMcapIds=${pendingMcapIds ? Object.keys(pendingMcapIds).length + ' keys' : 'null'}, selectedRosbags=${selectedRosbags.length}, mcapFilters keys=${Object.keys(mcapFilters).length}, deferPending=${deferPendingUntilAfterRefresh}`);
     if (!pendingMcapIds) {
       console.log('\t\t[MCAP-DEBUG] pending effect: pendingMcapIds is null, returning');
+      return;
+    }
+    if (deferPendingUntilAfterRefresh) {
+      console.log('\t\t[MCAP-DEBUG] pending effect: deferring until file path refresh completes');
       return;
     }
     // Don't process until rosbags have been selected (auto-select may not have run yet)
@@ -582,7 +805,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
     }
     console.log('\t\t[MCAP-DEBUG] pending effect: consuming pendingMcapIds');
     onPendingMcapIdsConsumed?.();
-  }, [pendingMcapIds, mcapFilters, selectedRosbags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingMcapIds, mcapFilters, selectedRosbags, deferPendingUntilAfterRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addWindow = (rosbag: string) => {
     const filter = mcapFilters[rosbag];
@@ -659,6 +882,9 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
   // Only show rosbags that have MCAP metadata loaded and more than 1 MCAP
   const allEntries = selectedRosbags.map((r) => ({ rosbag: r, filter: mcapFilters[r] }));
   const rosbagEntries = allEntries.filter((e) => e.filter && e.filter.ranges.length > 1);
+
+  if (logicOnly) return null;
+
   const hiddenSingleMcap = allEntries.filter((e) => e.filter && e.filter.ranges.length === 1);
   const hiddenNoFilter = allEntries.filter((e) => !e.filter);
   const hiddenEmptyRanges = allEntries.filter((e) => e.filter && e.filter.ranges.length === 0);
@@ -677,6 +903,7 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
 
   return (
     <Box
+      className="mcap-range-filter"
       sx={{
         border: '1px solid rgba(255, 255, 255, 0.23)',
         borderRadius: 1,
@@ -796,66 +1023,107 @@ const McapRangeFilter: React.FC<McapRangeFilterProps> = ({
                   const [wStart, wEnd] = window;
                   const windowIds = ensureWindowIds(filter!);
                   const windowId = windowIds[wIdx] ?? `fallback-${wIdx}`;
+                  const beginId = ranges[wStart]?.mcapIdentifier ?? '';
+                  const endId = ranges[wEnd]?.mcapIdentifier ?? '';
+
+                  const handleBeginIdBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+                    const val = e.target.value.trim();
+                    const idx = ranges.findIndex((r) => r.mcapIdentifier === val);
+                    if (idx >= 0) updateWindow(rosbag, wIdx, [idx, Math.max(idx, wEnd)]);
+                  };
+                  const handleEndIdBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+                    const val = e.target.value.trim();
+                    const idx = ranges.findIndex((r) => r.mcapIdentifier === val);
+                    if (idx >= 0) updateWindow(rosbag, wIdx, [Math.min(idx, wStart), idx]);
+                  };
 
                   return (
                     <Box
                       key={windowId}
                       sx={{
                         display: 'flex',
-                        alignItems: 'center',
-                        gap: 1,
+                        flexDirection: 'column',
+                        gap: 0.5,
                         mb: 0.5,
                         p: 1,
                         border: '1px solid rgba(255, 255, 255, 0.12)',
                         borderRadius: 1,
                       }}
                     >
-                      {/* Range slider with custom track (ID above, TOD below) */}
-                      <Box sx={{ flexGrow: 1, pl: 5, pr: 1 }}>
-                        <Slider
-                          value={[wStart, wEnd]}
-                          onChange={(_, newValue) =>
-                            updateWindow(rosbag, wIdx, newValue as [number, number])
-                          }
-                          min={0}
-                          max={maxIdx}
-                          valueLabelDisplay="auto"
-                          valueLabelFormat={(idx) => {
-                            const r = ranges[idx];
-                            if (!r) return String(idx);
-                            return `MCAP ${r.mcapIdentifier} (${formatNsToTimeWithSeconds(r.firstTimestampNs)})`;
-                          }}
-                          components={{
-                            Track: (props) => (
-                              <McapRangeTrack
-                                {...props}
-                                ranges={ranges}
-                                maxIdx={maxIdx}
-                                value={[wStart, wEnd]}
-                              />
-                            ),
+                      {/* Top row: beginning ID (left) and end ID (right) */}
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          key={`${windowId}-begin-${beginId}`}
+                          size="small"
+                          label="Begin ID"
+                          defaultValue={beginId}
+                          onBlur={handleBeginIdBlur}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                           }}
                           sx={{
-                            my: 1, // Equal space above and below for ID/TOD labels, centers slider in box
+                            flex: 1,
+                            '& .MuiInputBase-input': { fontSize: '0.75rem' },
+                            '& .MuiInputLabel-root': { fontSize: '0.75rem' },
+                          }}
+                        />
+                        <TextField
+                          key={`${windowId}-end-${endId}`}
+                          size="small"
+                          label="End ID"
+                          defaultValue={endId}
+                          onBlur={handleEndIdBlur}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          }}
+                          sx={{
+                            flex: 1,
+                            '& .MuiInputBase-input': { fontSize: '0.75rem' },
+                            '& .MuiInputLabel-root': { fontSize: '0.75rem' },
                           }}
                         />
                       </Box>
-
-                      {/* Remove button - disabled when only one window */}
-                      <IconButton
-                        size="small"
-                        onClick={() => removeWindow(rosbag, wIdx)}
-                        disabled={windows.length <= 1}
-                        sx={{
-                          color: 'rgba(255,255,255,0.4)',
-                          '&.Mui-disabled': {
-                            color: 'rgba(255,255,255,0.15)',
-                            opacity: 0.6,
-                          },
-                        }}
-                      >
-                        <CloseIcon fontSize="small" />
-                      </IconButton>
+                      {/* Range slider with custom track (ID above, TOD below) + remove button */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box sx={{ flexGrow: 1, pl: 5, pr: 1 }}>
+                          <Slider
+                            value={[wStart, wEnd]}
+                            onChange={(_, newValue) =>
+                              updateWindow(rosbag, wIdx, newValue as [number, number])
+                            }
+                            min={0}
+                            max={maxIdx}
+                            valueLabelDisplay="off"
+                            components={{
+                              Track: (props) => (
+                                <McapRangeTrack
+                                  {...props}
+                                  ranges={ranges}
+                                  maxIdx={maxIdx}
+                                  value={[wStart, wEnd]}
+                                />
+                              ),
+                            }}
+                            sx={{
+                              my: 1,
+                            }}
+                          />
+                        </Box>
+                        <IconButton
+                          size="small"
+                          onClick={() => removeWindow(rosbag, wIdx)}
+                          disabled={windows.length <= 1}
+                          sx={{
+                            color: 'rgba(255,255,255,0.4)',
+                            '&.Mui-disabled': {
+                              color: 'rgba(255,255,255,0.15)',
+                              opacity: 0.6,
+                            },
+                          }}
+                        >
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     </Box>
                   );
                 })}
