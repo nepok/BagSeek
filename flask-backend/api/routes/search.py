@@ -1,4 +1,5 @@
 """Search routes."""
+import gc
 import json
 import uuid
 import logging
@@ -18,6 +19,29 @@ from ..utils.rosbag import load_lookup_tables_for_rosbag
 from ..utils.clip import get_text_embedding, load_agriclip, resolve_custom_checkpoint, tokenize_texts
 
 search_bp = Blueprint('search', __name__)
+
+# FAISS index build: add vectors in batches to allow progress updates during vstack+add
+FAISS_INDEX_BATCH_SIZE = 50_000
+
+
+def _release_clip_model_from_gpu(model) -> None:
+    """Safely move CLIP model off GPU and free CUDA memory. No-op if model is None or on CPU."""
+    if model is None:
+        return
+    try:
+        if hasattr(model, "cpu") and next(model.parameters(), None) is not None:
+            device = next(model.parameters()).device
+            if device.type == "cuda":
+                model.cpu()
+    except Exception as e:
+        logging.debug("[SEARCH] Error moving model to CPU during cleanup: %s", e)
+    try:
+        del model
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
 
 
 def _get_image_embedding_direct(
@@ -270,10 +294,15 @@ def search():
                     model_kind = "custom"
             except Exception as e:
                 logging.error("[SEARCH] Failed to load model %s: %s", model_name, e)
+                try:
+                    _release_clip_model_from_gpu(model)
+                except NameError:
+                    pass
                 continue
 
             if query_embedding is None:
                 logging.debug("[SEARCH] Query embedding is None for model %s; skipping", model_name)
+                _release_clip_model_from_gpu(model)
                 continue
 
             query_embedding = query_embedding.astype("float32", copy=False)
@@ -287,12 +316,23 @@ def search():
                 base_progress = (step_count / total_steps) * 0.99
                 step_range = 0.99 / total_steps
 
-                def update_progress(embeddings_processed: int, total_embeddings: int, message_suffix: str = ""):
-                    """Update progress within the current rosbag's range."""
+                PHASE_CHUNKS, PHASE_INDEX, PHASE_SEARCH = "chunks", "index", "search"
+                phase_weights = {PHASE_CHUNKS: 0.25, PHASE_INDEX: 0.70, PHASE_SEARCH: 0.05}
+                phase_starts = {PHASE_CHUNKS: 0.0, PHASE_INDEX: 0.25, PHASE_SEARCH: 0.95}
+
+                def update_progress(
+                    embeddings_processed: int,
+                    total_embeddings: int,
+                    message_suffix: str = "",
+                    phase: str = PHASE_CHUNKS,
+                ):
+                    """Update progress within the current rosbag's range. Phases: chunks (0-70%%), index (70-95%%), search (95-100%%)."""
                     if total_embeddings > 0:
-                        within_step = (embeddings_processed / total_embeddings) * step_range
+                        frac = embeddings_processed / total_embeddings
                     else:
-                        within_step = 0
+                        frac = 1.0
+                    p = phase_starts.get(phase, 0) + frac * phase_weights.get(phase, 0.25)
+                    within_step = p * step_range
                     SEARCH_PROGRESS["status"] = "running"
                     SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
                     SEARCH_PROGRESS["message"] = (
@@ -532,56 +572,69 @@ def search():
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
-                # Final progress update for embeddings loading phase
-                update_progress(total_embeddings, total_embeddings, "Running FAISS search...")
-
+                # ---- FAISS: build index in batches for progress updates during vstack+add
                 t0 = time.perf_counter()
-
-                X = np.vstack(chunks).astype("float32", copy=False)
-                t_vstack = time.perf_counter()
-                logging.info("[FAISS-DEBUG] np.vstack took %.3fs", t_vstack - t0)
-                logging.info("[FAISS-DEBUG] X shape: %s, dtype: %s, size: %.2f MB",
-                            X.shape, X.dtype, X.nbytes / 1024 / 1024)
-                logging.info("[FAISS-DEBUG] Query embedding shape: %s, dtype: %s",
-                            query_embedding.shape, query_embedding.dtype)
-
-                if X.shape[0] != len(meta_for_row):
-                    msg = f"[SEARCH] Row/meta mismatch: X={X.shape[0]} vs meta={len(meta_for_row)}"
+                dim = chunks[0].shape[1] if chunks else 0
+                total_vectors = sum(c.shape[0] for c in chunks)
+                if total_vectors != len(meta_for_row):
+                    msg = f"[SEARCH] Row/meta mismatch: vectors={total_vectors} vs meta={len(meta_for_row)}"
                     logging.debug(msg)
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
-                # ---- FAISS search (HNSW - fast approximate search)
-                t1 = time.perf_counter()
-                dim = X.shape[1]
                 M = 32  # edges per node
-                logging.info("[FAISS-DEBUG] Creating IndexHNSWFlat with dim=%d, M=%d", dim, M)
-
                 index = faiss.IndexHNSWFlat(dim, M)
                 index.hnsw.efSearch = 64
-                index.hnsw.efConstruction = 40  # default, but explicit
+                index.hnsw.efConstruction = 40
                 t_create = time.perf_counter()
-                logging.info("[FAISS-DEBUG] Index creation took %.3fs", t_create - t1)
-                logging.info("[FAISS-DEBUG] Index properties: ntotal=%d, is_trained=%s, efSearch=%d, efConstruction=%d",
-                            index.ntotal, index.is_trained, index.hnsw.efSearch, index.hnsw.efConstruction)
+                logging.info("[FAISS-DEBUG] Index created, dim=%d, M=%d", dim, M)
 
-                t2 = time.perf_counter()
-                index.add(X)
-                t_add = time.perf_counter()
-                logging.info("[FAISS-DEBUG] index.add() took %.3fs for %d vectors", t_add - t2, X.shape[0])
-                logging.info("[FAISS-DEBUG] Index after add: ntotal=%d", index.ntotal)
+                vectors_added = 0
+                vectors_in_index = 0
+                accumulated = []
+                t_vstack_total, t_add_total = 0.0, 0.0
+                for i, chunk in enumerate(chunks):
+                    if is_search_cancelled(search_id):
+                        logging.info("[SEARCH] Cancelled during index build")
+                        break
+                    accumulated.append(chunk)
+                    vectors_added += chunk.shape[0]
+                    if vectors_added >= FAISS_INDEX_BATCH_SIZE or (i == len(chunks) - 1):
+                        t_v = time.perf_counter()
+                        X_batch = np.vstack(accumulated).astype("float32", copy=False)
+                        t_vstack_total += time.perf_counter() - t_v
+                        t_a = time.perf_counter()
+                        index.add(X_batch)
+                        t_add_total += time.perf_counter() - t_a
+                        vectors_in_index += X_batch.shape[0]
+                        update_progress(
+                            vectors_in_index,
+                            total_vectors,
+                            f"Building search index: {vectors_in_index:,} / {total_vectors:,}",
+                            phase=PHASE_INDEX,
+                        )
+                        accumulated = []
+                        vectors_added = 0
 
+                t_vstack = t_vstack_total
+                t_add = t_add_total
+                logging.info("[FAISS-DEBUG] Batched vstack+add: vstack=%.3fs, add=%.3fs, total=%d vectors",
+                            t_vstack, t_add, index.ntotal)
+                logging.info("[FAISS-DEBUG] X total: %.2f MB", total_vectors * dim * 4 / 1024 / 1024)
+
+                update_progress(total_vectors, total_vectors, "Running search...", phase=PHASE_SEARCH)
                 t3 = time.perf_counter()
                 q = query_embedding.reshape(1, -1)
                 logging.info("[FAISS-DEBUG] Starting search for k=%d neighbors", MAX_K)
                 D, I = index.search(q, MAX_K)
                 t_search = time.perf_counter()
+                update_progress(total_vectors, total_vectors, phase=PHASE_SEARCH)
                 logging.info("[FAISS-DEBUG] index.search() took %.3fs", t_search - t3)
                 logging.info("[FAISS-DEBUG] Results: D.shape=%s, I.shape=%s", D.shape, I.shape)
                 logging.info("[FAISS-DEBUG] Distance range: min=%.4f, max=%.4f", D.min(), D.max())
                 logging.info("[FAISS-DEBUG] Index range: min=%d, max=%d", I.min(), I.max())
                 logging.info("[FAISS-DEBUG] TOTAL FAISS pipeline: %.3fs (vstack=%.3fs, create=%.3fs, add=%.3fs, search=%.3fs)",
-                            t_search - t0, t_vstack - t0, t_create - t1, t_add - t2, t_search - t3)
+                            t_search - t0, t_vstack, t_create - t0, t_add, t_search - t3)
 
                 if D.size == 0 or I.size == 0:
                     logging.info("[FAISS-DEBUG] Empty FAISS result for %s/%s", model_name, rosbag_name)
@@ -677,14 +730,15 @@ def search():
                 logging.info("[SEARCH-DEBUG] === Rosbag %s COMPLETE: %.3fs total, %d results ===",
                             rosbag_name, t_rosbag_end - t_rosbag_start, len(model_results))
 
-            # Cleanup GPU per model
-            del model
-            torch.cuda.empty_cache()
+            # Cleanup GPU per model (including on cancellation/break)
+            _release_clip_model_from_gpu(model)
 
         # ---- Check for cancellation before post-processing
         if is_search_cancelled(search_id):
             logging.info("[SEARCH] Search cancelled, skipping post-processing")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
             SEARCH_PROGRESS["status"] = "cancelled"
             SEARCH_PROGRESS["progress"] = 0.0
             SEARCH_PROGRESS["message"] = "Search cancelled."
@@ -741,6 +795,10 @@ def search():
         SEARCH_PROGRESS["status"] = "error"
         SEARCH_PROGRESS["progress"] = 0.0
         SEARCH_PROGRESS["message"] = f"Search failed. Error ID: {error_id}"
+        try:
+            _release_clip_model_from_gpu(model)
+        except NameError:
+            pass
         return jsonify({
             'error': 'Search failed. Please try again.',
             'error_id': error_id
@@ -856,11 +914,22 @@ def search_by_image():
                 base_progress = (step_count / total_steps) * 0.99
                 step_range = 0.99 / total_steps
 
-                def update_progress(embeddings_processed: int, total_embeddings: int, message_suffix: str = ""):
+                PHASE_CHUNKS_I, PHASE_INDEX_I, PHASE_SEARCH_I = "chunks", "index", "search"
+                phase_weights_i = {PHASE_CHUNKS_I: 0.25, PHASE_INDEX_I: 0.70, PHASE_SEARCH_I: 0.05}
+                phase_starts_i = {PHASE_CHUNKS_I: 0.0, PHASE_INDEX_I: 0.25, PHASE_SEARCH_I: 0.95}
+
+                def update_progress(
+                    embeddings_processed: int,
+                    total_embeddings: int,
+                    message_suffix: str = "",
+                    phase: str = PHASE_CHUNKS_I,
+                ):
                     if total_embeddings > 0:
-                        within_step = (embeddings_processed / total_embeddings) * step_range
+                        frac = embeddings_processed / total_embeddings
                     else:
-                        within_step = 0
+                        frac = 1.0
+                    p = phase_starts_i.get(phase, 0) + frac * phase_weights_i.get(phase, 0.25)
+                    within_step = p * step_range
                     SEARCH_PROGRESS["status"] = "running"
                     SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
                     SEARCH_PROGRESS["message"] = (
@@ -1030,23 +1099,42 @@ def search_by_image():
                 if not chunks:
                     continue
 
-                update_progress(total_embeddings, total_embeddings, "Running FAISS search...")
-
-                t0 = time.perf_counter()
-                X = np.vstack(chunks).astype("float32", copy=False)
-
-                if X.shape[0] != len(meta_for_row):
+                total_vectors = sum(c.shape[0] for c in chunks)
+                if total_vectors != len(meta_for_row):
                     continue
 
-                dim = X.shape[1]
+                dim = chunks[0].shape[1]
                 M = 32
                 index = faiss.IndexHNSWFlat(dim, M)
                 index.hnsw.efSearch = 64
                 index.hnsw.efConstruction = 40
-                index.add(X)
 
+                vectors_added = 0
+                vectors_in_index = 0
+                accumulated = []
+                for i, chunk in enumerate(chunks):
+                    if is_search_cancelled(search_id):
+                        logging.info("[SEARCH-BY-IMAGE] Cancelled during index build")
+                        break
+                    accumulated.append(chunk)
+                    vectors_added += chunk.shape[0]
+                    if vectors_added >= FAISS_INDEX_BATCH_SIZE or (i == len(chunks) - 1):
+                        X_batch = np.vstack(accumulated).astype("float32", copy=False)
+                        index.add(X_batch)
+                        vectors_in_index += X_batch.shape[0]
+                        update_progress(
+                            vectors_in_index,
+                            total_vectors,
+                            f"Building search index: {vectors_in_index:,} / {total_vectors:,}",
+                            phase=PHASE_INDEX_I,
+                        )
+                        accumulated = []
+                        vectors_added = 0
+
+                update_progress(total_vectors, total_vectors, "Running search...", phase=PHASE_SEARCH_I)
                 q = query_embedding.reshape(1, -1)
                 D, I = index.search(q, MAX_K)
+                update_progress(total_vectors, total_vectors, phase=PHASE_SEARCH_I)
 
                 if D.size == 0 or I.size == 0:
                     continue
@@ -1111,6 +1199,9 @@ def search_by_image():
 
         if is_search_cancelled(search_id):
             logging.info("[SEARCH-BY-IMAGE] Search cancelled, skipping post-processing")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
             SEARCH_PROGRESS["status"] = "cancelled"
             SEARCH_PROGRESS["progress"] = 0.0
             SEARCH_PROGRESS["message"] = "Search cancelled."
@@ -1159,10 +1250,13 @@ def search_by_image():
 
     except Exception as e:
         error_id = str(uuid.uuid4())[:8]
-        logging.exception(f"[SEARCH-BY-IMAGE] Search failed [error_id={error_id}]")
+        logging.exception("[SEARCH-BY-IMAGE] Search failed [error_id=%s]", error_id)
         SEARCH_PROGRESS["status"] = "error"
         SEARCH_PROGRESS["progress"] = 0.0
         SEARCH_PROGRESS["message"] = f"Search failed. Error ID: {error_id}"
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
         return jsonify({
             'error': 'Search by image failed. Please try again.',
             'error_id': error_id
