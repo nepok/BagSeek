@@ -30,3 +30,5 @@ __pycache__/
 old_preprocessing/
 
 scripts/*
+
+push-images.sh
