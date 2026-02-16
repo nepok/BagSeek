@@ -7,8 +7,10 @@ import './App.css';
 import SplittableCanvas from './components/SplittableCanvas/SplittableCanvas';
 import FileInput from './components/FileInput/FileInput';
 import Export from './components/Export/Export';
+import { ExportPreselectionProvider } from './components/Export/ExportPreselectionContext';
 import { useError } from './components/ErrorContext/ErrorContext';
 import GlobalSearch from './components/GlobalSearch/GlobalSearch';
+import { SearchResultsCacheProvider } from './components/GlobalSearch/SearchCacheContext';
 import PositionalOverview from './components/PositionalOverview/PositionalOverview';
 import TractorLoader from './components/TractorLoader/TractorLoader';
 import { sortTopicsObject } from './utils/topics';
@@ -73,7 +75,7 @@ function App() {
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
-  // const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search highlighting in timestamp player, each with value and label
+  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search heatmap in timestamp player (from search -> explore navigation)
 
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
@@ -371,41 +373,43 @@ function App() {
 
     ensureRosbag();
 
-    // 2) Load marks from sessionStorage based on rosbag and topic (not from URL for cleaner, shareable links)
-    // COMMENTED OUT: Search functionality disabled
-    // if (rosbagParam && canvasParam) {
-    //   try {
-    //     const canvas = decodeCanvas(canvasParam);
-    //     if (canvas?.metadata) {
-    //       const nodeId = Object.keys(canvas.metadata)[0];
-    //       const topic = canvas.metadata[nodeId]?.nodeTopic;
-    //       if (topic) {
-    //         const marksKey = `marks_${rosbagParam}_${topic}`;
-    //         const stored = sessionStorage.getItem(marksKey);
-    //         if (stored) {
-    //           const decoded = JSON.parse(stored);
-    //           if (Array.isArray(decoded)) {
-    //             const normalized = decoded.map((m: any) => {
-    //               if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
-    //               if (typeof m === 'number') return { value: m, label: '' };
-    //               return null;
-    //             }).filter(Boolean) as { value: number; label: string }[];
-    //             setSearchMarks(normalized);
-    //           } else {
-    //             // Invalid marks data, clear marks
-    //             setSearchMarks([]);
-    //           }
-    //         } else {
-    //           // No marks found in sessionStorage, clear any existing marks
-    //           setSearchMarks([]);
-    //         }
-    //       }
-    //     }
-    //   } catch (e) {
-    //     // Marks not available - clear any existing marks
-    //     setSearchMarks([]);
-    //   }
-    // }
+    // 2) Load marks from sessionStorage when navigating from search (arrow icon) to seed the heatmap
+    if (rosbagParam && canvasParam) {
+      try {
+        const canvas = decodeCanvas(canvasParam);
+        if (canvas?.metadata) {
+          const nodeId = Object.keys(canvas.metadata)[0];
+          const topic = canvas.metadata[nodeId]?.nodeTopic;
+          if (topic) {
+            const marksKey = `marks_${rosbagParam}_${topic}`;
+            const stored = sessionStorage.getItem(marksKey);
+            if (stored) {
+              const decoded = JSON.parse(stored);
+              if (Array.isArray(decoded)) {
+                const normalized = decoded.map((m: any) => {
+                  if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
+                  if (typeof m === 'number') return { value: m, label: '' };
+                  return null;
+                }).filter(Boolean) as { value: number; label: string }[];
+                setSearchMarks(normalized);
+              } else {
+                setSearchMarks([]);
+              }
+            } else {
+              setSearchMarks([]);
+            }
+          } else {
+            setSearchMarks([]);
+          }
+        } else {
+          setSearchMarks([]);
+        }
+      } catch (e) {
+        setSearchMarks([]);
+      }
+    } else {
+      setSearchMarks([]);
+    }
 
     // 3) Stash ts index to apply when data is ready
     if (tsParam) {
@@ -478,6 +482,7 @@ function App() {
 
 
   return (
+    <ExportPreselectionProvider onOpenExport={() => setIsExportDialogVisible(true)}>
     <>
       {/* File input dialog for uploading rosbag files and fetching initial data */}
       <FileInput
@@ -511,6 +516,7 @@ function App() {
           refreshCanvasList={refreshCanvasList}
         />
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <SearchResultsCacheProvider>
           <Routes>
             <Route path="/" element={<Navigate to="/explore" replace />} />
             <Route
@@ -534,8 +540,8 @@ function App() {
                     selectedTimestamp={selectedTimestamp}
                     onSliderChange={handleSliderChange}
                     selectedRosbag={selectedRosbag}
-                    searchMarks={[]} // COMMENTED OUT: Search functionality disabled
-                    setSearchMarks={() => {}} // COMMENTED OUT: Search functionality disabled
+                    searchMarks={searchMarks}
+                    setSearchMarks={setSearchMarks}
                     mcapBoundaries={mcapBoundaries}
                   />
                 </>
@@ -550,9 +556,11 @@ function App() {
             <Route path="/tractor" element={<TractorDebugPage />} />
             <Route path="*" element={<Navigate to="/explore" replace />} />
           </Routes>
+          </SearchResultsCacheProvider>
         </Box>
       </div>
     </>
+    </ExportPreselectionProvider>
   );
 }
 

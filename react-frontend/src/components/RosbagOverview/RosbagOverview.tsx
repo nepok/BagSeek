@@ -2,6 +2,8 @@ import Typography from '@mui/material/Typography/Typography';
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { HeatBar } from '../HeatBar/HeatBar';
+import { HeatBarTimelineOverview, type McapRangeOverview } from '../HeatBar/HeatBarTimelineOverview';
+import { useExportPreselection } from '../Export/ExportPreselectionContext';
 // Preview is rendered inline above the bar, fixed to the mark position.
 import IconButton from '@mui/material/IconButton/IconButton';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
@@ -28,12 +30,13 @@ interface RosbagOverviewProps {
 }
 
 const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic, selectedTopics }) => {
+    const { openExportWithPreselection } = useExportPreselection();
     const PREVIEW_W = 240; // fixed preview width in px
     const PREVIEW_HALF = PREVIEW_W / 2;
     const navigate = useNavigate();
     const [topics, setTopics] = useState<{ [model: string]: { [rosbag: string]: string[] } }>({});
     const [timestampLengths, setTimestampLengths] = useState<{ [rosbag: string]: number }>({});
-    const [mcapMappings, setMcapMappings] = useState<{ [key: string]: { startIndex: number; mcap_identifier: string | null }[] }>({});
+    const [mcapMappings, setMcapMappings] = useState<{ [key: string]: McapRangeOverview[] }>({});
     const [preview, setPreview] = useState<{ url: string; fraction: number; rowKey: string; leftPx?: number } | null>(null);
     // Track per-row image topic preview image heights so hover preview scales with them
     const imgTopicPreviewRefs = useRef<{ [rowKey: string]: HTMLImageElement | null }>({});
@@ -135,7 +138,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                 return;
             }
             
-            const newMappings: { [key: string]: { startIndex: number; mcap_identifier: string | null }[] } = { ...mcapMappings };
+            const newMappings: { [key: string]: McapRangeOverview[] } = { ...mcapMappings };
             
             // Fetch ranges for each rosbag (one call per rosbag, returns ranges for all topics)
             for (const rosbag of rosbagsToFetch) {
@@ -150,10 +153,16 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                     });
                     
                     if (response.data?.mcapRanges) {
-                        // Map mcapRanges to expected format: { startIndex, mcap_identifier }
-                        const ranges = response.data.mcapRanges.map((r: { startIndex: number; mcapIdentifier: string }) => ({
+                        const ranges: McapRangeOverview[] = response.data.mcapRanges.map((r: {
+                            startIndex: number;
+                            mcapIdentifier: string;
+                            firstTimestampNs?: string;
+                            lastTimestampNs?: string;
+                        }) => ({
                             startIndex: r.startIndex,
-                            mcap_identifier: r.mcapIdentifier,
+                            mcapIdentifier: r.mcapIdentifier,
+                            firstTimestampNs: r.firstTimestampNs,
+                            lastTimestampNs: r.lastTimestampNs,
                         }));
                         // Get all topics for this rosbag from all models
                         const allTopics = new Set<string>();
@@ -487,15 +496,39 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         }}
                                                     />
                                                     
-                                                    {/* HeatBar */}
+                                                    {/* Timeline overview (ID + TOD) with HeatBar centered between */}
                                                     <Box sx={{ position: 'relative', zIndex: 1 }}>
-                                                        <HeatBar
-                                                            timestampCount={timestampLengths[rosbag] || 0}
-                                                            searchMarks={marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []}
-                                                            bins={1000}
-                                                            windowSize={50}
-                                                            height={20}
-                                                            onHover={(fraction, e) => {
+                                                        {(() => {
+                                                            const mappingKey = `${rosbag}|${topic}`;
+                                                            const ranges = mcapMappings[mappingKey];
+                                                            const totalCount = timestampLengths[rosbag] || 0;
+                                                            const heatBar = (
+                                                                <HeatBar
+                                                                    timestampCount={totalCount}
+                                                                    searchMarks={marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []}
+                                                                    bins={1000}
+                                                                    windowSize={50}
+                                                                    height={20}
+                                                                    onExportSection={(sel) => {
+                                                                        if (!ranges || ranges.length === 0 || totalCount === 0) return;
+                                                                        const startIdx = Math.round(sel.startFrac * (totalCount - 1));
+                                                                        const endIdx = Math.round(sel.endFrac * (totalCount - 1));
+                                                                        let startRangeIdx = 0;
+                                                                        let endRangeIdx = ranges.length - 1;
+                                                                        for (let i = 0; i < ranges.length; i++) {
+                                                                            const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : totalCount;
+                                                                            if (startIdx >= ranges[i].startIndex && startIdx < nextStart) startRangeIdx = i;
+                                                                            if (endIdx >= ranges[i].startIndex && endIdx < nextStart) endRangeIdx = i;
+                                                                        }
+                                                                        const startId = parseInt(ranges[startRangeIdx]?.mcapIdentifier ?? '0', 10);
+                                                                        const endId = parseInt(ranges[endRangeIdx]?.mcapIdentifier ?? '0', 10);
+                                                                        openExportWithPreselection({
+                                                                            rosbagPath: rosbag,
+                                                                            topic,
+                                                                            mcapIds: [startId, endId],
+                                                                        });
+                                                                    }}
+                                                                    onHover={(fraction, e) => {
                                                                 const count = timestampLengths[rosbag] || 0;
                                                                 if (!count) return;
                                                                 const idx = Math.max(0, Math.min(count - 1, Math.round(fraction * (count - 1))));
@@ -536,8 +569,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                         if (!ranges || ranges.length === 0) return;
                                                                         
                                                                         // Find the range that contains this index
-                                                                        // endIndex = next range's startIndex - 1 (or total - 1 for last range)
-                                                                        let range = null;
+                                                                        let range: McapRangeOverview | null = null;
                                                                         for (let i = 0; i < ranges.length; i++) {
                                                                             const r = ranges[i];
                                                                             const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : timestampLengths[rosbag] || Infinity;
@@ -547,7 +579,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                             }
                                                                         }
                                                                         
-                                                                        if (!range || !range.mcap_identifier) return;
+                                                                        if (!range || !range.mcapIdentifier) return;
                                                                         
                                                                         // Get topic timestamp for this index (lightweight call)
                                                                         const tsParams = new URLSearchParams({
@@ -561,7 +593,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                         if (!tsData?.topicTimestamp) return;
                                                                         
                                                                         const mcapInfo = {
-                                                                            mcap_identifier: range.mcap_identifier,
+                                                                            mcap_identifier: range.mcapIdentifier,
                                                                             topicTimestamp: tsData.topicTimestamp
                                                                         };
 
@@ -607,7 +639,14 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                     abortRef.current = null;
                                                                 }
                                                             }}
-                                                    />
+                                                                />
+                                                            );
+                                                            return ranges && ranges.length > 0 && totalCount > 0 ? (
+                                                                <HeatBarTimelineOverview ranges={ranges} totalCount={totalCount}>
+                                                                    {heatBar}
+                                                                </HeatBarTimelineOverview>
+                                                            ) : heatBar;
+                                                        })()}
                                                         {preview && preview.rowKey === rowKey && (
                                                             <Box
                                                                 sx={{

@@ -15,6 +15,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
 import McapRangeFilter, { McapRangeFilterItem, formatNsToTime, type McapFilterState } from '../McapRangeFilter/McapRangeFilter';
+import { useExportPreselection } from './ExportPreselectionContext';
 import { extractRosbagName } from '../../utils/rosbag';
 import { sortTopicsObject, sortTopics } from '../../utils/topics';
 
@@ -38,6 +39,8 @@ const Export: React.FC<ExportProps> = ({
   selectedRosbag: selectedRosbagProp,
   preSelectedRosbag,
 }) => {
+  const { exportPreselection, clearPreselection } = useExportPreselection();
+
   const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
   const [selectedRosbagPath, setSelectedRosbagPath] = useState<string>('');
   const [availableTopics, setAvailableTopicsState] = useState<Record<string, string>>({});
@@ -62,12 +65,17 @@ const Export: React.FC<ExportProps> = ({
   const [userCustomExportPart, setUserCustomExportPart] = useState('');
   const [userCustomExportParts, setUserCustomExportParts] = useState<string[]>([]);
 
+  const handleClose = () => {
+    clearPreselection();
+    onClose();
+  };
+
   const topics = Object.keys(availableTopics);
   const topicTypes = availableTopics;
   const allTypes = Array.from(new Set(Object.values(topicTypes)));
   const sortedTopics = useMemo(() => sortTopics(topics, topicTypes), [topics, topicTypes]);
 
-  // Resolve pre-selection: props first, then MAP view's selected rosbag (slider), then first available
+  // Resolve pre-selection: Export section (HeatBar) first, then props, MAP view, first available
   const mapSelected = isVisible ? (() => {
     try {
       return sessionStorage.getItem('__BagSeekMapSelectedRosbag') || '';
@@ -75,9 +83,9 @@ const Export: React.FC<ExportProps> = ({
       return '';
     }
   })() : '';
-  const preSelectPath = preSelectedRosbag || selectedRosbagProp || mapSelected || '';
+  const preSelectPath = (isVisible && exportPreselection?.rosbagPath) || preSelectedRosbag || selectedRosbagProp || mapSelected || '';
 
-  // Fetch available rosbags and pre-select (prioritize rosbag with polygon MCAP filter when active)
+  // Fetch available rosbags and pre-select (Export section preselection first, then polygon/MAP)
   useEffect(() => {
     if (!isVisible) return;
     fetch('/api/get-file-paths')
@@ -88,6 +96,14 @@ const Export: React.FC<ExportProps> = ({
         if (paths.length === 0) return;
         let match: string | null = null;
         try {
+          // Highest priority: Export section (HeatBar "Export section")
+          if (exportPreselection?.rosbagPath) {
+            const preselNorm = extractRosbagName(exportPreselection.rosbagPath);
+            match = paths.find(
+              (p: string) => extractRosbagName(p) === preselNorm || p === exportPreselection!.rosbagPath
+            ) ?? null;
+          }
+          if (!match) {
           const mapMcapRaw = sessionStorage.getItem('__BagSeekMapMcapFilter');
           if (mapMcapRaw) {
             const mapMcap = JSON.parse(mapMcapRaw) as Record<string, string[]>;
@@ -119,6 +135,7 @@ const Export: React.FC<ExportProps> = ({
               if (polygonFilterMatch) match = polygonFilterMatch;
             }
           }
+          }
         } catch {}
         if (!match && preSelectPath) {
           match = paths.find(
@@ -129,7 +146,7 @@ const Export: React.FC<ExportProps> = ({
         setSelectedRosbagPath(match || paths[0]);
       })
       .catch((err) => console.error('Failed to fetch rosbags:', err));
-  }, [isVisible, preSelectPath]);
+  }, [isVisible, preSelectPath, exportPreselection?.rosbagPath]);
 
   // When selected rosbag changes, fetch topics and timestamp summary
   useEffect(() => {
@@ -195,13 +212,22 @@ const Export: React.FC<ExportProps> = ({
     );
   };
 
-  // Load pending MCAP IDs: MAP live highlighted MCAPs first, then Apply-to-Search filter
+  // Load pending MCAP IDs: Export section preselection first, then MAP, then Apply-to-Search
   const loadPendingMcapIds = React.useCallback(() => {
     if (!selectedRosbagPath) {
       setPendingMcapIds(null);
       return;
     }
     const rosbagName = extractRosbagName(selectedRosbagPath);
+    if (exportPreselection && (extractRosbagName(exportPreselection.rosbagPath) === rosbagName || exportPreselection.rosbagPath === selectedRosbagPath)) {
+      const [startId, endId] = exportPreselection.mcapIds;
+      const ids: string[] = [];
+      for (let i = Math.min(startId, endId); i <= Math.max(startId, endId); i++) {
+        ids.push(String(i));
+      }
+      setPendingMcapIds(ids.length > 0 ? { [selectedRosbagPath]: ids } : null);
+      return;
+    }
     const findMatch = (parsed: Record<string, string[]>) => {
       const key = Object.keys(parsed).find(
         (k) => extractRosbagName(k) === rosbagName || k === rosbagName
@@ -231,7 +257,7 @@ const Export: React.FC<ExportProps> = ({
     } catch {
       setPendingMcapIds(null);
     }
-  }, [selectedRosbagPath]);
+  }, [selectedRosbagPath, exportPreselection]);
 
   useEffect(() => {
     loadPendingMcapIds();
@@ -245,17 +271,22 @@ const Export: React.FC<ExportProps> = ({
     return () => window.removeEventListener('__BagSeekPositionalFilterChanged', handleFilterChange);
   }, [isVisible, loadPendingMcapIds]);
 
-  // When topics load, default to all selected
+  // When topics load, default to all selected (or preselected topic from Export section)
   useEffect(() => {
     const keys = Object.keys(availableTopics);
-    if (keys.length > 0) {
-      setSelectedTopics(keys);
-      setSelectedTypes(Array.from(new Set(Object.values(availableTopics))));
-    } else {
+    if (keys.length === 0) {
       setSelectedTopics([]);
       setSelectedTypes([]);
+      return;
     }
-  }, [availableTopics]);
+    if (exportPreselection && keys.includes(exportPreselection.topic)) {
+      setSelectedTopics([exportPreselection.topic]);
+      setSelectedTypes([availableTopics[exportPreselection.topic] ?? '']);
+      return;
+    }
+    setSelectedTopics(keys);
+    setSelectedTypes(Array.from(new Set(Object.values(availableTopics))));
+  }, [availableTopics, exportPreselection]);
 
   const handleTopicToggle = (topic: string) => {
     if (topic === 'ALL') {
@@ -450,7 +481,7 @@ const Export: React.FC<ExportProps> = ({
     };
 
     setExportStatus({ progress: -1, status: 'starting', message: 'Starting export...' });
-    onClose();
+    handleClose();
 
     try {
       if (isMultiPart) {
@@ -652,7 +683,7 @@ const Export: React.FC<ExportProps> = ({
         alignItems: 'stretch',
         justifyContent: 'flex-end',
       }}
-      onClick={onClose}
+      onClick={handleClose}
     >
       {/* Click-to-close overlay area */}
       <Box sx={{ flex: 1 }} />
@@ -688,7 +719,7 @@ const Export: React.FC<ExportProps> = ({
           </Typography>
           <IconButton
             size="small"
-            onClick={onClose}
+            onClick={handleClose}
             sx={{ color: 'rgba(255,255,255,0.7)', p: 0.25 }}
             aria-label="Close"
           >
@@ -1202,7 +1233,7 @@ const Export: React.FC<ExportProps> = ({
 
           {/* Actions – fixed at bottom */}
           <Box sx={{ flexShrink: 0, display: 'flex', gap: 1, p: 1.5, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
-            <Button variant="outlined" onClick={onClose} fullWidth>
+            <Button variant="outlined" onClick={handleClose} fullWidth>
               Cancel
             </Button>
             <Button

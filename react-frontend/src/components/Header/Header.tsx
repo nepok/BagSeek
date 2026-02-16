@@ -7,6 +7,7 @@ import ViewQuiltRoundedIcon from '@mui/icons-material/ViewQuiltRounded';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { searchFilterCache } from '../GlobalSearch/searchFilterCache';
 
 interface HeaderProps {
   setIsFileInputVisible: (visible: boolean | ((prev: boolean) => boolean)) => void; // Controls visibility of file input dialog
@@ -199,9 +200,8 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               // Cache current search tab before navigating to explore
               if (location.pathname.startsWith('/search')) {
                 try { 
-                  const cache = (globalThis as any).__BagSeekGlobalSearchCache;
-                  if (cache && cache.viewMode) {
-                    sessionStorage.setItem('lastSearchTab', cache.viewMode);
+                  if (searchFilterCache.viewMode) {
+                    sessionStorage.setItem('lastSearchTab', searchFilterCache.viewMode);
                   }
                 } catch {}
               }

@@ -14,6 +14,8 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { extractRosbagName } from '../../utils/rosbag';
 import { sortTopics } from '../../utils/topics';
 import McapRangeFilter, { McapRangeFilterItem, McapFilterState, formatNsToTime } from '../McapRangeFilter/McapRangeFilter';
+import { useSearchResultsCache } from './SearchCacheContext';
+import { searchFilterCache, getFilter, clearFilterCache } from './searchFilterCache';
 import TractorLoader from '../TractorLoader/TractorLoader';
 
 // Hover-still helper: true after delay ms with no meaningful cursor movement
@@ -160,7 +162,15 @@ function ResultImageCard({
     <Box
       sx={{ position: 'relative', width: '100%', cursor: 'pointer' }}
       onContextMenu={handleContextMenu}
-      onClick={() => onOpenExplore()}
+      onClick={(e) => {
+        if (contextMenu !== null) {
+          setContextMenu(null);
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        onOpenExplore();
+      }}
     >
       {isLoading ? (
         <Box
@@ -279,13 +289,15 @@ function ResultImageCard({
 const GlobalSearch: React.FC = () => {
 
     const navigate = useNavigate();
-    const [search, setSearch] = useState('');
-    const [searchDone, setSearchDone] = useState(false);
-    // View mode state: 'images' or 'rosbags'
-    const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => 'images');
-    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>([]);
-    const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } }>({});
-    const [searchStatus, setSearchStatus] = useState<{progress: number, status: string, message: string}>({progress: 0, status: 'idle', message: ''});
+    const { cache: resultsCache, updateCache: updateResultsCache, clearCache: clearResultsCache } = useSearchResultsCache();
+    const applyToSearch = typeof window !== 'undefined' && sessionStorage.getItem('__BagSeekApplyToSearchJustNavigated') === '1';
+
+    const [search, setSearch] = useState(() => getFilter('search', applyToSearch));
+    const [searchDone, setSearchDone] = useState(() => resultsCache.searchDone);
+    const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => getFilter('viewMode', applyToSearch));
+    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>(() => resultsCache.searchResults);
+    const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
+    const [searchStatus, setSearchStatus] = useState<{progress: number, status: string, message: string}>(() => resultsCache.searchStatus);
 
     const searchIconRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -293,21 +305,21 @@ const GlobalSearch: React.FC = () => {
     const abortControllerRef = useRef<AbortController | null>(null);
     const hasAttemptedRefreshForPositionalMismatchRef = useRef<string | null>(null);
 
-    const [models, setModels] = useState<string[]>([]);
-    const [rosbags, setRosbags] = useState<string[]>([]);
+    const [models, setModels] = useState<string[]>(() => getFilter('models', applyToSearch));
+    const [rosbags, setRosbags] = useState<string[]>(() => getFilter('rosbags', applyToSearch));
     const DEFAULT_MODEL = 'ViT-B-16-quickgelu__openai';
-    const [confirmedModels, setConfirmedModels] = useState<string[]>([]);
-    const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>([]);
-    const [timeRange, setTimeRange] = useState<number[]>([0, 1439]);
-    const [mcapFilters, setMcapFilters] = useState<McapFilterState>({});
+    const [confirmedModels, setConfirmedModels] = useState<string[]>(() => resultsCache.confirmedModels);
+    const [confirmedRosbags, setConfirmedRosbags] = useState<string[]>(() => resultsCache.confirmedRosbags);
+    const [timeRange, setTimeRange] = useState<number[]>(() => getFilter('timeRange', applyToSearch));
+    const [mcapFilters, setMcapFilters] = useState<McapFilterState>(() => getFilter('mcapFilters', applyToSearch));
     const [loadingMcapRosbags, setLoadingMcapRosbags] = useState<Set<string>>(new Set());
     // Pending MCAP IDs from positional filter (map view), keyed by rosbag name
     const [pendingMcapIds, setPendingMcapIds] = useState<Record<string, string[]> | null>(null);
-    const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+    const [selectedTopics, setSelectedTopics] = useState<string[]>(() => getFilter('selectedTopics', applyToSearch));
     const [availableImageTopics, setAvailableImageTopics] = useState<Record<string, Record<string, string[]>>>({});
     const [topicTypes, setTopicTypes] = useState<Record<string, string>>({});
-    const [sampling, setSampling] = useState<number>(10); // Default to 1, which is 10^0
-    const [enhancePrompt, setEnhancePrompt] = useState<boolean>(true);
+    const [sampling, setSampling] = useState<number>(() => getFilter('sampling', applyToSearch));
+    const [enhancePrompt, setEnhancePrompt] = useState<boolean>(() => getFilter('enhancePrompt', applyToSearch));
     const [enhancedPrompt, setEnhancedPrompt] = useState<string>('');
     const [isEnhancing, setIsEnhancing] = useState<boolean>(false);
     const samplingSteps = [
@@ -391,22 +403,6 @@ const GlobalSearch: React.FC = () => {
         return available;
     }, [selectedTopics, availableImageTopics]);
 
-    // In-memory cache shared across route switches in this tab
-    type Cache = {
-      search?: string;
-      models?: string[];
-      rosbags?: string[];
-      viewMode?: 'images' | 'rosbags';
-      searchResults?: { rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[];
-      marksPerTopic?: { [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } };
-      searchDone?: boolean;
-      confirmedModels?: string[];
-      confirmedRosbags?: string[];
-      searchStatus?: {progress: number, status: string, message: string};
-    };
-    const GS_CACHE_KEY = '__BagSeekGlobalSearchCache';
-    const cacheRef: Cache = (globalThis as any)[GS_CACHE_KEY] || ((globalThis as any)[GS_CACHE_KEY] = {});
-
     // Time slider: minutes of the day (0-1439)
     const timestamps: number[] = Array.from({ length: 1440 }, (_, i) => i); // minutes of the day
 
@@ -461,40 +457,75 @@ const GlobalSearch: React.FC = () => {
             });
     }, [positionallyFilteredRosbags, availableRosbags]);
 
-    // Restore cached state on mount
+    // Restore cached state on mount (and handle Apply to Search)
     useEffect(() => {
-        // If coming from "Apply to Search", clear in-memory cache so we start fresh
+        const applyNow = sessionStorage.getItem('__BagSeekApplyToSearchJustNavigated') === '1';
+
+        // If coming from "Apply to Search", clear both caches and reset local state
         try {
-            if (sessionStorage.getItem('__BagSeekApplyToSearchJustNavigated') === '1') {
-                Object.keys(cacheRef).forEach(k => delete (cacheRef as any)[k]);
+            if (applyNow) {
+                clearResultsCache();
+                clearFilterCache();
+                setSearch('');
+                setModels([]);
+                setRosbags([]);
+                setViewMode('images');
+                setSearchResults([]);
+                setMarksPerTopic({});
+                setSearchDone(false);
+                setConfirmedModels([]);
+                setConfirmedRosbags([]);
+                setSearchStatus({ progress: -1, status: 'idle', message: '' });
+                setTimeRange([0, 1439]);
+                setMcapFilters({});
+                setSelectedTopics([]);
+                setSampling(10);
+                setEnhancePrompt(true);
             }
         } catch {}
 
-        // Restore from in-memory cache (empty on page reload or Apply to Search)
-        if (cacheRef.search !== undefined) setSearch(cacheRef.search);
-        if (cacheRef.models !== undefined) setModels(cacheRef.models);
-        if (cacheRef.rosbags !== undefined) {
-            console.log(`\t\t[MCAP-DEBUG] cache restore: setting rosbags from cache (${cacheRef.rosbags.length}):`, cacheRef.rosbags);
-            setRosbags(cacheRef.rosbags);
-        }
-        if (cacheRef.viewMode !== undefined) setViewMode(cacheRef.viewMode);
-        if (cacheRef.searchResults !== undefined) setSearchResults(cacheRef.searchResults);
-        if (cacheRef.marksPerTopic !== undefined) setMarksPerTopic(cacheRef.marksPerTopic as any);
-        if (cacheRef.searchDone !== undefined) setSearchDone(cacheRef.searchDone);
-        if (cacheRef.confirmedModels !== undefined) setConfirmedModels(cacheRef.confirmedModels);
-        if (cacheRef.confirmedRosbags !== undefined) setConfirmedRosbags(cacheRef.confirmedRosbags);
-        if (cacheRef.searchStatus !== undefined) setSearchStatus(cacheRef.searchStatus);
+        const hasCachedResults = !applyNow && (
+          (resultsCache.searchResults?.length ?? 0) > 0
+          || (resultsCache.confirmedModels?.length ?? 0) > 0
+        );
+        const hasCachedFilters = !applyNow && (
+          (searchFilterCache.search !== undefined && searchFilterCache.search !== '')
+          || (searchFilterCache.models?.length ?? 0) > 0
+          || (searchFilterCache.rosbags?.length ?? 0) > 0
+        );
+        const hasCachedState = hasCachedResults || hasCachedFilters;
 
-        // Restore last selected tab from sessionStorage
-        try {
-          const lastTab = sessionStorage.getItem('lastSearchTab');
-          if (lastTab === 'images' || lastTab === 'rosbags') {
-            setViewMode(lastTab);
-          }
-        } catch {}
-        
-        // Restore positional filter from sessionStorage
+        // Restore from caches when returning from EXPLORE/MAP
+        if (hasCachedState) {
+            if (hasCachedResults) {
+                setSearchResults(resultsCache.searchResults);
+                setMarksPerTopic(resultsCache.marksPerTopic as any);
+                setSearchDone(resultsCache.searchDone);
+                setConfirmedModels(resultsCache.confirmedModels);
+                setConfirmedRosbags(resultsCache.confirmedRosbags);
+                setSearchStatus(resultsCache.searchStatus);
+            }
+            if (hasCachedFilters) {
+                setSearch(searchFilterCache.search);
+                setModels(searchFilterCache.models);
+                setRosbags(searchFilterCache.rosbags);
+                setViewMode(searchFilterCache.viewMode);
+                setTimeRange(searchFilterCache.timeRange);
+                setMcapFilters(searchFilterCache.mcapFilters);
+                setSelectedTopics(searchFilterCache.selectedTopics);
+                setSampling(searchFilterCache.sampling);
+                setEnhancePrompt(searchFilterCache.enhancePrompt);
+            }
+            try {
+                const lastTab = sessionStorage.getItem('lastSearchTab');
+                if (lastTab === 'images' || lastTab === 'rosbags') setViewMode(lastTab);
+            } catch {}
+        } else if (!hasCachedState) {
+            try { sessionStorage.removeItem('lastSearchTab'); } catch {}
+        }
+
         const loadPositionalFilter = () => {
+          if (hasCachedState) return;
           console.log('\t\t[MCAP-DEBUG] loadPositionalFilter() called');
           try {
             const positionalFilterRaw = sessionStorage.getItem('__BagSeekPositionalFilter');
@@ -559,19 +590,25 @@ const GlobalSearch: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Persist to in-memory cache whenever state changes
+    // Persist results to context, filters to module cache (survives tab switch)
     useEffect(() => {
-        cacheRef.search = search;
-        cacheRef.models = models;
-        cacheRef.rosbags = rosbags;
-        cacheRef.viewMode = viewMode;
-        cacheRef.searchResults = searchResults;
-        cacheRef.marksPerTopic = marksPerTopic as any;
-        cacheRef.searchDone = searchDone;
-        cacheRef.confirmedModels = confirmedModels;
-        cacheRef.confirmedRosbags = confirmedRosbags;
-        cacheRef.searchStatus = searchStatus;
-    }, [search, models, rosbags, viewMode, searchResults, marksPerTopic, searchDone, confirmedModels, confirmedRosbags, searchStatus]);
+        updateResultsCache({
+            searchResults, marksPerTopic: marksPerTopic as any, searchDone,
+            confirmedModels, confirmedRosbags, searchStatus,
+        });
+    }, [searchResults, marksPerTopic, searchDone, confirmedModels, confirmedRosbags, searchStatus, updateResultsCache]);
+
+    useEffect(() => {
+        searchFilterCache.search = search;
+        searchFilterCache.models = models;
+        searchFilterCache.rosbags = rosbags;
+        searchFilterCache.viewMode = viewMode;
+        searchFilterCache.timeRange = timeRange;
+        searchFilterCache.mcapFilters = mcapFilters;
+        searchFilterCache.selectedTopics = selectedTopics;
+        searchFilterCache.sampling = sampling;
+        searchFilterCache.enhancePrompt = enhancePrompt;
+    }, [search, models, rosbags, viewMode, timeRange, mcapFilters, selectedTopics, sampling, enhancePrompt]);
 
     // Preselect default model once models are loaded
     useEffect(() => {
