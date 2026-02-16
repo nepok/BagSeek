@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./NodeContent.css"; // Import the CSS file
 import { Box, Typography, CircularProgress } from "@mui/material";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import L from 'leaflet';
@@ -233,7 +233,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     }
 
     const material = new THREE.PointsMaterial({
-      size: 0.05,
+      size: 0.03,
       vertexColors: hasColors, // Use vertex colors if available
       color: hasColors ? 0xffffff : 0x888888, // White if using colors, gray otherwise
       map: circleTextureRef.current, // Use circular texture (standard way to render circles in Three.js)
@@ -244,14 +244,47 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     return <primitive object={new THREE.Points(geometry, material)} />;
   };
 
-  // Rotate Three.js scene for better viewing angle
+  // Rotate Three.js scene for better viewing angle and log camera rotation continuously
   const RotateScene = () => {
-    const { scene } = useThree();
+    const { scene, camera } = useThree();
+    const lastRotationRef = useRef<{ x: number; y: number; z: number } | null>(null);
+
+    // Initial scene tilt
     useEffect(() => {
       scene.rotation.x = -1.8; // -3 für boden
-      scene.rotation.y = -0;
+      scene.rotation.y = 0;
       scene.rotation.z = 1.6;
     }, [scene]);
+
+
+
+    // Continuously log camera rotation whenever it changes (per frame)
+    useFrame(() => {
+      const { x, y, z } = camera.rotation;
+      const last = lastRotationRef.current;
+      const eps = 1e-4;
+      if (
+        !last ||
+        Math.abs(last.x - x) > eps ||
+        Math.abs(last.y - y) > eps ||
+        Math.abs(last.z - z) > eps
+      ) {
+        lastRotationRef.current = { x, y, z };
+        console.log(
+          "Camera rotation (radians):",
+          x,
+          y,
+          z
+        );
+        console.log(
+          "Camera rotation (degrees):",
+          THREE.MathUtils.radToDeg(x),
+          THREE.MathUtils.radToDeg(y),
+          THREE.MathUtils.radToDeg(z)
+        );
+      }
+    });
+
     return null; // No need to render anything here
   };
 
@@ -342,7 +375,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   } else if (pointCloud) {
     renderedContent = (
       <div className="canvas-container">
-        <Canvas camera={{ position: [0, 0, 5], fov: 90 }}>
+        <Canvas camera={{ position: [5, 0, -4], fov: 75 }}>
           <RotateScene />
           <OrbitControls />
           <pointLight position={[10, 10, 10]} />
@@ -367,7 +400,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   } else if (imuData) {
     renderedContent = (
       <div className="canvas-container">
-        <Canvas camera={{ position: [0, 0, 5], fov: 70 }}>
+        <Canvas camera={{ position: [5, 0, -4], fov: 75 }}>
           <ambientLight />
           <ImuVisualizer imu={imuData} />
         </Canvas>

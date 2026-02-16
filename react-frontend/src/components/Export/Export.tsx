@@ -9,6 +9,7 @@ import {
   ButtonGroup,
   Checkbox,
   ListItemText,
+  Divider,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
@@ -42,9 +43,9 @@ const Export: React.FC<ExportProps> = ({
   const { exportPreselection, clearPreselection } = useExportPreselection();
 
   const [availableRosbags, setAvailableRosbags] = useState<string[]>([]);
-  const [selectedRosbagPath, setSelectedRosbagPath] = useState<string>('');
-  const [availableTopics, setAvailableTopicsState] = useState<Record<string, string>>({});
-  const [timestampCount, setTimestampCount] = useState(0);
+  const [selectedRosbagPaths, setSelectedRosbagPaths] = useState<string[]>([]);
+  const [perRosbagTopics, setPerRosbagTopics] = useState<Record<string, Record<string, string>>>({});
+  const [timestampCounts, setTimestampCounts] = useState<Record<string, number>>({});
   const [exportStatus, setExportStatus] = useState<{
     progress: number;
     status: string;
@@ -70,10 +71,32 @@ const Export: React.FC<ExportProps> = ({
     onClose();
   };
 
-  const topics = Object.keys(availableTopics);
-  const topicTypes = availableTopics;
+  // Merge topics from all selected rosbags
+  const mergedTopics = useMemo(() => {
+    const merged: Record<string, string> = {};
+    for (const path of selectedRosbagPaths) {
+      const t = perRosbagTopics[path];
+      if (t) Object.assign(merged, t);
+    }
+    return sortTopicsObject(merged);
+  }, [selectedRosbagPaths, perRosbagTopics]);
+
+  // Use props when provided (Explore context), otherwise merged topics
+  const effectiveTopics =
+    availableTopicsProp && Object.keys(availableTopicsProp).length > 0
+      ? availableTopicsProp
+      : mergedTopics;
+
+  const topics = Object.keys(effectiveTopics);
+  const topicTypes = effectiveTopics;
   const allTypes = Array.from(new Set(Object.values(topicTypes)));
   const sortedTopics = useMemo(() => sortTopics(topics, topicTypes), [topics, topicTypes]);
+
+  // Effective timestamp count: use prop if provided, otherwise check if any selected rosbag has timestamps
+  const effectiveTimestampCount =
+    timestampCountProp !== undefined && timestampCountProp > 0
+      ? timestampCountProp
+      : Object.values(timestampCounts).reduce((sum, c) => sum + c, 0);
 
   // Resolve pre-selection: Export section (HeatBar) first, then props, MAP view, first available
   const mapSelected = isVisible ? (() => {
@@ -143,49 +166,82 @@ const Export: React.FC<ExportProps> = ({
               extractRosbagName(p) === extractRosbagName(preSelectPath) || p === preSelectPath
           ) ?? null;
         }
-        setSelectedRosbagPath(match || paths[0]);
+        const initial = match || paths[0];
+        setSelectedRosbagPaths(initial ? [initial] : []);
       })
       .catch((err) => console.error('Failed to fetch rosbags:', err));
   }, [isVisible, preSelectPath, exportPreselection?.rosbagPath]);
 
-  // When selected rosbag changes, fetch topics and timestamp summary
+  // When selected rosbags change, fetch topics and timestamp summary for each
+  const fetchedRosbags = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!selectedRosbagPath) {
-      setAvailableTopicsState({});
-      setTimestampCount(0);
+    if (selectedRosbagPaths.length === 0) {
+      setPerRosbagTopics({});
+      setTimestampCounts({});
+      fetchedRosbags.current.clear();
       return;
     }
 
-    const rosbagParam = encodeURIComponent(selectedRosbagPath);
+    // Clean up deselected rosbags
+    const selectedSet = new Set(selectedRosbagPaths);
+    setPerRosbagTopics((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const key of Object.keys(next)) {
+        if (!selectedSet.has(key)) { delete next[key]; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+    setTimestampCounts((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const key of Object.keys(next)) {
+        if (!selectedSet.has(key)) { delete next[key]; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+    // Clean up fetched tracking
+    fetchedRosbags.current.forEach((key) => {
+      if (!selectedSet.has(key)) fetchedRosbags.current.delete(key);
+    });
 
-    fetch(`/api/get-topics-for-rosbag?rosbag=${rosbagParam}`)
-      .then((res) => res.json())
-      .then((data) => {
-        const topicsDict = data.topics || {};
-        const sorted = sortTopicsObject(topicsDict);
-        setAvailableTopicsState(sorted);
-      })
-      .catch((err) => console.error('Failed to fetch topics:', err));
+    // Fetch for newly selected rosbags
+    for (const path of selectedRosbagPaths) {
+      if (fetchedRosbags.current.has(path)) continue;
+      fetchedRosbags.current.add(path);
+      const rosbagParam = encodeURIComponent(path);
 
-    fetch(`/api/get-timestamp-summary?rosbag=${rosbagParam}`)
-      .then((res) => res.json())
-      .then((data) => {
-        const count = data.count ?? 0;
-        setTimestampCount(count);
-      })
-      .catch((err) => console.error('Failed to fetch timestamp summary:', err));
-  }, [selectedRosbagPath]);
+      fetch(`/api/get-topics-for-rosbag?rosbag=${rosbagParam}`)
+        .then((res) => res.json())
+        .then((data) => {
+          const topicsDict = data.topics || {};
+          const sorted = sortTopicsObject(topicsDict);
+          setPerRosbagTopics((prev) => ({ ...prev, [path]: sorted }));
+        })
+        .catch((err) => console.error('Failed to fetch topics:', err));
 
-  // Reset custom part when rosbag changes
+      fetch(`/api/get-timestamp-summary?rosbag=${rosbagParam}`)
+        .then((res) => res.json())
+        .then((data) => {
+          const count = data.count ?? 0;
+          setTimestampCounts((prev) => ({ ...prev, [path]: count }));
+        })
+        .catch((err) => console.error('Failed to fetch timestamp summary:', err));
+    }
+  }, [selectedRosbagPaths]);
+
+  // Reset custom text when selection changes
+  const selectionKey = selectedRosbagPaths.join('|');
   useEffect(() => {
-    if (selectedRosbagPath) {
+    if (selectedRosbagPaths.length > 0) {
       setUserCustomExportPart('');
     }
-  }, [selectedRosbagPath]);
+  }, [selectionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Compute MCAP range suffix from filter (ids_start_to_end)
+  // Compute MCAP range suffix from filter for single-rosbag-single-window case
   const mcapRangeSuffix = useMemo(() => {
-    const filter = selectedRosbagPath ? mcapFilters[selectedRosbagPath] : null;
+    if (selectedRosbagPaths.length !== 1) return null;
+    const filter = mcapFilters[selectedRosbagPaths[0]];
     if (!filter?.ranges?.length || !filter?.windows?.length) return null;
     const { ranges, windows } = filter;
     const maxIdx = ranges.length - 1;
@@ -200,7 +256,7 @@ const Export: React.FC<ExportProps> = ({
     const startId = String(ranges[minStartIdx]?.mcapIdentifier ?? '0');
     const endId = String(ranges[maxEndIdx]?.mcapIdentifier ?? '0');
     return startId === endId ? `_id_${startId}` : `_ids_${startId}_to_${endId}`;
-  }, [selectedRosbagPath, mcapFilters]);
+  }, [selectedRosbagPaths, mcapFilters]);
 
   const handleExportNameChange = (customPart: string) => {
     setUserCustomExportPart(customPart.replace(/\//g, '_'));
@@ -214,18 +270,19 @@ const Export: React.FC<ExportProps> = ({
 
   // Load pending MCAP IDs: Export section preselection first, then MAP, then Apply-to-Search
   const loadPendingMcapIds = React.useCallback(() => {
-    if (!selectedRosbagPath) {
+    const primaryPath = selectedRosbagPaths[0];
+    if (!primaryPath) {
       setPendingMcapIds(null);
       return;
     }
-    const rosbagName = extractRosbagName(selectedRosbagPath);
-    if (exportPreselection && (extractRosbagName(exportPreselection.rosbagPath) === rosbagName || exportPreselection.rosbagPath === selectedRosbagPath)) {
+    const rosbagName = extractRosbagName(primaryPath);
+    if (exportPreselection && (extractRosbagName(exportPreselection.rosbagPath) === rosbagName || exportPreselection.rosbagPath === primaryPath)) {
       const [startId, endId] = exportPreselection.mcapIds;
       const ids: string[] = [];
       for (let i = Math.min(startId, endId); i <= Math.max(startId, endId); i++) {
         ids.push(String(i));
       }
-      setPendingMcapIds(ids.length > 0 ? { [selectedRosbagPath]: ids } : null);
+      setPendingMcapIds(ids.length > 0 ? { [primaryPath]: ids } : null);
       return;
     }
     const findMatch = (parsed: Record<string, string[]>) => {
@@ -257,7 +314,7 @@ const Export: React.FC<ExportProps> = ({
     } catch {
       setPendingMcapIds(null);
     }
-  }, [selectedRosbagPath, exportPreselection]);
+  }, [selectedRosbagPaths, exportPreselection]);
 
   useEffect(() => {
     loadPendingMcapIds();
@@ -273,7 +330,7 @@ const Export: React.FC<ExportProps> = ({
 
   // When topics load, default to all selected (or preselected topic from Export section)
   useEffect(() => {
-    const keys = Object.keys(availableTopics);
+    const keys = Object.keys(effectiveTopics);
     if (keys.length === 0) {
       setSelectedTopics([]);
       setSelectedTypes([]);
@@ -281,12 +338,12 @@ const Export: React.FC<ExportProps> = ({
     }
     if (exportPreselection && keys.includes(exportPreselection.topic)) {
       setSelectedTopics([exportPreselection.topic]);
-      setSelectedTypes([availableTopics[exportPreselection.topic] ?? '']);
+      setSelectedTypes([effectiveTopics[exportPreselection.topic] ?? '']);
       return;
     }
     setSelectedTopics(keys);
-    setSelectedTypes(Array.from(new Set(Object.values(availableTopics))));
-  }, [availableTopics, exportPreselection]);
+    setSelectedTypes(Array.from(new Set(Object.values(effectiveTopics))));
+  }, [effectiveTopics, exportPreselection]);
 
   const handleTopicToggle = (topic: string) => {
     if (topic === 'ALL') {
@@ -316,36 +373,36 @@ const Export: React.FC<ExportProps> = ({
     }
   };
 
-  // Use props when provided (Explore context)
-  const effectiveTopics =
-    availableTopicsProp && Object.keys(availableTopicsProp).length > 0
-      ? availableTopicsProp
-      : availableTopics;
-  const effectiveTimestampCount =
-    timestampCountProp !== undefined && timestampCountProp > 0
-      ? timestampCountProp
-      : timestampCount;
-
-  // Per-part data when multiple MCAP windows: one export per window
+  // Per-part data: one export per MCAP window per rosbag
   interface PartData {
+    rosbagPath: string;
     startIndex: number;
     endIndex: number;
     mcapRanges: [number, number][];
     mcapRangeSuffix: string | null;
   }
-  const { partCount, partsData } = useMemo(() => {
-    const filter = selectedRosbagPath ? mcapFilters[selectedRosbagPath] : null;
-    const useMcapFilter = !!(filter && filter.windows?.length && filter.ranges?.length);
-    if (!useMcapFilter || !filter) {
-      return { partCount: 1, partsData: [] as PartData[] };
+
+  // Helper to compute parts for a single rosbag
+  const computePartsForRosbag = (path: string, filter: McapFilterState[string] | undefined, tCount: number): PartData[] => {
+    const hasFilter = filter && filter.ranges?.length > 0 && filter.windows?.length > 0;
+
+    if (!hasFilter || !filter) {
+      // No MCAP filter — single part covering everything
+      return [{
+        rosbagPath: path,
+        startIndex: 0,
+        endIndex: Math.max(0, tCount - 1),
+        mcapRanges: [],
+        mcapRangeSuffix: null,
+      }];
     }
+
     const { ranges, windows } = filter;
     const maxIdx = ranges.length - 1;
+
     if (windows.length <= 1) {
-      return { partCount: 1, partsData: [] as PartData[] };
-    }
-    const data: PartData[] = [];
-    for (const [wStart, wEnd] of windows) {
+      // Single window — compute its range
+      const [wStart, wEnd] = windows[0] ?? [0, maxIdx];
       const s = Math.max(0, Math.min(wStart, maxIdx));
       const e = Math.max(0, Math.min(wEnd, maxIdx));
       const startId = parseInt(ranges[s]?.mcapIdentifier ?? '0', 10);
@@ -354,13 +411,61 @@ const Export: React.FC<ExportProps> = ({
       const lastRange = ranges[e];
       const endIndex = Math.min(
         lastRange ? lastRange.startIndex + (lastRange.count ?? 1) - 1 : 0,
-        Math.max(0, effectiveTimestampCount - 1)
+        Math.max(0, tCount - 1)
       );
-      const mcapRangeSuffixVal = startId === endId ? `_id_${startId}` : `_ids_${startId}_to_${endId}`;
-      data.push({ startIndex, endIndex, mcapRanges: [[startId, endId]], mcapRangeSuffix: mcapRangeSuffixVal });
+      const suffix = startId === endId ? `_id_${startId}` : `_ids_${startId}_to_${endId}`;
+      return [{
+        rosbagPath: path,
+        startIndex,
+        endIndex,
+        mcapRanges: [[startId, endId]],
+        mcapRangeSuffix: suffix,
+      }];
     }
-    return { partCount: data.length, partsData: data };
-  }, [selectedRosbagPath, mcapFilters, effectiveTimestampCount]);
+
+    // Multiple windows — one part per window
+    return windows.map(([wStart, wEnd]) => {
+      const s = Math.max(0, Math.min(wStart, maxIdx));
+      const e = Math.max(0, Math.min(wEnd, maxIdx));
+      const startId = parseInt(ranges[s]?.mcapIdentifier ?? '0', 10);
+      const endId = parseInt(ranges[e]?.mcapIdentifier ?? '0', 10);
+      const startIndex = ranges[s]?.startIndex ?? 0;
+      const lastRange = ranges[e];
+      const endIndex = Math.min(
+        lastRange ? lastRange.startIndex + (lastRange.count ?? 1) - 1 : 0,
+        Math.max(0, tCount - 1)
+      );
+      const suffix = startId === endId ? `_id_${startId}` : `_ids_${startId}_to_${endId}`;
+      return { rosbagPath: path, startIndex, endIndex, mcapRanges: [[startId, endId]] as [number, number][], mcapRangeSuffix: suffix };
+    });
+  };
+
+  const { partCount, partsData, rosbagGroupBoundaries, isSingleRosbagSingleWindow } = useMemo(() => {
+    if (selectedRosbagPaths.length === 0) {
+      return { partCount: 0, partsData: [] as PartData[], rosbagGroupBoundaries: [] as number[], isSingleRosbagSingleWindow: false };
+    }
+
+    const allParts: PartData[] = [];
+    const boundaries: number[] = [];
+
+    for (const path of selectedRosbagPaths) {
+      boundaries.push(allParts.length);
+      const filter = mcapFilters[path];
+      const tCount = timestampCounts[path] ?? 0;
+      const parts = computePartsForRosbag(path, filter, tCount);
+      allParts.push(...parts);
+    }
+
+    // Single rosbag with single window = original "single export" mode
+    const isSingle = selectedRosbagPaths.length === 1 && allParts.length <= 1;
+
+    return {
+      partCount: allParts.length,
+      partsData: allParts,
+      rosbagGroupBoundaries: boundaries,
+      isSingleRosbagSingleWindow: isSingle,
+    };
+  }, [selectedRosbagPaths, mcapFilters, timestampCounts]);
 
   // Sync userCustomExportParts length when partCount changes
   useEffect(() => {
@@ -374,10 +479,16 @@ const Export: React.FC<ExportProps> = ({
     });
   }, [partCount, userCustomExportPart]);
 
+  // Whether any selected rosbag has MCAP filter data
+  const anyMcapFilter = selectedRosbagPaths.some((p) => {
+    const f = mcapFilters[p];
+    return f?.ranges?.length > 0 && f?.windows?.length > 0;
+  });
+
   // Build full export name(s): rosbag + mcap range + _Part_N_ (optional) + custom
   const builtExportNames = useMemo(() => {
-    const rosbagName = selectedRosbagPath ? extractRosbagName(selectedRosbagPath).replace(/\//g, '_') : '';
-    if (partCount <= 1) {
+    if (isSingleRosbagSingleWindow) {
+      const rosbagName = selectedRosbagPaths[0] ? extractRosbagName(selectedRosbagPaths[0]).replace(/\//g, '_') : '';
       const parts: string[] = [];
       if (includeRosbagName && rosbagName) parts.push(rosbagName);
       if (includeMcapRange && mcapRangeSuffix) parts.push(mcapRangeSuffix.replace(/^_/, ''));
@@ -385,6 +496,7 @@ const Export: React.FC<ExportProps> = ({
       return [parts.join('_')];
     }
     return partsData.map((pd, i) => {
+      const rosbagName = extractRosbagName(pd.rosbagPath).replace(/\//g, '_');
       const p: string[] = [];
       if (includeRosbagName && rosbagName) p.push(rosbagName);
       if (includeMcapRange && pd.mcapRangeSuffix) p.push(pd.mcapRangeSuffix.replace(/^_/, ''));
@@ -395,7 +507,7 @@ const Export: React.FC<ExportProps> = ({
       if (includePartNumber) p.push(`export_Part_${i + 1}`);
       return p.join('_');
     });
-  }, [selectedRosbagPath, includeRosbagName, includeMcapRange, includePartNumber, useSameCustomText, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix]);
+  }, [selectedRosbagPaths, includeRosbagName, includeMcapRange, includePartNumber, useSameCustomText, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix, isSingleRosbagSingleWindow]);
 
   const builtExportName = builtExportNames[0] ?? '';
 
@@ -449,36 +561,7 @@ const Export: React.FC<ExportProps> = ({
   const handleExport = async () => {
     if (effectiveTimestampCount === 0) return;
 
-    const filter = mcapFilters[selectedRosbagPath];
-    const useMcapFilter = filter?.windows?.length > 0 && filter?.ranges?.length > 0;
-    const isMultiPart = partCount > 1 && partsData.length > 0;
-
-    const doSingleExport = async (
-      name: string,
-      startIdx: number,
-      endIdx: number,
-      mcapRangesArg: [number, number][],
-      startMcap: string | null,
-      endMcap: string | null
-    ) => {
-      const exportData: Record<string, unknown> = {
-        new_rosbag_name: name.trim(),
-        topics: selectedTopics,
-        start_index: startIdx,
-        end_index: endIdx,
-        start_mcap_id: startMcap,
-        end_mcap_id: endMcap,
-        source_rosbag: selectedRosbagPath,
-      };
-      if (mcapRangesArg.length > 0) exportData.mcap_ranges = mcapRangesArg;
-
-      const res = await fetch('/api/export-rosbag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(exportData),
-      });
-      return res;
-    };
+    const isMultiPart = !isSingleRosbagSingleWindow && partCount > 0 && partsData.length > 0;
 
     setExportStatus({ progress: -1, status: 'starting', message: 'Starting export...' });
     handleClose();
@@ -494,16 +577,21 @@ const Export: React.FC<ExportProps> = ({
 
         if (exportsPayload.length === 0) return;
 
-        const exportItems = exportsPayload.map(({ name, pd }) => ({
-          new_rosbag_name: name,
-          topics: selectedTopics,
-          start_index: pd.startIndex,
-          end_index: pd.endIndex,
-          start_mcap_id: String(pd.mcapRanges[0]?.[0] ?? '0'),
-          end_mcap_id: String(pd.mcapRanges[0]?.[1] ?? '0'),
-          mcap_ranges: pd.mcapRanges,
-          source_rosbag: selectedRosbagPath,
-        }));
+        const exportItems = exportsPayload.map(({ name, pd }) => {
+          const item: Record<string, unknown> = {
+            new_rosbag_name: name,
+            topics: selectedTopics,
+            start_index: pd.startIndex,
+            end_index: pd.endIndex,
+            source_rosbag: pd.rosbagPath,
+          };
+          if (pd.mcapRanges.length > 0) {
+            item.start_mcap_id = String(pd.mcapRanges[0][0]);
+            item.end_mcap_id = String(pd.mcapRanges[pd.mcapRanges.length - 1][1]);
+            item.mcap_ranges = pd.mcapRanges;
+          }
+          return item;
+        });
 
         const res = await fetch('/api/export-rosbag', {
           method: 'POST',
@@ -531,7 +619,12 @@ const Export: React.FC<ExportProps> = ({
           message: `Exported ${exportItems.length} rosbag(s)`,
         });
       } else {
-        // Single export (original logic)
+        // Single export (original logic) — one rosbag, one window
+        const singlePath = selectedRosbagPaths[0] ?? '';
+        const filter = mcapFilters[singlePath];
+        const useMcapFilter = filter?.windows?.length > 0 && filter?.ranges?.length > 0;
+        const tCount = timestampCounts[singlePath] ?? 0;
+
         let startIndex: number;
         let endIndex: number;
         let startMcapId: string | null = null;
@@ -556,17 +649,17 @@ const Export: React.FC<ExportProps> = ({
           startIndex = ranges[minStartIdx]?.startIndex ?? 0;
           const lastRange = ranges[maxEndIdx];
           endIndex = Math.min(
-            lastRange ? lastRange.startIndex + (lastRange.count ?? 1) - 1 : effectiveTimestampCount - 1,
-            effectiveTimestampCount - 1
+            lastRange ? lastRange.startIndex + (lastRange.count ?? 1) - 1 : tCount - 1,
+            tCount - 1
           );
           startMcapId = ranges[minStartIdx]?.mcapIdentifier ?? null;
           endMcapId = ranges[maxEndIdx]?.mcapIdentifier ?? null;
         } else {
           startIndex = 0;
-          endIndex = Math.max(0, effectiveTimestampCount - 1);
+          endIndex = Math.max(0, tCount - 1);
           try {
             const summaryRes = await fetch(
-              `/api/get-timestamp-summary?rosbag=${encodeURIComponent(selectedRosbagPath)}`
+              `/api/get-timestamp-summary?rosbag=${encodeURIComponent(singlePath)}`
             );
             if (summaryRes.ok) {
               const d = await summaryRes.json();
@@ -589,14 +682,22 @@ const Export: React.FC<ExportProps> = ({
           }
         }
 
-        const res = await doSingleExport(
-          builtExportName.trim(),
-          startIndex,
-          endIndex,
-          mcapRanges ?? [],
-          startMcapId,
-          endMcapId
-        );
+        const exportData: Record<string, unknown> = {
+          new_rosbag_name: builtExportName.trim(),
+          topics: selectedTopics,
+          start_index: startIndex,
+          end_index: endIndex,
+          start_mcap_id: startMcapId,
+          end_mcap_id: endMcapId,
+          source_rosbag: singlePath,
+        };
+        if (mcapRanges && mcapRanges.length > 0) exportData.mcap_ranges = mcapRanges;
+
+        const res = await fetch('/api/export-rosbag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(exportData),
+        });
         const ct = res.headers.get('content-type');
         let result: any = {};
         if (ct?.includes('application/json')) {
@@ -611,6 +712,179 @@ const Export: React.FC<ExportProps> = ({
           } catch {
             setExportStatus({ status: 'error', progress: -1, message: result?.error || 'Export failed' });
           }
+        } else {
+          setExportStatus({
+            progress: 1,
+            status: 'completed',
+            message: result?.message || 'Export completed!',
+          });
+        }
+      }
+    } catch (err) {
+      try {
+        const st = await fetch('/api/export-status');
+        if (st.ok) setExportStatus(await st.json());
+        else setExportStatus({ status: 'error', progress: -1, message: (err as Error).message });
+      } catch {
+        setExportStatus({ status: 'error', progress: -1, message: (err as Error).message });
+      }
+    }
+  };
+
+  const handleExportRaw = async () => {
+    if (effectiveTimestampCount === 0) return;
+
+    const isMultiPart = !isSingleRosbagSingleWindow && partCount > 0 && partsData.length > 0;
+
+    setExportStatus({ progress: -1, status: 'starting', message: 'Starting raw export...' });
+    handleClose();
+
+    try {
+      if (isMultiPart) {
+        const exportsPayload = partsData
+          .map((pd, i) => {
+            const name = builtExportNames[i] ?? '';
+            return name.trim() ? { name, pd } : null;
+          })
+          .filter((x): x is { name: string; pd: PartData } => x !== null);
+
+        if (exportsPayload.length === 0) return;
+
+        const exportItems = exportsPayload.map(({ name, pd }) => ({
+          new_rosbag_name: name,
+          topics: selectedTopics,
+          start_index: pd.startIndex,
+          end_index: pd.endIndex,
+          start_mcap_id: String(pd.mcapRanges[0]?.[0] ?? '0'),
+          end_mcap_id: String(pd.mcapRanges[0]?.[1] ?? '0'),
+          mcap_ranges: pd.mcapRanges,
+          source_rosbag: pd.rosbagPath,
+        }));
+
+        const res = await fetch('/api/export-raw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ exports: exportItems }),
+        });
+        const ct = res.headers.get('content-type');
+        let result: any = {};
+        if (ct?.includes('application/json')) {
+          const text = await res.text();
+          if (text) result = JSON.parse(text);
+        }
+        if (!res.ok) {
+          try {
+            const st = await fetch('/api/export-status');
+            setExportStatus(st.ok ? await st.json() : { status: 'error', progress: -1, message: result?.error || 'Raw batch export failed' });
+          } catch {
+            setExportStatus({ status: 'error', progress: -1, message: result?.error || 'Raw batch export failed' });
+          }
+          return;
+        }
+        setExportStatus({
+          progress: 1,
+          status: 'completed',
+          message: `Raw exported ${exportItems.length} part(s)`,
+        });
+      } else {
+        const singlePath = selectedRosbagPaths[0] ?? '';
+        const filter = mcapFilters[singlePath];
+        const useMcapFilter = filter?.windows?.length > 0 && filter?.ranges?.length > 0;
+        const tCount = timestampCounts[singlePath] ?? 0;
+
+        let startIndex: number;
+        let endIndex: number;
+        let startMcapId: string | null = null;
+        let endMcapId: string | null = null;
+        let mcapRanges: [number, number][] | undefined;
+
+        if (useMcapFilter) {
+          const { ranges, windows } = filter!;
+          const maxIdx = ranges.length - 1;
+          let minStartIdx = maxIdx;
+          let maxEndIdx = 0;
+          mcapRanges = [];
+          for (const [wStart, wEnd] of windows) {
+            const s = Math.max(0, Math.min(wStart, maxIdx));
+            const e = Math.max(0, Math.min(wEnd, maxIdx));
+            minStartIdx = Math.min(minStartIdx, s);
+            maxEndIdx = Math.max(maxEndIdx, e);
+            const startId = parseInt(ranges[s]?.mcapIdentifier ?? '0', 10);
+            const endId = parseInt(ranges[e]?.mcapIdentifier ?? '0', 10);
+            mcapRanges.push([startId, endId]);
+          }
+          startIndex = ranges[minStartIdx]?.startIndex ?? 0;
+          const lastRange = ranges[maxEndIdx];
+          endIndex = Math.min(
+            lastRange ? lastRange.startIndex + (lastRange.count ?? 1) - 1 : tCount - 1,
+            tCount - 1
+          );
+          startMcapId = ranges[minStartIdx]?.mcapIdentifier ?? null;
+          endMcapId = ranges[maxEndIdx]?.mcapIdentifier ?? null;
+        } else {
+          startIndex = 0;
+          endIndex = Math.max(0, tCount - 1);
+          try {
+            const summaryRes = await fetch(
+              `/api/get-timestamp-summary?rosbag=${encodeURIComponent(singlePath)}`
+            );
+            if (summaryRes.ok) {
+              const d = await summaryRes.json();
+              const ranges = d.mcapRanges || [];
+              const total = d.count ?? 0;
+              const findMcap = (idx: number) => {
+                for (let i = 0; i < ranges.length; i++) {
+                  const next = i < ranges.length - 1 ? ranges[i + 1].startIndex : total;
+                  if (idx >= ranges[i].startIndex && idx < next) return ranges[i].mcapIdentifier;
+                }
+                return null;
+              };
+              startMcapId = findMcap(startIndex);
+              endMcapId = findMcap(endIndex);
+            }
+          } catch (e) {
+            console.error('Raw export: timestamp summary error', e);
+            setExportStatus(null);
+            return;
+          }
+        }
+
+        const exportData: Record<string, unknown> = {
+          new_rosbag_name: builtExportName.trim(),
+          topics: selectedTopics,
+          start_index: startIndex,
+          end_index: endIndex,
+          start_mcap_id: startMcapId,
+          end_mcap_id: endMcapId,
+          source_rosbag: singlePath,
+        };
+        if (mcapRanges && mcapRanges.length > 0) exportData.mcap_ranges = mcapRanges;
+
+        const res = await fetch('/api/export-raw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(exportData),
+        });
+        const ct = res.headers.get('content-type');
+        let result: any = {};
+        if (ct?.includes('application/json')) {
+          const text = await res.text();
+          if (text) result = JSON.parse(text);
+        }
+        if (!res.ok) {
+          try {
+            const st = await fetch('/api/export-status');
+            if (st.ok) setExportStatus(await st.json());
+            else setExportStatus({ status: 'error', progress: -1, message: result?.error || 'Raw export failed' });
+          } catch {
+            setExportStatus({ status: 'error', progress: -1, message: result?.error || 'Raw export failed' });
+          }
+        } else {
+          setExportStatus({
+            progress: 1,
+            status: 'completed',
+            message: result?.message || 'Raw export completed!',
+          });
         }
       }
     } catch (err) {
@@ -668,6 +942,23 @@ const Export: React.FC<ExportProps> = ({
       </>
     );
   }
+
+  // Helper to render rosbag info (MCAP count + time range badges)
+  const renderRosbagBadges = (path: string) => {
+    const filter = mcapFilters[path];
+    const mcapCount = filter?.ranges?.length ?? 0;
+    const firstTime = mcapCount > 0 ? formatNsToTime(filter!.ranges[0]?.firstTimestampNs) : null;
+    const lastTime = mcapCount > 1 ? formatNsToTime(filter!.ranges[mcapCount - 1]?.lastTimestampNs) : null;
+    const timeRange = mcapCount === 0 ? null : mcapCount === 1 ? firstTime : lastTime ? `${firstTime}\u2013${lastTime}` : null;
+    const mcapLabel = mcapCount > 0 ? `${mcapCount} MCAP${mcapCount !== 1 ? 's' : ''}` : null;
+    if (mcapCount === 0) return null;
+    return (
+      <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
+        {mcapLabel && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t: any) => `${t.palette.secondary.main}59`, color: 'secondary.main' }}>{mcapLabel}</Box>}
+        {timeRange && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t: any) => `${t.palette.warning.main}59`, color: 'warning.main' }}>{timeRange}</Box>}
+      </Box>
+    );
+  };
 
   return (
     <Box
@@ -731,7 +1022,7 @@ const Export: React.FC<ExportProps> = ({
           <Box sx={{ overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0, minWidth: 0, py: 1.5, px: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {/* McapRangeFilter logic: fetch metadata, apply pending from MAP polygon filter */}
             <McapRangeFilter
-              selectedRosbags={selectedRosbagPath ? [selectedRosbagPath] : []}
+              selectedRosbags={selectedRosbagPaths}
               mcapFilters={mcapFilters}
               onMcapFiltersChange={setMcapFilters}
               pendingMcapIds={pendingMcapIds}
@@ -746,7 +1037,7 @@ const Export: React.FC<ExportProps> = ({
               onLoadingChange={setLoadingMcapRosbags}
             />
 
-            {/* Source Rosbag – collapsible: expanded = full list, collapsed = selected rosbag + MCAP ranges only */}
+            {/* Source Rosbag – collapsible: expanded = full list, collapsed = selected rosbags + MCAP ranges only */}
             <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, flexShrink: 0 }}>
               <Box
                 sx={{
@@ -763,26 +1054,43 @@ const Export: React.FC<ExportProps> = ({
                 }}
                 onClick={() => setExpandedSourceRosbag(!expandedSourceRosbag)}
               >
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
-                  Source Rosbag
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
+                    Source Rosbag{selectedRosbagPaths.length > 1 ? 's' : ''}
+                  </Typography>
+                  {selectedRosbagPaths.length > 1 && (
+                    <Box
+                      component="span"
+                      sx={{
+                        px: 1,
+                        py: 0.25,
+                        borderRadius: '50px',
+                        fontSize: '0.65rem',
+                        bgcolor: (t: any) => `${t.palette.primary.main}59`,
+                        color: 'primary.main',
+                      }}
+                    >
+                      {selectedRosbagPaths.length} selected
+                    </Box>
+                  )}
+                </Box>
                 <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedSourceRosbag ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', fontSize: 20, flexShrink: 0 }} />
               </Box>
               {expandedSourceRosbag ? (
                 <Box sx={{ p: 1 }}>
                     <Box sx={{ py: 0.5, px: 0.5 }}>
                       {availableRosbags.map((path) => {
-                        const filter = mcapFilters[path];
-                        const mcapCount = filter?.ranges?.length ?? 0;
-                        const firstTime = mcapCount > 0 ? formatNsToTime(filter!.ranges[0]?.firstTimestampNs) : null;
-                        const lastTime = mcapCount > 1 ? formatNsToTime(filter!.ranges[mcapCount - 1]?.lastTimestampNs) : null;
-                        const timeRange = mcapCount === 0 ? null : mcapCount === 1 ? firstTime : lastTime ? `${firstTime}–${lastTime}` : null;
-                        const mcapLabel = mcapCount > 0 ? `${mcapCount} MCAP${mcapCount !== 1 ? 's' : ''}` : null;
-                        const isSelected = selectedRosbagPath === path;
+                        const isSelected = selectedRosbagPaths.includes(path);
                         return (
                           <Box key={path}>
                             <Box
-                              onClick={() => setSelectedRosbagPath(path)}
+                              onClick={() => {
+                                setSelectedRosbagPaths((prev) =>
+                                  prev.includes(path)
+                                    ? prev.filter((p) => p !== path)
+                                    : [...prev, path]
+                                );
+                              }}
                               sx={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -798,12 +1106,7 @@ const Export: React.FC<ExportProps> = ({
                                 primary={
                                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0, fontSize: '0.75rem' }}>
                                     <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{path}</Box>
-                                    {mcapCount > 0 && (
-                                      <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-                                        {mcapLabel && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t) => `${t.palette.secondary.main}59`, color: 'secondary.main' }}>{mcapLabel}</Box>}
-                                        {timeRange && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t) => `${t.palette.warning.main}59`, color: 'warning.main' }}>{timeRange}</Box>}
-                                      </Box>
-                                    )}
+                                    {renderRosbagBadges(path)}
                                   </Box>
                                 }
                               />
@@ -825,44 +1128,30 @@ const Export: React.FC<ExportProps> = ({
                     </Box>
                   </Box>
               ) : (
-                selectedRosbagPath && (
+                selectedRosbagPaths.length > 0 && (
                   <Box sx={{ p: 1 }}>
                     <Box sx={{ py: 0.5, px: 0.5 }}>
-                      {(() => {
-                        const path = selectedRosbagPath;
-                        const filter = mcapFilters[path];
-                        const mcapCount = filter?.ranges?.length ?? 0;
-                        const firstTime = mcapCount > 0 ? formatNsToTime(filter!.ranges[0]?.firstTimestampNs) : null;
-                        const lastTime = mcapCount > 1 ? formatNsToTime(filter!.ranges[mcapCount - 1]?.lastTimestampNs) : null;
-                        const timeRange = mcapCount === 0 ? null : mcapCount === 1 ? firstTime : lastTime ? `${firstTime}–${lastTime}` : null;
-                        const mcapLabel = mcapCount > 0 ? `${mcapCount} MCAP${mcapCount !== 1 ? 's' : ''}` : null;
-                        return (
-                          <Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-                              <ListItemText
-                                primary={
-                                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0, fontSize: '0.75rem' }}>
-                                    <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{path}</Box>
-                                    {mcapCount > 0 && (
-                                      <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-                                        {mcapLabel && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t) => `${t.palette.secondary.main}59`, color: 'secondary.main' }}>{mcapLabel}</Box>}
-                                        {timeRange && <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', bgcolor: (t) => `${t.palette.warning.main}59`, color: 'warning.main' }}>{timeRange}</Box>}
-                                      </Box>
-                                    )}
-                                  </Box>
-                                }
-                              />
-                            </Box>
-                            <McapRangeFilterItem
-                              rosbag={path}
-                              mcapFilters={mcapFilters}
-                              onMcapFiltersChange={setMcapFilters}
-                              noIndent
-                              isLoading={loadingMcapRosbags.has(path)}
+                      {selectedRosbagPaths.map((path) => (
+                        <Box key={path} sx={{ mb: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                            <ListItemText
+                              primary={
+                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0, fontSize: '0.75rem' }}>
+                                  <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{path}</Box>
+                                  {renderRosbagBadges(path)}
+                                </Box>
+                              }
                             />
                           </Box>
-                        );
-                      })()}
+                          <McapRangeFilterItem
+                            rosbag={path}
+                            mcapFilters={mcapFilters}
+                            onMcapFiltersChange={setMcapFilters}
+                            noIndent
+                            isLoading={loadingMcapRosbags.has(path)}
+                          />
+                        </Box>
+                      ))}
                     </Box>
                   </Box>
                 )
@@ -896,7 +1185,7 @@ const Export: React.FC<ExportProps> = ({
                         py: 0.25,
                         borderRadius: '50px',
                         fontSize: '0.65rem',
-                        bgcolor: (t) => `${t.palette.primary.main}59`,
+                        bgcolor: (t: any) => `${t.palette.primary.main}59`,
                         color: 'primary.main',
                       }}
                     >
@@ -992,7 +1281,7 @@ const Export: React.FC<ExportProps> = ({
               </Collapse>
             </Box>
 
-            {/* Export name – checkboxes + custom text input(s); multi-part when multiple MCAP ranges */}
+            {/* Export name – checkboxes + custom text input(s); multi-part when multiple MCAP ranges or rosbags */}
             <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, width: DRAWER_WIDTH - 48, maxWidth: '100%', overflow: 'hidden', flexShrink: 0 }}>
               <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                 <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
@@ -1008,8 +1297,8 @@ const Export: React.FC<ExportProps> = ({
                     </Typography>
                   </Box>
                   <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setIncludeMcapRange((v) => !v)}>
-                    <Checkbox size="small" checked={includeMcapRange} disabled={!mcapRangeSuffix && partCount <= 1} sx={{ p: 0.5 }} />
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem', color: (mcapRangeSuffix || partCount > 1) ? 'rgba(255,255,255,0.87)' : 'rgba(255,255,255,0.5)', cursor: (mcapRangeSuffix || partCount > 1) ? 'pointer' : 'default' }}>
+                    <Checkbox size="small" checked={includeMcapRange} disabled={!anyMcapFilter && isSingleRosbagSingleWindow} sx={{ p: 0.5 }} />
+                    <Typography variant="body2" sx={{ fontSize: '0.8rem', color: (anyMcapFilter || !isSingleRosbagSingleWindow) ? 'rgba(255,255,255,0.87)' : 'rgba(255,255,255,0.5)', cursor: (anyMcapFilter || !isSingleRosbagSingleWindow) ? 'pointer' : 'default' }}>
                       MCAP Range
                     </Typography>
                   </Box>
@@ -1030,7 +1319,7 @@ const Export: React.FC<ExportProps> = ({
                     </Box>
                   )}
                 </Box>
-                {partCount <= 1 ? (
+                {isSingleRosbagSingleWindow ? (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
                     <Box
                       sx={{
@@ -1047,7 +1336,7 @@ const Export: React.FC<ExportProps> = ({
                         '&:focus-within': { borderColor: 'primary.main', outline: '1px solid' },
                       }}
                     >
-                    {includeRosbagName && selectedRosbagPath && (
+                    {includeRosbagName && selectedRosbagPaths[0] && (
                       <Box
                         sx={{
                           px: 1,
@@ -1062,7 +1351,7 @@ const Export: React.FC<ExportProps> = ({
                           color: 'rgba(255,255,255,0.7)',
                         }}
                       >
-                        {extractRosbagName(selectedRosbagPath).replace('/', '_')}
+                        {extractRosbagName(selectedRosbagPaths[0]).replace('/', '_')}
                       </Box>
                     )}
                     {includeMcapRange && mcapRangeSuffix && (
@@ -1115,8 +1404,19 @@ const Export: React.FC<ExportProps> = ({
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, width: '100%' }}>
                     {partsData.map((pd, i) => {
                       const hasError = duplicateNameIndices.has(i);
+                      const isNewRosbagGroup = rosbagGroupBoundaries.includes(i) && i > 0;
+                      const isGroupStart = rosbagGroupBoundaries.includes(i);
                       return (
-                      <Box key={i} sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                      <React.Fragment key={i}>
+                        {isNewRosbagGroup && (
+                          <Divider sx={{ my: 0.5, borderColor: 'rgba(255,255,255,0.2)' }} />
+                        )}
+                        {isGroupStart && selectedRosbagPaths.length > 1 && (
+                          <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.7rem', px: 0.5 }}>
+                            {extractRosbagName(pd.rosbagPath)}
+                          </Typography>
+                        )}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
                         <Box
                           sx={{
                             display: 'flex',
@@ -1126,7 +1426,7 @@ const Export: React.FC<ExportProps> = ({
                             minHeight: 40,
                             py: 1,
                             px: 1,
-                            bgcolor: hasError ? (theme) => alpha(theme.palette.error.main, 0.12) : 'rgba(255,255,255,0.06)',
+                            bgcolor: hasError ? (theme: any) => alpha(theme.palette.error.main, 0.12) : 'rgba(255,255,255,0.06)',
                             border: '1px solid',
                             borderColor: hasError ? 'error.main' : 'rgba(255,255,255,0.2)',
                             borderRadius: 1,
@@ -1136,7 +1436,7 @@ const Export: React.FC<ExportProps> = ({
                             },
                           }}
                         >
-                        {includeRosbagName && selectedRosbagPath && (
+                        {includeRosbagName && pd.rosbagPath && (
                           <Box
                             sx={{
                               px: 1,
@@ -1151,7 +1451,7 @@ const Export: React.FC<ExportProps> = ({
                               color: 'rgba(255,255,255,0.7)',
                             }}
                           >
-                            {extractRosbagName(selectedRosbagPath).replace('/', '_')}
+                            {extractRosbagName(pd.rosbagPath).replace('/', '_')}
                           </Box>
                         )}
                         {includeMcapRange && pd.mcapRangeSuffix && (
@@ -1223,6 +1523,7 @@ const Export: React.FC<ExportProps> = ({
                           </Typography>
                         )}
                       </Box>
+                      </React.Fragment>
                     );
                     })}
                   </Box>
@@ -1233,16 +1534,25 @@ const Export: React.FC<ExportProps> = ({
 
           {/* Actions – fixed at bottom */}
           <Box sx={{ flexShrink: 0, display: 'flex', gap: 1, p: 1.5, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
-            <Button variant="outlined" onClick={handleClose} fullWidth>
+            <Button variant="outlined" onClick={handleClose} sx={{ minWidth: 80 }}>
               Cancel
             </Button>
             <Button
               variant="contained"
               onClick={handleExport}
               fullWidth
-              disabled={effectiveTimestampCount === 0 || builtExportNames.some((n) => !n.trim()) || duplicateNameIndices.size > 0}
+              disabled={selectedRosbagPaths.length === 0 || effectiveTimestampCount === 0 || builtExportNames.some((n) => !n.trim()) || duplicateNameIndices.size > 0}
             >
-              Export
+              Export as Rosbag
+            </Button>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleExportRaw}
+              fullWidth
+              disabled={selectedRosbagPaths.length === 0 || effectiveTimestampCount === 0 || builtExportNames.some((n) => !n.trim()) || duplicateNameIndices.size > 0}
+            >
+              Export Raw Data
             </Button>
           </Box>
         </Box>
