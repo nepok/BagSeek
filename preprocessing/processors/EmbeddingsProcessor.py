@@ -26,6 +26,7 @@ from torchvision import transforms
 from tqdm import tqdm
 import open_clip
 import gc
+import time
 
 try:
     from open_clip.transform import image_transform
@@ -81,6 +82,8 @@ OUTPUT_DTYPE = np.float32
 CACHE_DIR = "/mnt/data/openclip_cache"
 BATCH_SIZE = 256  # Default batch size for open_clip models
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+VRAM_WAIT_MINUTES = 30  # How long to wait when VRAM is insufficient
+VRAM_SAFETY_MULTIPLIER = 4  # Multiplier on input tensor size to account for model activations
 
 # Standard column order for manifest.parquet files
 MANIFEST_COLUMN_ORDER = [
@@ -945,6 +948,39 @@ class EmbeddingsProcessor(McapProcessor):
             self.logger.warning(f"Failed to convert ROS2 image to PIL: {e}")
             return None
     
+    def _wait_for_vram(self, batch_tensors: List[torch.Tensor]) -> None:
+        """
+        Check if enough VRAM is available for the batch. If not, wait and retry.
+
+        Estimates required VRAM from the input tensor size multiplied by a safety
+        factor (to account for intermediate activations during the forward pass).
+        If free VRAM is insufficient, pauses for VRAM_WAIT_MINUTES and retries
+        until enough memory is available.
+        """
+        if not torch.cuda.is_available() or not batch_tensors:
+            return
+
+        # Estimate required VRAM: input batch size * safety multiplier
+        sample = batch_tensors[0]
+        batch_bytes = len(batch_tensors) * sample.nelement() * sample.element_size()
+        required_bytes = batch_bytes * VRAM_SAFETY_MULTIPLIER
+
+        while True:
+            torch.cuda.empty_cache()
+            free_vram, total_vram = torch.cuda.mem_get_info()
+
+            if free_vram >= required_bytes:
+                return
+
+            free_mb = free_vram / (1024 ** 2)
+            required_mb = required_bytes / (1024 ** 2)
+            total_mb = total_vram / (1024 ** 2)
+            self.logger.warning(
+                f"Not enough VRAM: {free_mb:.0f} MB free / {required_mb:.0f} MB required "
+                f"(total: {total_mb:.0f} MB). Waiting {VRAM_WAIT_MINUTES} minutes..."
+            )
+            time.sleep(VRAM_WAIT_MINUTES * 60)
+
     def _process_batch_on_gpu(
         self,
         batch_tensors: List[torch.Tensor],
@@ -1098,6 +1134,7 @@ class EmbeddingsProcessor(McapProcessor):
                             batch_end = min(batch_start + batch_size, len(chunk_tensors))
                             batch_tensors = chunk_tensors[batch_start:batch_end]
                             
+                            self._wait_for_vram(batch_tensors)
                             batch_embeddings = self._process_batch_on_gpu(batch_tensors, model, DEVICE)
                             chunk_embeddings.append(batch_embeddings)
                             
