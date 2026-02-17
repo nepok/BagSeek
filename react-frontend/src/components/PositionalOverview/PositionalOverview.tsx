@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { extractRosbagName } from '../../utils/rosbag';
 import { inflatePathsD, PathsD, PathD, JoinType, EndType } from 'clipper2-ts';
+import { formatNsToTime, McapRangeMeta } from '../McapRangeFilter/McapRangeFilter';
 
 type RosbagPoint = {
   lat: number;
@@ -45,6 +46,11 @@ type McapLocationPoint = {
 type McapInfo = {
   id: string;
   totalCount: number;
+};
+
+type RosbagBoundary = {
+  concave_hull: [number, number][][]; // Array of polygon components, each [[lat, lon], ...]
+  bbox: [number, number, number, number]; // [min_lat, min_lon, max_lat, max_lon]
 };
 
 const TILE_LAYER_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -173,6 +179,85 @@ const pointInPolygon = (point: { lat: number; lon: number }, polygon: PolygonPoi
   }
 
   return inside;
+};
+
+// Check if two axis-aligned bounding boxes overlap
+const bboxOverlaps = (
+  a: [number, number, number, number], // [min_lat, min_lon, max_lat, max_lon]
+  b: [number, number, number, number],
+): boolean => {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+};
+
+// Check if two line segments intersect
+const segmentsIntersect = (
+  a1x: number, a1y: number, a2x: number, a2y: number,
+  b1x: number, b1y: number, b2x: number, b2y: number,
+): boolean => {
+  const d1x = a2x - a1x, d1y = a2y - a1y;
+  const d2x = b2x - b1x, d2y = b2y - b1y;
+  const cross = d1x * d2y - d1y * d2x;
+  if (Math.abs(cross) < 1e-12) return false;
+  const t = ((b1x - a1x) * d2y - (b1y - a1y) * d2x) / cross;
+  const u = ((b1x - a1x) * d1y - (b1y - a1y) * d1x) / cross;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+};
+
+// Check if a rosbag boundary (multi-polygon concave hull) overlaps with any user polygon
+const boundaryOverlapsPolygons = (
+  boundary: RosbagBoundary,
+  closedPolygons: Polygon[],
+  offsetDistance: number = 0,
+): boolean => {
+  if (closedPolygons.length === 0) return true;
+  if (!boundary.concave_hull || boundary.concave_hull.length === 0) return false;
+
+  const polygonsToCheck = getPolygonsForFiltering(closedPolygons, offsetDistance);
+
+  for (const userPoly of polygonsToCheck) {
+    // Quick reject: bbox check
+    const polyLats = userPoly.map((p) => p.lat);
+    const polyLons = userPoly.map((p) => p.lon);
+    const polyBbox: [number, number, number, number] = [
+      Math.min(...polyLats), Math.min(...polyLons),
+      Math.max(...polyLats), Math.max(...polyLons),
+    ];
+    if (!bboxOverlaps(boundary.bbox, polyBbox)) continue;
+
+    // Check each hull component — overlap with ANY component means overlap
+    for (const component of boundary.concave_hull) {
+      if (component.length < 3) continue;
+
+      const componentAsPolygonPoints: PolygonPoint[] = component.map(([lat, lon]) => ({
+        lat, lon, id: '',
+      }));
+
+      // Check if any hull vertex is inside user polygon
+      for (const [lat, lon] of component) {
+        if (pointInPolygon({ lat, lon }, userPoly)) return true;
+      }
+
+      // Check if any user polygon vertex is inside this hull component
+      for (const pt of userPoly) {
+        if (pointInPolygon({ lat: pt.lat, lon: pt.lon }, componentAsPolygonPoints)) return true;
+      }
+
+      // Check edge intersections
+      for (let i = 0; i < component.length; i++) {
+        const h1 = component[i];
+        const h2 = component[(i + 1) % component.length];
+        for (let j = 0; j < userPoly.length; j++) {
+          const p1 = userPoly[j];
+          const p2 = userPoly[(j + 1) % userPoly.length];
+          if (segmentsIntersect(h1[1], h1[0], h2[1], h2[0], p1.lon, p1.lat, p2.lon, p2.lat)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
 };
 
 // Format MCAP IDs with consecutive ranges (e.g., [0,1,2,3,4,7,9,10,11] -> "0 - 4, 7, 9 - 11")
@@ -574,6 +659,7 @@ const PositionalOverview: React.FC = () => {
   const [showMcaps, setShowMcaps] = useState<boolean>(false);
   const [mcapLocationPoints, setMcapLocationPoints] = useState<McapLocationPoint[]>([]);
   const [availableMcaps, setAvailableMcaps] = useState<McapInfo[]>([]);
+  const [mcapRanges, setMcapRanges] = useState<McapRangeMeta[]>([]);
   const [selectedMcapIndex, setSelectedMcapIndex] = useState<number>(0);
   const [expandedLocation, setExpandedLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [loadingMcaps, setLoadingMcaps] = useState<boolean>(false);
@@ -599,6 +685,7 @@ const PositionalOverview: React.FC = () => {
   const [isRestoringPolygons, setIsRestoringPolygons] = useState<boolean>(false);
   const [exportingList, setExportingList] = useState<boolean>(false);
   const [applyingToSearch, setApplyingToSearch] = useState<boolean>(false);
+  const [rosbagBoundaries, setRosbagBoundaries] = useState<Record<string, RosbagBoundary> | null>(null);
   const [offsetDistance, setOffsetDistance] = useState<number>(0);
   const [showPolygonPopper, setShowPolygonPopper] = useState<boolean>(false);
   const [showPolygonSaveField, setShowPolygonSaveField] = useState<boolean>(false);
@@ -704,6 +791,21 @@ const PositionalOverview: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  // Fetch rosbag boundaries (concave hulls) for fast overlap pre-filtering
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/positions/boundaries')
+      .then((res) => (res.ok ? res.json() : { boundaries: {} }))
+      .then((data) => {
+        if (!cancelled) {
+          setRosbagBoundaries(data.boundaries ?? {});
+        }
+      })
+      .catch(() => { if (!cancelled) setRosbagBoundaries({}); });
+    return () => { cancelled = true; };
+  }, []);
+
 
   // Restore polygons from sessionStorage on mount
   useEffect(() => {
@@ -1030,6 +1132,7 @@ const PositionalOverview: React.FC = () => {
     if (!showMcaps || !rosbags.length) {
       setMcapLocationPoints([]);
       setAvailableMcaps([]);
+      setMcapRanges([]);
       setSelectedMcapIndex(0);
       return;
     }
@@ -1043,6 +1146,7 @@ const PositionalOverview: React.FC = () => {
         if (!selected) {
           setMcapLocationPoints([]);
           setAvailableMcaps([]);
+          setMcapRanges([]);
           return;
         }
 
@@ -1066,11 +1170,28 @@ const PositionalOverview: React.FC = () => {
         }
         const listData = await listResponse.json();
 
+        // Fetch timestamp summary for MCAP time-of-day marks
+        let ranges: McapRangeMeta[] = [];
+        try {
+          const tsResponse = await fetch(`/api/get-timestamp-summary?rosbag=${encodeURIComponent(selected.name)}`);
+          if (tsResponse.ok) {
+            const tsData = await tsResponse.json();
+            ranges = (tsData.mcapRanges || []).map((r: any) => ({
+              mcapIdentifier: r.mcapIdentifier,
+              count: r.count,
+              startIndex: r.startIndex,
+              firstTimestampNs: r.firstTimestampNs,
+              lastTimestampNs: r.lastTimestampNs,
+            }));
+          }
+        } catch { /* non-critical */ }
+
         if (!cancelled) {
           const newPoints: McapLocationPoint[] = Array.isArray(pointsData.points) ? pointsData.points : [];
           const newMcaps: McapInfo[] = Array.isArray(listData.mcaps) ? listData.mcaps : [];
           setMcapLocationPoints(newPoints);
           setAvailableMcaps(newMcaps);
+          setMcapRanges(ranges);
           setSelectedMcapIndex(0);
         }
       } catch (fetchError) {
@@ -1078,6 +1199,7 @@ const PositionalOverview: React.FC = () => {
           setError(fetchError instanceof Error ? fetchError.message : 'Failed to load mcap data');
           setMcapLocationPoints([]);
           setAvailableMcaps([]);
+          setMcapRanges([]);
         }
       } finally {
         if (!cancelled) {
@@ -2388,24 +2510,42 @@ const PositionalOverview: React.FC = () => {
       return;
     }
 
+    // Wait for boundaries to load before checking overlaps
+    if (rosbagBoundaries === null) {
+      return;
+    }
+
     let cancelled = false;
     setCheckingOverlap(true);
-    
-    // Check overlap for all rosbags
+
+    // Check overlap for all rosbags, using boundaries for fast pre-filtering
     const checkAllOverlaps = async () => {
       const overlapMap = new Map<string, boolean>();
-      
-      // Check each rosbag
+      const hasBoundaries = Object.keys(rosbagBoundaries).length > 0;
+
       for (const rosbag of rosbags) {
         if (cancelled) break;
+
+        // Pre-filter: if we have a boundary for this rosbag, check hull overlap first
+        if (hasBoundaries) {
+          const boundary = rosbagBoundaries[rosbag.name];
+          if (boundary) {
+            if (!boundaryOverlapsPolygons(boundary, closedPolygons, offsetDistance)) {
+              overlapMap.set(rosbag.name, false);
+              continue; // Hull doesn't overlap — skip expensive grid check
+            }
+          }
+        }
+
+        // Detailed check: fetch grid cells and test point-in-polygon
         const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons, offsetDistance);
         overlapMap.set(rosbag.name, overlaps);
       }
-      
+
       if (!cancelled) {
         setRosbagOverlapStatus(overlapMap);
         setCheckingOverlap(false);
-        
+
         // Only automatically update sessionStorage if a polygon was deleted
         if (polygonDeleted) {
           const overlappingRosbags: string[] = [];
@@ -2415,10 +2555,9 @@ const PositionalOverview: React.FC = () => {
               overlappingRosbags.push(rosbag.name);
             }
           });
-          
+
           try {
             sessionStorage.setItem('__BagSeekPositionalFilter', JSON.stringify(overlappingRosbags));
-            // Dispatch custom event for same-tab updates (storage event only fires in other tabs)
             window.dispatchEvent(new Event('__BagSeekPositionalFilterChanged'));
           } catch (e) {
             console.error('Failed to update positional filter:', e);
@@ -2432,7 +2571,7 @@ const PositionalOverview: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [polygons, rosbags, offsetDistance]);
+  }, [polygons, rosbags, offsetDistance, rosbagBoundaries]);
 
   // MCAP overlap: which MCAPs are inside polygons (for MCAP slider background when showMcaps)
   useEffect(() => {
@@ -2654,7 +2793,7 @@ const PositionalOverview: React.FC = () => {
             sx={{
               position: 'absolute',
               left: '50%',
-              bottom: 74,
+              bottom: 90,
               transform: 'translateX(-50%)',
               display: 'flex',
               alignItems: 'center',
@@ -2666,12 +2805,13 @@ const PositionalOverview: React.FC = () => {
             <Box
               sx={{
                 width: 'min(620px, 70vw)',
-                backgroundColor: 'rgba(18, 18, 18, 0.9)',
-                borderRadius: 999,
+                backgroundColor: 'rgba(18, 18, 18, 0.75)',
+                borderRadius: '14px',
                 boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
                 px: 4,
-                py: 0.3,
-                backdropFilter: 'blur(8px)',
+                pt: 1.5,
+                pb: 1.5,
+                backdropFilter: 'blur(4px)',
                 display: 'flex',
                 alignItems: 'center',
                 position: 'relative',
@@ -2683,8 +2823,8 @@ const PositionalOverview: React.FC = () => {
                 <Box
                   sx={{
                     position: 'absolute',
-                    left: '16px',
-                    right: '16px',
+                    left: '32px',
+                    right: '32px',
                     height: '4px',
                     display: 'flex',
                     gap: 0,
@@ -2755,6 +2895,132 @@ const PositionalOverview: React.FC = () => {
                   },
                 }}
               />
+              {/* MCAP ID marks above + time-based TOD marks below */}
+              {availableMcaps.length > 1 && (() => {
+                const maxIdx = availableMcaps.length - 1;
+                const rangeMap = new Map(mcapRanges.map(r => [String(r.mcapIdentifier), r]));
+
+                // ID marks: small tick for ALL, text label every Nth for even spacing
+                const maxIdLabels = 18;
+                let idStep = 1;
+                if (availableMcaps.length > maxIdLabels) {
+                  idStep = 2;
+                  while (Math.ceil(availableMcaps.length / idStep) > maxIdLabels) idStep++;
+                }
+                const idLabelIndices = new Set<number>();
+                for (let i = 0; i <= maxIdx; i += idStep) idLabelIndices.add(i);
+
+                // Build time→index mapping for TOD marks
+                const mcapTimes: { index: number; ms: number }[] = [];
+                availableMcaps.forEach((mcap, i) => {
+                  const range = rangeMap.get(String(mcap.id));
+                  if (range?.firstTimestampNs) {
+                    const ms = Number(BigInt(range.firstTimestampNs) / BigInt(1_000_000));
+                    mcapTimes.push({ index: i, ms });
+                  }
+                });
+
+                // Generate time-based ticks with adaptive label density
+                let timeTicks: { ms: number; frac: number; isLabeled: boolean }[] = [];
+                if (mcapTimes.length >= 2) {
+                  const startMs = mcapTimes[0].ms;
+                  const endMs = mcapTimes[mcapTimes.length - 1].ms;
+                  const durationSec = (endMs - startMs) / 1000;
+
+                  // Base tick interval: finest granularity for small tick marks
+                  let baseTickSec = 60;
+                  if (durationSec < 180) baseTickSec = 30;
+                  if (durationSec < 90) baseTickSec = 20;
+                  if (durationSec < 60) baseTickSec = 10;
+
+                  const startSec = startMs / 1000;
+                  const endSec = endMs / 1000;
+                  const firstTick = Math.ceil(startSec / baseTickSec) * baseTickSec;
+
+                  // Interpolate time to slider fraction
+                  const timeToFrac = (ms: number): number => {
+                    if (ms <= mcapTimes[0].ms) return 0;
+                    if (ms >= mcapTimes[mcapTimes.length - 1].ms) return 1;
+                    for (let j = 0; j < mcapTimes.length - 1; j++) {
+                      if (ms >= mcapTimes[j].ms && ms <= mcapTimes[j + 1].ms) {
+                        const localFrac = (ms - mcapTimes[j].ms) / (mcapTimes[j + 1].ms - mcapTimes[j].ms);
+                        const pos = mcapTimes[j].index + localFrac * (mcapTimes[j + 1].index - mcapTimes[j].index);
+                        return pos / maxIdx;
+                      }
+                    }
+                    return 0;
+                  };
+
+                  // Generate all base ticks
+                  const allTicks: { sec: number; frac: number }[] = [];
+                  for (let t = firstTick; t <= endSec; t += baseTickSec) {
+                    allTicks.push({ sec: t, frac: timeToFrac(t * 1000) });
+                  }
+
+                  // Choose label interval: target similar count to ID labels
+                  const targetLabels = idLabelIndices.size;
+                  const niceLabelIntervals = [10, 20, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];
+                  let labelIntervalSec = 60;
+                  for (const interval of niceLabelIntervals) {
+                    if (interval < baseTickSec) continue;
+                    const labelCount = allTicks.filter(t => t.sec % interval === 0).length;
+                    if (labelCount <= targetLabels + 2) {
+                      labelIntervalSec = interval;
+                      break;
+                    }
+                  }
+
+                  timeTicks = allTicks.map(tick => ({
+                    ms: tick.sec * 1000,
+                    frac: tick.frac,
+                    isLabeled: tick.sec % labelIntervalSec === 0,
+                  }));
+                }
+
+                return (
+                  <>
+                    {/* ID marks above rail: small tick for all, text for evenly-spaced subset */}
+                    <Box sx={{ position: 'absolute', left: '32px', right: '32px', top: 0, bottom: 'calc(50% + 4px)', pointerEvents: 'none' }}>
+                      {availableMcaps.map((mcap, i) => {
+                        const frac = maxIdx > 0 ? i / maxIdx : 0;
+                        const isLabeled = idLabelIndices.has(i);
+                        return (
+                          <div key={`id-${i}`} style={{ position: 'absolute', left: `${frac * 100}%`, bottom: 0, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', pointerEvents: 'none' }}>
+                            {isLabeled && (
+                              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', marginBottom: 1 }}>
+                                {mcap.id}
+                              </span>
+                            )}
+                            <div style={{ width: 1, height: isLabeled ? 5 : 3, backgroundColor: isLabeled ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)' }} />
+                          </div>
+                        );
+                      })}
+                    </Box>
+                    {/* Time-based TOD marks below rail: small ticks for all, text for adaptive subset */}
+                    <Box sx={{ position: 'absolute', left: '32px', right: '32px', top: 'calc(50% + 4px)', bottom: 0, pointerEvents: 'none' }}>
+                      {timeTicks.map((tick, i) => {
+                        const d = new Date(tick.ms);
+                        const hh = d.getHours().toString().padStart(2, '0');
+                        const mm = d.getMinutes().toString().padStart(2, '0');
+                        const ss = d.getSeconds().toString().padStart(2, '0');
+                        const label = tick.isLabeled
+                          ? (d.getSeconds() === 0 ? `${hh}:${mm}` : `${hh}:${mm}:${ss}`)
+                          : null;
+                        return (
+                          <div key={`tod-${i}`} style={{ position: 'absolute', left: `${tick.frac * 100}%`, top: 0, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, pointerEvents: 'none' }}>
+                            <div style={{ width: 1, height: tick.isLabeled ? 5 : 3, backgroundColor: tick.isLabeled ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)' }} />
+                            {label && (
+                              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', whiteSpace: 'nowrap', lineHeight: 1 }}>
+                                {label}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </Box>
+                  </>
+                );
+              })()}
             </Box>
           </Box>
         )}
@@ -2776,12 +3042,13 @@ const PositionalOverview: React.FC = () => {
             <Box
               sx={{
                 width: 'min(820px, 70vw)',
-                backgroundColor: 'rgba(18, 18, 18, 0.9)',
-                borderRadius: 999,
+                backgroundColor: 'rgba(18, 18, 18, 0.75)',
+                borderRadius: '14px',
                 boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
                 px: 4,
-                py: 0.3,
-                backdropFilter: 'blur(8px)',
+                pt: 0,
+                pb: 1.5,
+                backdropFilter: 'blur(4px)',
                 display: 'flex',
                 alignItems: 'center',
                 position: 'relative',
@@ -2793,8 +3060,8 @@ const PositionalOverview: React.FC = () => {
                 <Box
                   sx={{
                     position: 'absolute',
-                    left: '16px',
-                    right: '16px',
+                    left: '32px',
+                    right: '32px',
                     height: '4px',
                     display: 'flex',
                     gap: 0,
@@ -2867,6 +3134,38 @@ const PositionalOverview: React.FC = () => {
                   },
                 }}
               />
+              {/* Rosbag date marks below slider: small ticks for all, labels for evenly-spaced subset */}
+              {rosbags.length > 1 && (() => {
+                const maxIdx = rosbags.length - 1;
+                const maxLabels = 12;
+                let step = 1;
+                if (rosbags.length > maxLabels) {
+                  step = 2;
+                  while (Math.ceil(rosbags.length / step) > maxLabels) step++;
+                }
+                const labelIndices = new Set<number>();
+                for (let i = 0; i <= maxIdx; i += step) labelIndices.add(i);
+                const fmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+                return (
+                  <Box sx={{ position: 'absolute', left: '32px', right: '32px', pointerEvents: 'none' }}>
+                    {rosbags.map((rosbag, i) => {
+                      const frac = maxIdx > 0 ? i / maxIdx : 0;
+                      const isLabeled = labelIndices.has(i);
+                      const label = isLabeled && rosbag.timestamp ? fmt.format(new Date(rosbag.timestamp)) : '';
+                      return (
+                        <Box key={rosbag.name} sx={{ position: 'absolute', top: 'calc(50% + 5px)', left: `${frac * 100}%`, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <Box sx={{ width: '1px', height: isLabeled ? 5 : 3, bgcolor: isLabeled ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)' }} />
+                          {label && (
+                            <Typography sx={{ fontSize: 8, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
+                              {label}
+                            </Typography>
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                );
+              })()}
             </Box>
           </Box>
         )}
@@ -3254,7 +3553,17 @@ const PositionalOverview: React.FC = () => {
                   console.log('\t\t[MCAP-DEBUG] Closed polygons:', closedPolygons.length);
 
                   // Re-check overlaps and collect per-rosbag MCAP IDs
+                  // Use boundaries for fast pre-filtering
+                  const hasBoundaries = rosbagBoundaries !== null && Object.keys(rosbagBoundaries).length > 0;
                   for (const rosbag of rosbags) {
+                    // Pre-filter with concave hull boundary
+                    if (hasBoundaries) {
+                      const boundary = rosbagBoundaries[rosbag.name];
+                      if (boundary && !boundaryOverlapsPolygons(boundary, closedPolygons, offsetDistance)) {
+                        continue; // Hull doesn't overlap — skip
+                      }
+                    }
+
                     const overlaps = await checkRosbagOverlap(rosbag.name, closedPolygons, offsetDistance);
                     if (overlaps) {
                       overlappingRosbags.push(rosbag.name);
@@ -3334,6 +3643,7 @@ const PositionalOverview: React.FC = () => {
                   onClick={() => {
                     handleExportList();
                   }}
+                  sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
                 >
                   Export List
                 </Button>

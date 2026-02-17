@@ -1,6 +1,6 @@
 """Position routes."""
 from flask import Blueprint, jsonify
-from ..utils.rosbag import _load_positional_lookup
+from ..utils.rosbag import _load_positional_lookup, _load_positional_boundaries
 
 positions_bp = Blueprint('positions', __name__)
 
@@ -131,6 +131,21 @@ def get_positional_rosbag_mcap_list(rosbag_name: str):
         }), 200
     except FileNotFoundError:
         return jsonify({"error": "Positional lookup file not available"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@positions_bp.route('/api/positions/boundaries', methods=['GET'])
+def get_positions_boundaries():
+    """
+    Return convex hull boundaries and bounding boxes for all rosbags.
+    Single lightweight request for spatial pre-filtering on the frontend.
+    """
+    try:
+        boundaries = _load_positional_boundaries()
+        return jsonify({"boundaries": boundaries}), 200
+    except FileNotFoundError:
+        return jsonify({"boundaries": {}}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
