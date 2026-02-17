@@ -368,7 +368,18 @@ class CompletionTracker:
             # Check if this is new structure (processor_name as top-level key)
             if self.processor_name in data:
                 return data[self.processor_name]
-            
+
+            # If other known processor keys exist, this is the new multi-processor
+            # format and our processor simply hasn't been added yet
+            known_processors = {
+                "positional_lookup_processor", "positional_boundaries_processor",
+                "topics_extraction_processor", "timestamp_alignment_processor",
+                "image_topic_previews_processor", "embeddings_processor",
+                "adjacent_similarities_postprocessor",
+            }
+            if any(k in known_processors for k in data):
+                return {}
+
             # Old structure - return full data for backward compatibility
             return data
         except (json.JSONDecodeError, IOError):
@@ -684,11 +695,14 @@ class CompletionTracker:
                     rel_path = path_obj
                 output_files_list.append(str(rel_path))
         
-        # Special handling for positional_lookup_processor: output_files go to processor level
-        is_positional_processor = self.processor_name == "positional_lookup_processor"
+        # Special handling for processors where all rosbags write to the same file:
+        # output_files go to processor level (written once, not per rosbag)
+        uses_shared_output = self.processor_name in (
+            "positional_lookup_processor",
+            "positional_boundaries_processor",
+        )
         processor_level_output_files = None
-        if is_positional_processor and output_files_list and not mcap_name:
-            # For positional_lookup_processor, move output_files to processor level
+        if uses_shared_output and output_files_list and not mcap_name:
             processor_level_output_files = output_files_list
             output_files_list = []  # Don't put at rosbag level
         
