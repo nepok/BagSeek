@@ -5,7 +5,7 @@ interface CustomTrackProps {
   children?: React.ReactNode;
   className?: string;
   timestampCount: number;
-  searchMarks: { value: number }[];
+  searchMarks: { value: number; rank?: number }[];
   mcapBoundaries?: number[];
   bins?: number;
   windowSize?: number;

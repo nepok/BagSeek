@@ -5,7 +5,7 @@ export type HeatBarSelection = { startFrac: number; endFrac: number };
 
 interface HeatBarProps {
   timestampCount: number;
-  searchMarks: { value: number }[];
+  searchMarks: { value: number; rank?: number }[];
   mcapBoundaries?: number[];
   sliderValue?: number;
   bins?: number;
@@ -136,15 +136,19 @@ export const HeatBar: React.FC<HeatBarProps> = ({
   const densityData = useMemo(() => {
     const counts = new Array(bins).fill(0);
     const total = timestampCount;
-    const searchMarkPositions = searchMarks.map((m) => m.value / total);
+    // Each mark's contribution is weighted by rank: rank 1 → 1.0, rank 100 → 0.2
+    const searchMarkPositions = searchMarks.map((m) => ({
+      pos: m.value / total,
+      weight: m.rank != null ? 1.0 - 0.80 * Math.min(m.rank - 1, 99) / 99 : 1.0,
+    }));
 
     for (let i = 0; i < bins; i++) {
       const binCenter = i / bins;
       let score = 0;
       for (const smp of searchMarkPositions) {
-        const dist = Math.abs(smp - binCenter);
+        const dist = Math.abs(smp.pos - binCenter);
         if (dist < windowSize / bins) {
-          score += 1 - dist * bins / windowSize;
+          score += smp.weight * (1 - dist * bins / windowSize);
         }
       }
       counts[i] = score;

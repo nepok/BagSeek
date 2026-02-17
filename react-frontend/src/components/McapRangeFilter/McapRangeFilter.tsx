@@ -13,6 +13,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { extractRosbagName } from '../../utils/rosbag';
 import './McapRangeFilter.css';
+import theme from '../../theme';
 
 // Per-MCAP metadata from the backend
 export interface McapRangeMeta {
@@ -60,6 +61,10 @@ export interface McapRangeFilterItemProps {
   noIndent?: boolean;
   /** When true, show loading animation while MCAP ranges are being fetched. */
   isLoading?: boolean;
+  /** Optional timestamp index from Explore to show as a position marker on the slider. */
+  currentTimestampIndex?: number | null;
+  /** Heatmap marks from Explore/Search to render on the slider. */
+  searchMarks?: { value: number; rank?: number }[];
 }
 
 /** Format nanosecond timestamp to HH:MM time-of-day. Exported for use in Rosbag select. */
@@ -139,12 +144,16 @@ interface McapRangeTrackProps extends React.HTMLAttributes<HTMLSpanElement> {
   ranges: McapRangeMeta[];
   maxIdx: number;
   value: [number, number];
+  currentTimestampIndex?: number | null;
+  searchMarks?: { value: number; rank?: number }[];
 }
 
 function McapRangeTrack({
   ranges,
   maxIdx,
   value,
+  currentTimestampIndex,
+  searchMarks,
   style,
   className,
   ...other
@@ -345,6 +354,102 @@ function McapRangeTrack({
           );
         })}
       </div>
+      {/* Search heatmap overlay (same algorithm as HeatBar) */}
+      {searchMarks && searchMarks.length > 0 && maxIdx > 0 && (() => {
+        const totalCount = ranges.reduce((s, r) => s + r.count, 0);
+        if (totalCount === 0) return null;
+        // Map mark indices to slider fractions with rank-based weight
+        const markEntries: { frac: number; weight: number }[] = [];
+        for (const mark of searchMarks) {
+          const idx = mark.value;
+          const mcapIdx = ranges.findIndex((r, i) => {
+            const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : r.startIndex + r.count;
+            return idx >= r.startIndex && idx < nextStart;
+          });
+          if (mcapIdx < 0) continue;
+          const subFrac = ranges[mcapIdx].count > 0
+            ? (idx - ranges[mcapIdx].startIndex) / ranges[mcapIdx].count
+            : 0;
+          const weight = mark.rank != null ? 1.0 - 0.8 * Math.min(mark.rank - 1, 99) / 99 : 1.0;
+          markEntries.push({ frac: (mcapIdx + subFrac) / maxIdx, weight });
+        }
+        if (markEntries.length === 0) return null;
+        // Windowed density (same as HeatBar: bins=1000, windowSize=50)
+        const numBins = 1000;
+        const winSize = 50;
+        const counts = new Array(numBins).fill(0);
+        for (let i = 0; i < numBins; i++) {
+          const binCenter = i / numBins;
+          let score = 0;
+          for (const entry of markEntries) {
+            const dist = Math.abs(entry.frac - binCenter);
+            if (dist < winSize / numBins) {
+              score += entry.weight * (1 - dist * numBins / winSize);
+            }
+          }
+          counts[i] = score;
+        }
+        let maxVal = 1;
+        for (let j = 0; j < counts.length; j++) {
+          if (counts[j] > maxVal) maxVal = counts[j];
+        }
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              height: 8,
+              display: 'flex',
+              overflow: 'hidden',
+              pointerEvents: 'none',
+            }}
+          >
+            {counts.map((c, i) => {
+              const intensity = c / maxVal;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    flex: 1,
+                    height: '100%',
+                    background: `hsl(${(1 - intensity) * 268}, ${intensity * 70}%, 50%)`,
+                  }}
+                />
+              );
+            })}
+          </div>
+        );
+      })()}
+      {/* Current Explore position marker */}
+      {currentTimestampIndex != null && maxIdx > 0 && (() => {
+        const mcapIdx = ranges.findIndex((r, i) => {
+          const nextStart = i < ranges.length - 1 ? ranges[i + 1].startIndex : r.startIndex + r.count;
+          return currentTimestampIndex >= r.startIndex && currentTimestampIndex < nextStart;
+        });
+        if (mcapIdx < 0) return null;
+        const subFrac = ranges[mcapIdx].count > 0
+          ? (currentTimestampIndex - ranges[mcapIdx].startIndex) / ranges[mcapIdx].count
+          : 0;
+        const frac = (mcapIdx + subFrac) / maxIdx;
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              left: `${frac * 100}%`,
+              top: -10,
+              bottom: -10,
+              width: 1,
+              backgroundColor: theme.palette.primary.main,
+              pointerEvents: 'none',
+              borderRadius: 1,
+              zIndex: 2,
+            }}
+          />
+        );
+      })()}
     </span>
   );
 }
@@ -356,6 +461,8 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
   onMcapFiltersChange,
   noIndent = false,
   isLoading = false,
+  currentTimestampIndex,
+  searchMarks,
 }) => {
   const filter = mcapFilters[rosbag];
   // Local draft values while dragging — keyed by window index. Only the actively
@@ -566,6 +673,8 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
                         ranges={ranges}
                         maxIdx={maxIdx}
                         value={[wStart, wEnd]}
+                        currentTimestampIndex={currentTimestampIndex}
+                        searchMarks={searchMarks}
                       />
                     ),
                   }}
@@ -593,6 +702,8 @@ export const McapRangeFilterItem: React.FC<McapRangeFilterItemProps> = React.mem
   prev.rosbag === next.rosbag &&
   prev.noIndent === next.noIndent &&
   prev.isLoading === next.isLoading &&
+  prev.currentTimestampIndex === next.currentTimestampIndex &&
+  prev.searchMarks === next.searchMarks &&
   prev.mcapFilters[prev.rosbag] === next.mcapFilters[next.rosbag]
 );
 
