@@ -267,9 +267,18 @@ class TimestampAlignmentProcessor(McapProcessor):
             if mcap_context.get_mcap_id() not in collected_ids:
                 self._load_mcap_summary_from_parquet(mcap_context)
 
-        # Write summary.json
+        # Write summary.json and mark completion only when we have data
         if self.mcap_summaries:
             self._write_summary(rosbag_context)
+
+            # Mark rosbag as complete for fast-path skipping on future runs
+            rosbag_name = str(rosbag_context.get_relative_path())
+            summary_path = self.output_dir / rosbag_context.get_relative_path() / "summary.json"
+            self.completion_tracker.mark_completed(
+                rosbag_name=rosbag_name,
+                status="completed",
+                output_files=[summary_path],
+            )
 
         # Reset for the next rosbag
         self.mcap_summaries = []

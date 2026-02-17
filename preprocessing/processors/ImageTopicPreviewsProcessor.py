@@ -443,6 +443,12 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
         # Check completion (using first stitched image as completion marker)
         if not self.collected_images:
             self.logger.warning(f"No images collected for {context.get_relative_path()}")
+            # Mark as complete so this rosbag isn't retried on every run
+            rosbag_name_early = str(context.get_relative_path())
+            self.completion_tracker.mark_completed(
+                rosbag_name=rosbag_name_early,
+                status="completed",
+            )
             return {}
         
         # Get rosbag name

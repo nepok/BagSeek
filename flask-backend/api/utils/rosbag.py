@@ -3,10 +3,11 @@ import logging
 import json
 from pathlib import Path
 import pandas as pd
-from ..config import LOOKUP_TABLES, POSITIONAL_LOOKUP_TABLE
+from ..config import LOOKUP_TABLES, POSITIONAL_LOOKUP_TABLE, POSITIONAL_BOUNDARIES
 from ..state import (
     _lookup_table_cache,
     _positional_lookup_cache,
+    _positional_boundaries_cache,
 )
 
 
@@ -141,3 +142,27 @@ def _load_positional_lookup() -> dict[str, dict[str, dict[str, int | dict[str, i
         _positional_lookup_cache["mtime"] = stat.st_mtime
 
     return _positional_lookup_cache["data"]  # type: ignore[return-value]
+
+
+def _load_positional_boundaries() -> dict:
+    """
+    Load and cache the positional boundaries JSON, refreshing when the file changes.
+
+    Returns structure: {
+        "rosbag_name": {
+            "convex_hull": [[lat, lon], ...],
+            "bbox": [min_lat, min_lon, max_lat, max_lon]
+        }
+    }
+    """
+    if not POSITIONAL_BOUNDARIES.exists():
+        raise FileNotFoundError(f"Positional boundaries file not found at {POSITIONAL_BOUNDARIES}")
+
+    stat = POSITIONAL_BOUNDARIES.stat()
+    cached_mtime = _positional_boundaries_cache.get("mtime")
+    if _positional_boundaries_cache.get("data") is None or cached_mtime != stat.st_mtime:
+        with POSITIONAL_BOUNDARIES.open("r", encoding="utf-8") as fp:
+            _positional_boundaries_cache["data"] = json.load(fp)
+        _positional_boundaries_cache["mtime"] = stat.st_mtime
+
+    return _positional_boundaries_cache["data"]  # type: ignore[return-value]

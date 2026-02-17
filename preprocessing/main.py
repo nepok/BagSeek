@@ -224,6 +224,10 @@ def is_rosbag_complete_for_adjacent_similarities(
 
     tracker = processor.completion_tracker
 
+    # Fast path: rosbag-level completion
+    if tracker.is_rosbag_completed(rosbag_name):
+        return True
+
     # Check each model directory
     if not embeddings_dir.exists():
         return True  # No embeddings, nothing to process
@@ -379,6 +383,7 @@ def main():
             and summary_path.exists()
         )
         positional_complete = positional_lookup_processor.completion_tracker.is_rosbag_completed(rosbag_name)
+        boundaries_complete = positional_lookup_processor.boundaries_tracker.is_rosbag_completed(rosbag_name)
         previews_complete = image_topic_previews_processor.completion_tracker.is_rosbag_completed(rosbag_name)
         embeddings_complete = is_rosbag_complete_for_embeddings(
             embeddings_processor, rosbag_name, mcap_names
@@ -394,6 +399,7 @@ def main():
             topics_complete and
             timestamp_complete and
             positional_complete and
+            boundaries_complete and
             previews_complete and
             embeddings_complete and
             similarities_complete
@@ -416,6 +422,8 @@ def main():
             needs_work.append("timestamps")
         if not positional_complete:
             needs_work.append("positional")
+        if not boundaries_complete:
+            needs_work.append("boundaries")
         if not previews_complete:
             needs_work.append("previews")
         if not embeddings_complete:
@@ -602,6 +610,11 @@ def main():
             logger.info("")  # Add spacing before aggregation
             for processor in active_hybrid_processors:
                 processor.process_rosbag_after_mcaps(rosbag_context)
+
+        # Ensure positional boundaries exist (generates from grid data, no MCAP re-reading)
+        if not boundaries_complete:
+            if positional_lookup_processor.ensure_boundaries(rosbag_name):
+                logger.info("  Generated positional boundaries from grid data")
 
         # Compute adjacent similarities for this rosbag (if needed)
         if not similarities_complete:

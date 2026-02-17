@@ -312,6 +312,12 @@ class AdjacentSimilaritiesPostprocessor(PostProcessor):
                     )
                 else:
                     self.logger.warning("Failed to save plot and similarities")
-        
+
+        # Mark rosbag as complete across all models for fast-path skipping
+        self.completion_tracker.mark_completed(
+            rosbag_name=rosbag_name,
+            status="completed",
+        )
+
         return None
 
