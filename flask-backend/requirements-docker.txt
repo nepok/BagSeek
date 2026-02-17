@@ -1,7 +1,7 @@
 # Flask web framework
 flask==3.0.0
-flask-cors==4.0.0
-gunicorn==21.2.0
+flask-cors==6.0.2
+gunicorn==22.0.0
 python-dotenv==1.0.1
 
 # Data processing
@@ -17,21 +17,21 @@ mcap-ros2-support==0.5.6
 open-clip-torch==3.1.0
 faiss-gpu==1.7.2
 
-# PyTorch (CUDA 12.1)
---extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.2.0+cu121
-torchvision==0.17.0+cu121
+# PyTorch (CUDA 12.6)
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.8.0+cu126
+torchvision==0.23.0+cu126
 
 # LLM for prompt enhancement
-transformers==4.47.0
+transformers==4.53.0
 safetensors==0.4.5
-huggingface-hub==0.26.5
+huggingface-hub>=0.30.0
 
 # Authentication
 PyJWT==2.9.0
 
 # Utilities
-Pillow==10.2.0
+Pillow==10.3.0
 tqdm==4.67.1
 prompt_toolkit==3.0.51
 

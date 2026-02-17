@@ -18,7 +18,7 @@
     "@types/node": "^16.18.119",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "axios": "^1.10.0",
+    "axios": "^1.13.5",
     "clipper2-ts": "^1.5.4-5.9a869ba",
     "leaflet": "^1.9.4",
     "leaflet.heat": "^0.2.0",
@@ -70,6 +70,8 @@
   },
   "overrides": {
     "nth-check": "^2.0.1",
-    "postcss": "^8.4.31"
+    "postcss": "^8.4.31",
+    "jsonpath": "^1.2.1",
+    "qs": "^6.14.2"
   }
 }
