@@ -2,8 +2,11 @@ import React, { createContext, useContext, useCallback, useState, ReactNode } fr
 
 export interface ExportPreselection {
   rosbagPath: string;
-  topic: string;
-  mcapIds: [number, number];
+  topic?: string;              // single topic (HeatBar "Export section")
+  topics?: string[];           // multiple topics (Explore view)
+  mcapIds?: [number, number];  // MCAP range (HeatBar "Export section")
+  timestampIndex?: number;     // current Explore position (index marker on MCAP range slider)
+  searchMarks?: { value: number; rank?: number }[];  // heatmap marks from Explore/Search
 }
 
 type ExportPreselectionContextType = {

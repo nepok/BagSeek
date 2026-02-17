@@ -10,11 +10,15 @@ import {
   Checkbox,
   ListItemText,
   Divider,
+  TextField,
+  CircularProgress,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
 import McapRangeFilter, { McapRangeFilterItem, formatNsToTime, type McapFilterState } from '../McapRangeFilter/McapRangeFilter';
 import { useExportPreselection } from './ExportPreselectionContext';
 import { extractRosbagName } from '../../utils/rosbag';
@@ -31,6 +35,7 @@ interface ExportProps {
 }
 
 const DRAWER_WIDTH = 560;
+
 
 const Export: React.FC<ExportProps> = ({
   timestampCount: timestampCountProp,
@@ -66,8 +71,17 @@ const Export: React.FC<ExportProps> = ({
   const [userCustomExportPart, setUserCustomExportPart] = useState('');
   const [userCustomExportParts, setUserCustomExportParts] = useState<string[]>([]);
 
+  // Topic preset state
+  const [topicPresets, setTopicPresets] = useState<Record<string, string[]>>({});
+  const [showTopicPresetSaveField, setShowTopicPresetSaveField] = useState(false);
+  const [newTopicPresetName, setNewTopicPresetName] = useState('');
+  const [savingTopicPreset, setSavingTopicPreset] = useState(false);
+  const [deletingTopicPreset, setDeletingTopicPreset] = useState<string | null>(null);
+  const [loadingTopicPresets, setLoadingTopicPresets] = useState(false);
+
   const handleClose = () => {
     clearPreselection();
+    setShowTopicPresetSaveField(false);
     onClose();
   };
 
@@ -276,7 +290,7 @@ const Export: React.FC<ExportProps> = ({
       return;
     }
     const rosbagName = extractRosbagName(primaryPath);
-    if (exportPreselection && (extractRosbagName(exportPreselection.rosbagPath) === rosbagName || exportPreselection.rosbagPath === primaryPath)) {
+    if (exportPreselection?.mcapIds && (extractRosbagName(exportPreselection.rosbagPath) === rosbagName || exportPreselection.rosbagPath === primaryPath)) {
       const [startId, endId] = exportPreselection.mcapIds;
       const ids: string[] = [];
       for (let i = Math.min(startId, endId); i <= Math.max(startId, endId); i++) {
@@ -336,10 +350,18 @@ const Export: React.FC<ExportProps> = ({
       setSelectedTypes([]);
       return;
     }
-    if (exportPreselection && keys.includes(exportPreselection.topic)) {
+    if (exportPreselection?.topic && keys.includes(exportPreselection.topic)) {
       setSelectedTopics([exportPreselection.topic]);
       setSelectedTypes([effectiveTopics[exportPreselection.topic] ?? '']);
       return;
+    }
+    if (exportPreselection?.topics && exportPreselection.topics.length > 0) {
+      const matching = exportPreselection.topics.filter((t) => keys.includes(t));
+      if (matching.length > 0) {
+        setSelectedTopics(matching);
+        setSelectedTypes(Array.from(new Set(matching.map((t) => effectiveTopics[t]))));
+        return;
+      }
     }
     setSelectedTopics(keys);
     setSelectedTypes(Array.from(new Set(Object.values(effectiveTopics))));
@@ -370,6 +392,81 @@ const Export: React.FC<ExportProps> = ({
         : [...selectedTypes, type];
       setSelectedTypes(next);
       setSelectedTopics(topics.filter((t) => next.includes(topicTypes[t])));
+    }
+  };
+
+  // Fetch topic presets when export drawer opens
+  useEffect(() => {
+    if (!isVisible) {
+      setShowTopicPresetSaveField(false);
+      return;
+    }
+    let cancelled = false;
+    const fetchPresets = async () => {
+      setLoadingTopicPresets(true);
+      try {
+        const res = await fetch('/api/topic-presets');
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) setTopicPresets(data);
+        }
+      } catch (err) {
+        console.error('Failed to load topic presets:', err);
+      } finally {
+        if (!cancelled) setLoadingTopicPresets(false);
+      }
+    };
+    fetchPresets();
+    return () => { cancelled = true; };
+  }, [isVisible]);
+
+  const handleLoadTopicPreset = (presetName: string) => {
+    const presetTopics = topicPresets[presetName];
+    if (!presetTopics) return;
+    const available = presetTopics.filter((t) => topics.includes(t));
+    setSelectedTopics(available);
+    setSelectedTypes(Array.from(new Set(available.map((t) => topicTypes[t]))));
+  };
+
+  const handleSaveTopicPreset = async (name: string) => {
+    if (!name.trim() || savingTopicPreset) return;
+    setSavingTopicPreset(true);
+    try {
+      const res = await fetch('/api/save-topic-preset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), topics: selectedTopics }),
+      });
+      if (res.ok) {
+        const listRes = await fetch('/api/topic-presets');
+        if (listRes.ok) setTopicPresets(await listRes.json());
+        setNewTopicPresetName('');
+        setShowTopicPresetSaveField(false);
+      }
+    } catch (err) {
+      console.error('Failed to save topic preset:', err);
+    } finally {
+      setSavingTopicPreset(false);
+    }
+  };
+
+  const handleDeleteTopicPreset = async (presetName: string) => {
+    if (deletingTopicPreset) return;
+    setDeletingTopicPreset(presetName);
+    try {
+      const res = await fetch('/api/delete-topic-preset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: presetName }),
+      });
+      if (res.ok) {
+        const listRes = await fetch('/api/topic-presets');
+        if (listRes.ok) setTopicPresets(await listRes.json());
+      }
+    } catch (err) {
+      console.error('Failed to delete topic preset:', err);
+    } finally {
+      setDeletingTopicPreset(null);
     }
   };
 
@@ -916,7 +1013,7 @@ const Export: React.FC<ExportProps> = ({
               borderRadius: 2,
               zIndex: 9999,
               boxShadow: 3,
-              maxWidth: 400,
+              maxWidth: 500,
             }}
           >
             <Typography variant="body2" fontWeight={exportStatus.status === 'error' ? 'bold' : 'normal'}>
@@ -1119,6 +1216,8 @@ const Export: React.FC<ExportProps> = ({
                                   onMcapFiltersChange={setMcapFilters}
                                   noIndent
                                   isLoading={loadingMcapRosbags.has(path)}
+                                  currentTimestampIndex={exportPreselection?.timestampIndex}
+                                  searchMarks={exportPreselection?.searchMarks}
                                 />
                               </Box>
                             )}
@@ -1149,6 +1248,8 @@ const Export: React.FC<ExportProps> = ({
                             onMcapFiltersChange={setMcapFilters}
                             noIndent
                             isLoading={loadingMcapRosbags.has(path)}
+                            currentTimestampIndex={exportPreselection?.timestampIndex}
+                            searchMarks={exportPreselection?.searchMarks}
                           />
                         </Box>
                       ))}
@@ -1218,6 +1319,134 @@ const Export: React.FC<ExportProps> = ({
               </Box>
               <Collapse in={expandedTopics}>
                 <Box sx={{ p: 1 }}>
+                  {/* Topic Presets - inline pills */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                    {loadingTopicPresets ? (
+                      <CircularProgress size={16} sx={{ m: 0.5 }} />
+                    ) : (
+                      Object.keys(topicPresets).map((presetName) => (
+                          <Box
+                            key={presetName}
+                            onClick={() => deletingTopicPreset !== presetName && handleLoadTopicPreset(presetName)}
+                            sx={{
+                              position: 'relative',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              px: 1.25,
+                              py: 0.25,
+                              borderRadius: '50px',
+                              fontSize: '0.7rem',
+                              bgcolor: '#B49FCC25',
+                              color: '#B49FCC',
+                              border: '1px solid #B49FCC50',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s',
+                              userSelect: 'none',
+                              '&:hover': {
+                                bgcolor: '#B49FCC40',
+                              },
+                              '&:hover .preset-delete': {
+                                opacity: 1,
+                                width: 14,
+                              },
+                              ...(deletingTopicPreset === presetName && { opacity: 0.5, pointerEvents: 'none' }),
+                            }}
+                          >
+                            {presetName}
+                            <Box
+                              className="preset-delete"
+                              component="span"
+                              onClick={(e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                handleDeleteTopicPreset(presetName);
+                              }}
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                ml: 0.5,
+                                opacity: 0,
+                                width: 0,
+                                overflow: 'hidden',
+                                transition: 'all 0.15s',
+                                borderRadius: '50%',
+                                cursor: 'pointer',
+                                color: 'rgba(255,255,255,0.6)',
+                                '&:hover': { color: '#ff5555' },
+                              }}
+                            >
+                              {deletingTopicPreset === presetName ? (
+                                <CircularProgress size={12} color="inherit" />
+                              ) : (
+                                <DeleteIcon sx={{ fontSize: 14 }} />
+                              )}
+                            </Box>
+                          </Box>
+                      ))
+                    )}
+                    {/* Add preset pill */}
+                    {showTopicPresetSaveField ? (
+                      <TextField
+                        autoFocus
+                        size="small"
+                        variant="outlined"
+                        placeholder="Name..."
+                        value={newTopicPresetName}
+                        onChange={(e) => setNewTopicPresetName(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTopicPreset(newTopicPresetName)}
+                        onBlur={() => {
+                          if (!newTopicPresetName.trim()) setShowTopicPresetSaveField(false);
+                        }}
+                        disabled={savingTopicPreset}
+                        InputProps={{
+                          endAdornment: savingTopicPreset ? (
+                            <CircularProgress size={14} />
+                          ) : (
+                            <IconButton size="small" onClick={() => handleSaveTopicPreset(newTopicPresetName)} disabled={!newTopicPresetName.trim()} sx={{ p: 0.25 }}>
+                              <AddIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          ),
+                        }}
+                        sx={{
+                          width: 140,
+                          '& .MuiOutlinedInput-root': {
+                            height: 26,
+                            fontSize: '0.7rem',
+                            borderRadius: '50px',
+                            bgcolor: 'rgba(255,255,255,0.06)',
+                            '& fieldset': { borderColor: 'rgba(255,255,255,0.2)' },
+                            '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.4)' },
+                            '&.Mui-focused fieldset': { borderColor: 'rgba(255,255,255,0.5)' },
+                          },
+                          input: { color: 'white', px: 1.25, py: 0 },
+                        }}
+                      />
+                    ) : (
+                      <Box
+                        onClick={() => selectedTopics.length > 0 && setShowTopicPresetSaveField(true)}
+                        sx={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          px: 1,
+                          py: 0.25,
+                          borderRadius: '50px',
+                          fontSize: '0.7rem',
+                          border: '1px dashed rgba(255,255,255,0.25)',
+                          color: 'rgba(255,255,255,0.4)',
+                          cursor: selectedTopics.length > 0 ? 'pointer' : 'default',
+                          opacity: selectedTopics.length > 0 ? 1 : 0.4,
+                          transition: 'all 0.15s',
+                          '&:hover': selectedTopics.length > 0 ? {
+                            borderColor: 'rgba(255,255,255,0.5)',
+                            color: 'rgba(255,255,255,0.7)',
+                          } : {},
+                        }}
+                      >
+                        <AddIcon sx={{ fontSize: 16 }} />
+                      </Box>
+                    )}
+                  </Box>
                   <ButtonGroup fullWidth size="small" sx={{ mb: 1 }}>
                     <Button
                       variant={selectionMode === 'topic' ? 'contained' : 'outlined'}
@@ -1378,7 +1607,7 @@ const Export: React.FC<ExportProps> = ({
                         type="text"
                         value={userCustomExportPart}
                         onChange={(e) => handleExportNameChange(e.target.value)}
-                        placeholder="Custom name..."
+                        placeholder={(includeRosbagName || includeMcapRange) ? '+ custom name...' : 'Enter custom name...'}
                         sx={{
                           width: '100%',
                           height: '100%',
@@ -1478,7 +1707,7 @@ const Export: React.FC<ExportProps> = ({
                             type="text"
                             value={userCustomExportParts[i] ?? ''}
                             onChange={(e) => handleExportPartChange(i, e.target.value)}
-                            placeholder="Custom..."
+                            placeholder={(includeRosbagName || includeMcapRange || includePartNumber) ? '+ custom name...' : 'Enter custom name...'}
                             sx={{
                               width: '100%',
                               height: '100%',

@@ -4,6 +4,7 @@ import logging
 import re
 import json
 import struct
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 from flask import Blueprint, jsonify, request, current_app
@@ -23,37 +24,17 @@ export_bp = Blueprint('export', __name__)
 SAFE_ROSBAG_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
 
 
-def _make_export_parent_folder(relative_rosbag_path: str) -> str:
-    """Build a safe parent folder name from relative rosbag path: path_export."""
-    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', relative_rosbag_path.replace('/', '_').strip('_'))
-    return f"{safe}_export" if safe else "export"
-
-
 def _export_rosbag_batch(exports_list: list) -> tuple:
     """Process multiple exports sequentially. Each item is a single-export request."""
     total = len(exports_list)
 
-    # Determine parent folder name based on source rosbags
     unique_sources = list(dict.fromkeys(
         item.get("source_rosbag") for item in exports_list if isinstance(item, dict) and item.get("source_rosbag")
     ))
 
     output_parent = None
     if total > 1:
-        if len(unique_sources) == 1:
-            # Single source rosbag: use its name as parent
-            try:
-                p = Path(str(unique_sources[0]))
-                if p.is_absolute():
-                    rel = str(p.relative_to(ROSBAGS))
-                else:
-                    rel = str(unique_sources[0])
-                output_parent = _make_export_parent_folder(rel)
-            except (ValueError, TypeError):
-                pass
-        elif len(unique_sources) > 1:
-            # Multiple source rosbags: use generic parent
-            output_parent = "multi_rosbag_export"
+        output_parent = datetime.now().strftime("export_%Y_%m_%d-%H_%M_%S")
     first_source = unique_sources[0] if unique_sources else None
 
     for idx, item in enumerate(exports_list):
@@ -218,71 +199,6 @@ def _run_single_export(data: dict):
         mcaps.sort(key=extract_number)
         return mcaps
 
-    def export_mcap(
-        input_mcap_path: Path, output_mcap_path: Path, mcap_id: str,
-        start_time_ns: Optional[int], end_time_ns: Optional[int], topics_: Optional[List[str]],
-        compression: CompressionType, include_attachments: bool, include_metadata: bool,
-    ):
-        output_mcap_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(input_mcap_path, "rb") as input_file:
-            reader = SeekingReader(input_file, decoder_factories=[DecoderFactory()])
-            summary = reader.get_summary()
-            if not summary:
-                return
-            with open(output_mcap_path, "wb") as output_file:
-                writer = Writer(
-                    output=output_file, compression=compression,
-                    index_types=IndexType.ALL, use_chunking=True, use_statistics=True,
-                )
-                writer.start(profile="ros2", library="mcap-exporter")
-                schema_map = {}
-                if summary.schemas:
-                    for schema_id, schema in summary.schemas.items():
-                        schema_map[schema_id] = writer.register_schema(
-                            name=schema.name, encoding=schema.encoding, data=schema.data
-                        )
-                channel_map = {}
-                if summary.channels:
-                    for channel_id, channel in summary.channels.items():
-                        if topics_ and channel.topic not in topics_:
-                            continue
-                        new_schema_id = schema_map.get(channel.schema_id, 0)
-                        channel_map[channel_id] = writer.register_channel(
-                            topic=channel.topic, message_encoding=channel.message_encoding,
-                            schema_id=new_schema_id, metadata=dict(channel.metadata) if channel.metadata else {},
-                        )
-                if not channel_map:
-                    writer.finish()
-                    return
-                for schema, channel, message in reader.iter_messages(
-                    topics=topics_, start_time=start_time_ns, end_time=end_time_ns,
-                    log_time_order=True, reverse=False,
-                ):
-                    new_channel_id = channel_map.get(channel.id)
-                    if new_channel_id is not None:
-                        writer.add_message(
-                            channel_id=new_channel_id, log_time=message.log_time,
-                            data=message.data, publish_time=message.publish_time, sequence=message.sequence,
-                        )
-                if include_attachments:
-                    for attachment in reader.iter_attachments():
-                        include_a = True
-                        if start_time_ns is not None and attachment.log_time < start_time_ns:
-                            include_a = False
-                        if end_time_ns is not None and attachment.log_time > end_time_ns:
-                            include_a = False
-                        if include_a:
-                            writer.add_attachment(
-                                create_time=attachment.create_time, log_time=attachment.log_time,
-                                name=attachment.name, media_type=attachment.media_type, data=attachment.data,
-                            )
-                if include_metadata:
-                    for metadata in reader.iter_metadata():
-                        writer.add_metadata(
-                            name=metadata.name, data=dict(metadata.metadata) if metadata.metadata else {},
-                        )
-                writer.finish()
-
     input_mcaps = get_all_mcaps(input_rosbag_dir)
     output_rosbag_dir.mkdir(parents=True, exist_ok=True)
 
@@ -302,8 +218,12 @@ def _run_single_export(data: dict):
             return (jsonify({"error": "Start MCAP ID must be <= End MCAP ID"}), 400)
         mcap_nums_to_process = list(range(start_mcap_num, end_mcap_num + 1))
 
+    # --- Export: 1:1 copy from each source MCAP to a consecutively numbered output MCAP ---
+    total_source = len(mcap_nums_to_process)
     exported_count = 0
-    for mcap_index, mcap_num in enumerate(mcap_nums_to_process):
+    msg_count = 0
+
+    for out_id, mcap_num in enumerate(mcap_nums_to_process):
         mcap_id = str(mcap_num)
         input_mcap = None
         for mcap_path in input_mcaps:
@@ -312,22 +232,77 @@ def _run_single_export(data: dict):
                 break
         if input_mcap is None:
             continue
-        output_mcap_name = f"{new_rosbag_name}.mcap"
-        output_mcap_path = output_rosbag_dir / output_mcap_name
-        if mcap_num == start_mcap_num:
-            mcap_start_time, mcap_end_time = start_timestamp, None
-        elif mcap_num == end_mcap_num:
-            mcap_start_time, mcap_end_time = None, end_timestamp
-        else:
-            mcap_start_time, mcap_end_time = None, None
+
+        # Time filtering: start on first, end on last, both if single MCAP
+        mcap_start_time = start_timestamp if mcap_num == start_mcap_num else None
+        mcap_end_time = end_timestamp if mcap_num == end_mcap_num else None
+
+        output_mcap_path = output_rosbag_dir / f"{new_rosbag_name}_{out_id}.mcap"
+
+        EXPORT_PROGRESS["progress"] = min(out_id / max(total_source, 1), 0.95)
+        EXPORT_PROGRESS["message"] = (
+            f"Exporting MCAP {out_id + 1}/{total_source} (source id {mcap_id})..."
+        )
+
         try:
-            export_mcap(
-                input_mcap_path=input_mcap, output_mcap_path=output_mcap_path, mcap_id=mcap_id,
-                start_time_ns=mcap_start_time, end_time_ns=mcap_end_time,
-                topics_=topics if topics else None, compression=CompressionType.ZSTD,
-                include_attachments=True, include_metadata=True,
-            )
+            with open(input_mcap, "rb") as input_file:
+                reader = SeekingReader(input_file, decoder_factories=[DecoderFactory()])
+                summary = reader.get_summary()
+                if not summary:
+                    continue
+
+                with open(output_mcap_path, "wb") as output_file:
+                    writer = Writer(
+                        output=output_file, compression=CompressionType.ZSTD,
+                        index_types=IndexType.ALL, use_chunking=True, use_statistics=True,
+                    )
+                    writer.start(profile="ros2", library="mcap-exporter")
+
+                    schema_map = {}
+                    for schema_id, schema in (summary.schemas or {}).items():
+                        schema_map[schema_id] = writer.register_schema(
+                            name=schema.name, encoding=schema.encoding, data=schema.data,
+                        )
+
+                    channel_map = {}
+                    for channel_id, channel in (summary.channels or {}).items():
+                        if topics and channel.topic not in topics:
+                            continue
+                        new_schema_id = schema_map.get(channel.schema_id, 0)
+                        channel_map[channel_id] = writer.register_channel(
+                            topic=channel.topic, message_encoding=channel.message_encoding,
+                            schema_id=new_schema_id,
+                            metadata=dict(channel.metadata) if channel.metadata else {},
+                        )
+
+                    if not channel_map:
+                        writer.finish()
+                        continue
+
+                    for schema, channel, message in reader.iter_messages(
+                        topics=topics if topics else None,
+                        start_time=mcap_start_time, end_time=mcap_end_time,
+                        log_time_order=True, reverse=False,
+                    ):
+                        new_channel_id = channel_map.get(channel.id)
+                        if new_channel_id is not None:
+                            writer.add_message(
+                                channel_id=new_channel_id, log_time=message.log_time,
+                                data=message.data, publish_time=message.publish_time,
+                                sequence=message.sequence,
+                            )
+                            msg_count += 1
+
+                    for metadata in reader.iter_metadata():
+                        writer.add_metadata(
+                            name=metadata.name,
+                            data=dict(metadata.metadata) if metadata.metadata else {},
+                        )
+
+                    writer.finish()
+
             exported_count += 1
+
         except Exception as e:
             current_app.logger.error(f"Failed to export MCAP {mcap_id}: {e}", exc_info=True)
             EXPORT_PROGRESS["status"] = "error"
@@ -335,17 +310,19 @@ def _run_single_export(data: dict):
             EXPORT_PROGRESS["message"] = str(e)
             return (jsonify({"error": str(e)}), 500)
 
+    # --- Reindex the output directory ---
     if exported_count > 0:
+        EXPORT_PROGRESS["message"] = "Reindexing..."
         try:
             result = subprocess.run(
                 ["ros2", "bag", "reindex", str(output_rosbag_dir), "-s", "mcap"],
-                capture_output=True, text=True, check=True
+                capture_output=True, text=True, check=True,
             )
             current_app.logger.info(f"Reindexed {output_rosbag_dir}: {result.stdout or 'ok'}")
         except subprocess.CalledProcessError as e:
-            current_app.logger.error(f"ros2 bag reindex failed for {output_rosbag_dir}: {e.stderr or e}")
+            current_app.logger.error(f"ros2 bag reindex failed: {e.stderr or e}")
         except FileNotFoundError:
-            current_app.logger.warning("ros2 command not found; skipping reindex. Ensure ROS2 is in PATH.")
+            current_app.logger.warning("ros2 not found; skipping reindex.")
 
     return None
 
@@ -838,10 +815,11 @@ def _run_single_raw_export(data: dict):
             return (jsonify({"error": "Start MCAP ID must be <= End MCAP ID"}), 400)
         mcap_nums_to_process = list(range(start_mcap_num, end_mcap_num + 1))
 
-    # Pre-scan: estimate total message count from MCAP summaries
+    # Pre-scan: collect per-topic message counts from MCAP summaries
     total_mcaps = len(mcap_nums_to_process)
-    mcap_message_counts: dict[str, int] = {}
     total_messages_estimate = 0
+    topic_message_counts: dict[str, int] = {}
+    mcap_topic_counts: dict[str, dict[str, int]] = {}
     EXPORT_PROGRESS["status"] = "running"
     EXPORT_PROGRESS["progress"] = 0
     EXPORT_PROGRESS["message"] = f"Scanning {total_mcaps} MCAP file(s)..."
@@ -854,15 +832,26 @@ def _run_single_raw_export(data: dict):
                     with open(mcap_path, "rb") as f:
                         reader = SeekingReader(f)
                         summary = reader.get_summary()
-                        if summary and summary.statistics:
-                            count = summary.statistics.message_count or 0
-                        else:
-                            count = 0
-                        mcap_message_counts[mcap_id_str] = count
-                        total_messages_estimate += count
+                        per_topic: dict[str, int] = {}
+                        if summary and summary.channels and summary.statistics:
+                            ch_counts = summary.statistics.channel_message_counts or {}
+                            for ch_id, count in ch_counts.items():
+                                channel = summary.channels.get(ch_id)
+                                if channel is None:
+                                    continue
+                                if topics and channel.topic not in topics:
+                                    continue
+                                per_topic[channel.topic] = per_topic.get(channel.topic, 0) + count
+                                topic_message_counts[channel.topic] = topic_message_counts.get(channel.topic, 0) + count
+                                total_messages_estimate += count
+                        mcap_topic_counts[mcap_id_str] = per_topic
                 except Exception:
-                    mcap_message_counts[mcap_id_str] = 0
+                    mcap_topic_counts[mcap_id_str] = {}
                 break
+
+    all_topics_sorted = sorted(topic_message_counts.keys())
+    total_topics = len(all_topics_sorted)
+    EXPORT_PROGRESS["message"] = f"Exporting {total_topics} topic(s) across {total_mcaps} MCAP file(s)..."
 
     exported_files = 0
     messages_processed = 0
@@ -883,34 +872,73 @@ def _run_single_raw_export(data: dict):
         else:
             mcap_start_time, mcap_end_time = None, None
 
-        EXPORT_PROGRESS["message"] = (
-            f"MCAP {mcap_index + 1}/{total_mcaps} (id {mcap_id_str}) | "
-            f"{exported_files} files written"
-        )
+        mcap_per_topic = mcap_topic_counts.get(mcap_id_str, {})
+        topics_in_mcap = [t for t in all_topics_sorted if t in mcap_per_topic]
 
         try:
             with open(input_mcap, "rb") as f:
                 reader = SeekingReader(f, decoder_factories=[DecoderFactory()])
-                for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
-                    topics=topics if topics else None,
-                    start_time=mcap_start_time,
-                    end_time=mcap_end_time,
-                    log_time_order=True,
-                ):
-                    topic_dir = normalize_topic(channel.topic)
-                    out_dir = output_rosbag_dir / mcap_id_str / topic_dir
-                    _write_raw_message(ros2_msg, schema.name, out_dir, message.log_time)
-                    exported_files += 1
-                    messages_processed += 1
 
-                    # Update progress every 50 messages to avoid excessive dict writes
-                    if messages_processed % 50 == 0:
+                if topics_in_mcap:
+                    # Per-topic iteration for detailed progress
+                    for topic_idx, current_topic in enumerate(topics_in_mcap):
+                        topic_expected = mcap_per_topic.get(current_topic, 0)
+                        topic_processed = 0
+
+                        EXPORT_PROGRESS["message"] = (
+                            f"MCAP {mcap_index + 1}/{total_mcaps}\n"
+                            f"Topic {topic_idx + 1}/{len(topics_in_mcap)}: {current_topic}\n"
+                            f"(0/{topic_expected}) | {exported_files} files"
+                        )
                         if total_messages_estimate > 0:
                             EXPORT_PROGRESS["progress"] = min(messages_processed / total_messages_estimate, 0.99)
-                        EXPORT_PROGRESS["message"] = (
-                            f"MCAP {mcap_index + 1}/{total_mcaps} (id {mcap_id_str}) | "
-                            f"{exported_files} files written | {channel.topic}"
-                        )
+
+                        for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
+                            topics=[current_topic],
+                            start_time=mcap_start_time,
+                            end_time=mcap_end_time,
+                            log_time_order=True,
+                        ):
+                            topic_dir = normalize_topic(channel.topic)
+                            out_dir = output_rosbag_dir / mcap_id_str / topic_dir
+                            _write_raw_message(ros2_msg, schema.name, out_dir, message.log_time)
+                            exported_files += 1
+                            messages_processed += 1
+                            topic_processed += 1
+
+                            if messages_processed % 10 == 0:
+                                if total_messages_estimate > 0:
+                                    EXPORT_PROGRESS["progress"] = min(messages_processed / total_messages_estimate, 0.99)
+                                EXPORT_PROGRESS["message"] = (
+                                    f"MCAP {mcap_index + 1}/{total_mcaps}\n"
+                                    f"Topic {topic_idx + 1}/{len(topics_in_mcap)}: {current_topic}\n"
+                                    f"({topic_processed}/{topic_expected}) | {exported_files} files written"
+                                )
+                else:
+                    # Fallback: no per-topic info available, iterate all messages
+                    EXPORT_PROGRESS["message"] = (
+                        f"MCAP {mcap_index + 1}/{total_mcaps} (id {mcap_id_str}) | "
+                        f"{exported_files} files written"
+                    )
+                    for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
+                        topics=topics if topics else None,
+                        start_time=mcap_start_time,
+                        end_time=mcap_end_time,
+                        log_time_order=True,
+                    ):
+                        topic_dir = normalize_topic(channel.topic)
+                        out_dir = output_rosbag_dir / mcap_id_str / topic_dir
+                        _write_raw_message(ros2_msg, schema.name, out_dir, message.log_time)
+                        exported_files += 1
+                        messages_processed += 1
+
+                        if messages_processed % 10 == 0:
+                            if total_messages_estimate > 0:
+                                EXPORT_PROGRESS["progress"] = min(messages_processed / total_messages_estimate, 0.99)
+                            EXPORT_PROGRESS["message"] = (
+                                f"MCAP {mcap_index + 1}/{total_mcaps} | "
+                                f"{channel.topic} | {exported_files} files written"
+                            )
         except Exception as e:
             current_app.logger.error(f"Failed to raw-export MCAP {mcap_id_str}: {e}", exc_info=True)
             EXPORT_PROGRESS["status"] = "error"
@@ -932,18 +960,7 @@ def _export_raw_batch(exports_list: list) -> tuple:
 
     output_parent = None
     if total > 1:
-        if len(unique_sources) == 1:
-            try:
-                p = Path(str(unique_sources[0]))
-                if p.is_absolute():
-                    rel = str(p.relative_to(ROSBAGS))
-                else:
-                    rel = str(unique_sources[0])
-                output_parent = _make_export_parent_folder(rel)
-            except (ValueError, TypeError):
-                pass
-        elif len(unique_sources) > 1:
-            output_parent = "multi_rosbag_raw_export"
+        output_parent = datetime.now().strftime("export_%Y_%m_%d-%H_%M_%S")
     first_source = unique_sources[0] if unique_sources else None
 
     for idx, item in enumerate(exports_list):
