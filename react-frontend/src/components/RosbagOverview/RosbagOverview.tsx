@@ -21,7 +21,7 @@ interface RosbagOverviewProps {
         [model: string]: {
             [rosbag: string]: {
                 [topic: string]: {
-                    marks: { value: number }[];
+                    marks: { value: number; rank?: number }[];
                 };
             };
         };
@@ -460,7 +460,8 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         <Collapse in={isExpanded}>
                                                             <Box sx={{ p: 1.5, pt: 0 }}>
                                                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, position: 'relative' }}>
-                                                    {/* Image Topic Preview */}
+                                                    {/* Image Topic Preview + Explore arrow */}
+                                                    <Box sx={{ position: 'relative' }}>
                                                     <img
                                                         src={`/image-topic-preview/${rosbagName}/${topicSafe}.jpg`}
                                                         alt={`Image topic preview for ${topic}`}
@@ -482,7 +483,46 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                             }
                                                         }}
                                                     />
-                                                    
+                                                    <Box sx={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }}>
+                                                        <IconButton
+                                                            aria-label="open in explore"
+                                                            size="small"
+                                                            sx={{
+                                                                color: 'white',
+                                                                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                                                                '&:hover': {
+                                                                    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                                                }
+                                                            }}
+                                                            onClick={async () => {
+                                                                const canvas = {
+                                                                    root: { id: 1 },
+                                                                    metadata: {
+                                                                        1: { nodeTimestamp: null, nodeTopic: topic, nodeTopicType: "sensor_msgs/msg/CompressedImage" }
+                                                                    }
+                                                                } as any;
+                                                                const encodedCanvas = encodeURIComponent(JSON.stringify(canvas));
+                                                                const marks = (marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []);
+                                                                if (marks && marks.length > 0) {
+                                                                    const marksKey = `marks_${rosbagName}_${topic}`;
+                                                                    try {
+                                                                        sessionStorage.setItem(marksKey, JSON.stringify(marks));
+                                                                    } catch (e) {
+                                                                        console.warn('Failed to store marks in sessionStorage', e);
+                                                                    }
+                                                                }
+                                                                const params = new URLSearchParams();
+                                                                params.set('rosbag', rosbagName);
+                                                                params.set('canvas', encodedCanvas);
+                                                                params.set('ts', '0');
+                                                                navigate(`/explore?${params.toString()}`);
+                                                            }}
+                                                        >
+                                                            <KeyboardArrowRightIcon />
+                                                        </IconButton>
+                                                    </Box>
+                                                    </Box>
+
                                                     {/* Adjacency Image */}
                                                     <img
                                                         src={`/adjacency-image/${model}/${rosbagName}/${topicSafe}/${topicSafe}.jpg`}
@@ -683,51 +723,6 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         )}
                                                     </Box>
                                                     
-                                                                    {/* Arrow button positioned absolutely */}
-                                                                    <Box sx={{ position: 'absolute', top: 0, right: 0 }}>
-                                                                        <IconButton
-                                                                            aria-label="open"
-                                                                            size="small"
-                                                                            sx={{ 
-                                                                                color: 'white',
-                                                                                backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                                                                                '&:hover': {
-                                                                                    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                                                                                }
-                                                                            }}
-                                                                            onClick={async () => {
-                                                                                // Build a single-panel canvas for this topic
-                                                                                const canvas = {
-                                                                                    root: { id: 1 },
-                                                                                    metadata: {
-                                                                                        1: { nodeTimestamp: null, nodeTopic: topic, nodeTopicType: "sensor_msgs/msg/CompressedImage" }
-                                                                                    }
-                                                                                } as any;
-                                                                                const encodedCanvas = encodeURIComponent(JSON.stringify(canvas));
-                                                                                // Use existing marks for this topic to seed the explore page heatmap
-                                                                                const marks = (marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []);
-                                                                                
-                                                                                // Store marks in sessionStorage (not in URL for cleaner, shareable links)
-                                                                                if (marks && marks.length > 0) {
-                                                                                    const marksKey = `marks_${rosbagName}_${topic}`;
-                                                                                    try {
-                                                                                        sessionStorage.setItem(marksKey, JSON.stringify(marks));
-                                                                                    } catch (e) {
-                                                                                        console.warn('Failed to store marks in sessionStorage', e);
-                                                                                    }
-                                                                                }
-                                                                                
-                                                                                const params = new URLSearchParams();
-                                                                                params.set('rosbag', rosbagName);
-                                                                                params.set('canvas', encodedCanvas);
-                                                                                params.set('ts', '0');
-                                                                                // Marks are now stored in sessionStorage, not in URL
-                                                                                navigate(`/explore?${params.toString()}`);
-                                                                            }}
-                                                                        >
-                                                                            <KeyboardArrowRightIcon />
-                                                                        </IconButton>
-                                                                    </Box>
                                                                 </Box>
                                                             </Box>
                                                         </Collapse>

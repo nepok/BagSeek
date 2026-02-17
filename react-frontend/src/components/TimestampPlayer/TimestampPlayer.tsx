@@ -18,8 +18,8 @@ interface TimestampPlayerProps {
   selectedTimestamp: string | null;
   onSliderChange: (index: number) => void;
   selectedRosbag: string | null;
-  searchMarks: { value: number; label: string }[];
-  setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; label: string }[]>>;
+  searchMarks: { value: number; rank?: number }[];
+  setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; rank?: number }[]>>;
   mcapBoundaries?: number[];
 }
 
