@@ -253,6 +253,7 @@ def search():
     marks: dict[tuple, set] = {}
     device = "cuda" if torch.cuda.is_available() else "cpu"
     all_results: list[dict] = []
+    model_load_errors: list[str] = []  # Track per-model load failures
 
     try:
         total_steps = max(1, len(models_list) * len(rosbags_list))
@@ -294,6 +295,12 @@ def search():
                     model_kind = "custom"
             except Exception as e:
                 logging.error("[SEARCH] Failed to load model %s: %s", model_name, e)
+                is_oom = isinstance(e, torch.cuda.OutOfMemoryError) or "CUDA out of memory" in str(e) or "out of memory" in str(e).lower()
+                if is_oom:
+                    model_load_errors.append(f"GPU VRAM full – could not load model '{model_name}'")
+                    logging.error("[SEARCH] CUDA OOM while loading model %s", model_name)
+                else:
+                    model_load_errors.append(f"Failed to load model '{model_name}': {e}")
                 try:
                     _release_clip_model_from_gpu(model)
                 except NameError:
@@ -690,7 +697,7 @@ def search():
                     berlin_tz = ZoneInfo("Europe/Berlin")
                     minute_str = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).astimezone(berlin_tz).strftime("%H:%M")
 
-                    model_results.append({
+                    result_entry = {
                         'rank': i,
                         'rosbag': rosbag_name,
                         'similarityScore': float(dist),
@@ -700,16 +707,21 @@ def search():
                         'mcap_identifier': m["mcap_identifier"],
                         'shard_id': m["shard_id"],
                         'row_in_shard': m["row_in_shard"],
-                        'model': model_name
-                    })
+                        'model': model_name,
+                        '_mark_indices': [],
+                    }
+                    model_results.append(result_entry)
 
                     # Marks matching
                     if has_reference_timestamp_index:
                         # FAST: Use reference_timestamp_index directly from manifest
                         ref_ts_idx = m.get("reference_timestamp_index")
+                        if i <= 3:  # Log first few results for debugging
+                            logging.info("[SEARCH-MARKS] result #%d: has_ref_ts_idx=True, ref_ts_idx=%s (type=%s)", i, ref_ts_idx, type(ref_ts_idx).__name__)
                         if ref_ts_idx is not None:
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).add(ref_ts_idx)
+                            result_entry['_mark_indices'].append(ref_ts_idx)
                     elif ts_str in value_to_ref_ts:
                         # LEGACY: O(1) lookup from pre-built index
                         matching_ref_timestamps = value_to_ref_ts[ts_str]
@@ -720,8 +732,12 @@ def search():
                         if match_indices:
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).update(match_indices)
+                            result_entry['_mark_indices'].extend(match_indices)
 
                 all_results.extend(model_results)
+                marks_count = sum(len(v) for v in marks.values())
+                logging.info("[SEARCH-MARKS] After %s/%s: marks keys=%d, total mark indices=%d, has_ref_ts_idx=%s",
+                            model_name, rosbag_name, len(marks), marks_count, has_reference_timestamp_index)
 
                 t_results_end = time.perf_counter()
                 logging.info("[SEARCH-DEBUG] Results building took %.3fs for %d results", t_results_end - t_results_start, len(model_results))
@@ -750,7 +766,18 @@ def search():
             result['rank'] = rank
         filtered_results = all_results
 
-        # marksPerTopic
+        # marksPerTopic – include rank so the frontend can weight heatmap intensity
+        # Build best-rank lookup: (model, rosbag, topic, idx) -> lowest rank
+        mark_best_rank: dict[tuple, int] = {}
+        for result in filtered_results:
+            rank = result['rank']
+            key_prefix = (result['model'], result['rosbag'], result['topic'])
+            for idx in result.get('_mark_indices', []):
+                full_key = (*key_prefix, idx)
+                if full_key not in mark_best_rank or rank < mark_best_rank[full_key]:
+                    mark_best_rank[full_key] = rank
+            result.pop('_mark_indices', None)  # strip internal field before response
+
         marksPerTopic: dict = {}
         for result in filtered_results:
             model = result['model']
@@ -770,23 +797,45 @@ def search():
                 and topic_key in marksPerTopic[model_key][rosbag_key]
             ):
                 marksPerTopic[model_key][rosbag_key][topic_key]['marks'].extend(
-                    {'value': idx} for idx in indices
+                    {'value': idx, 'rank': mark_best_rank.get((model_key, rosbag_key, topic_key, idx), 100)}
+                    for idx in indices
                 )
 
         # Check if no results were found
         if not filtered_results:
+            if model_load_errors:
+                # All models failed to load (likely CUDA OOM)
+                is_vram = any("VRAM" in e or "GPU" in e for e in model_load_errors)
+                warning_msg = (
+                    "Search unavailable: GPU VRAM is full. Try again later or restart the backend."
+                    if is_vram
+                    else "; ".join(model_load_errors)
+                )
+                SEARCH_PROGRESS["status"] = "error"
+                SEARCH_PROGRESS["progress"] = 0.0
+                SEARCH_PROGRESS["message"] = warning_msg
+                return jsonify({
+                    'query': query_text,
+                    'results': [],
+                    'marksPerTopic': {},
+                    'error': warning_msg,
+                }), 503
             SEARCH_PROGRESS["status"] = "done"
             SEARCH_PROGRESS["progress"] = 1.0
             SEARCH_PROGRESS["message"] = "No results found for the given query."
         else:
             SEARCH_PROGRESS["status"] = "done"
             SEARCH_PROGRESS["progress"] = 1.0
-        
-        return jsonify({
+
+        response_data = {
             'query': query_text,
             'results': filtered_results,
-            'marksPerTopic': marksPerTopic
-        })
+            'marksPerTopic': marksPerTopic,
+        }
+        # Include non-fatal warnings if some models failed but others succeeded
+        if model_load_errors and filtered_results:
+            response_data['warning'] = "; ".join(model_load_errors)
+        return jsonify(response_data)
 
     except Exception as e:
         # Generate error ID for debugging without exposing internals
@@ -1167,7 +1216,7 @@ def search_by_image():
                     berlin_tz = ZoneInfo("Europe/Berlin")
                     minute_str = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).astimezone(berlin_tz).strftime("%H:%M")
 
-                    model_results.append({
+                    result_entry = {
                         'rank': i,
                         'rosbag': rosbag_name,
                         'similarityScore': float(dist),
@@ -1177,14 +1226,17 @@ def search_by_image():
                         'mcap_identifier': m["mcap_identifier"],
                         'shard_id': m["shard_id"],
                         'row_in_shard': m["row_in_shard"],
-                        'model': model_name
-                    })
+                        'model': model_name,
+                        '_mark_indices': [],
+                    }
+                    model_results.append(result_entry)
 
                     if has_reference_timestamp_index:
                         ref_ts_idx = m.get("reference_timestamp_index")
                         if ref_ts_idx is not None:
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).add(ref_ts_idx)
+                            result_entry['_mark_indices'].append(ref_ts_idx)
                     elif ts_str in value_to_ref_ts:
                         matching_ref_timestamps = value_to_ref_ts[ts_str]
                         match_indices: list[int] = []
@@ -1194,6 +1246,7 @@ def search_by_image():
                         if match_indices:
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).update(match_indices)
+                            result_entry['_mark_indices'].extend(match_indices)
 
                 all_results.extend(model_results)
 
@@ -1212,6 +1265,17 @@ def search_by_image():
             result['rank'] = rank
         filtered_results = all_results
 
+        # Build best-rank lookup for marks
+        mark_best_rank: dict[tuple, int] = {}
+        for result in filtered_results:
+            rank = result['rank']
+            key_prefix = (result['model'], result['rosbag'], result['topic'])
+            for idx in result.get('_mark_indices', []):
+                full_key = (*key_prefix, idx)
+                if full_key not in mark_best_rank or rank < mark_best_rank[full_key]:
+                    mark_best_rank[full_key] = rank
+            result.pop('_mark_indices', None)
+
         marksPerTopic: dict = {}
         for result in filtered_results:
             model = result['model']
@@ -1227,7 +1291,8 @@ def search_by_image():
                 and topic_key in marksPerTopic[model_key][rosbag_key]
             ):
                 marksPerTopic[model_key][rosbag_key][topic_key]['marks'].extend(
-                    {'value': idx} for idx in indices
+                    {'value': idx, 'rank': mark_best_rank.get((model_key, rosbag_key, topic_key, idx), 100)}
+                    for idx in indices
                 )
 
         if not filtered_results:
