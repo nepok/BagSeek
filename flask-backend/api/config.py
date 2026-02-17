@@ -4,6 +4,7 @@ Handles environment variable loading and path constants.
 """
 import os
 import sys
+import secrets
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -36,6 +37,7 @@ LOOKUP_TABLES_STR = _require_env("LOOKUP_TABLES")
 TOPICS_STR = _require_env("TOPICS")
 CANVASES_FILE_STR = _require_env("CANVASES_FILE")
 POLYGONS_DIR_STR = _require_env("POLYGONS_DIR")
+TOPIC_PRESETS_FILE_STR = _require_env("TOPIC_PRESETS_FILE")
 ADJACENT_SIMILARITIES_STR = _require_env("ADJACENT_SIMILARITIES")
 EMBEDDINGS_STR = _require_env("EMBEDDINGS")
 EXPORT_STR = _require_env("EXPORT")
@@ -49,18 +51,27 @@ OTHER_MODELS = Path(BASE_STR + OTHER_MODELS_STR)
 
 IMAGE_TOPIC_PREVIEWS = Path(BASE_STR + IMAGE_TOPIC_PREVIEWS_STR)
 POSITIONAL_LOOKUP_TABLE = Path(BASE_STR + POSITIONAL_LOOKUP_TABLE_STR)
+POSITIONAL_BOUNDARIES = POSITIONAL_LOOKUP_TABLE.parent / "positional_boundaries.json"
 
 LOOKUP_TABLES = Path(BASE_STR + LOOKUP_TABLES_STR)
 TOPICS = Path(BASE_STR + TOPICS_STR)
 
 CANVASES_FILE = Path(BASE_STR + CANVASES_FILE_STR)
 POLYGONS_DIR = Path(BASE_STR + POLYGONS_DIR_STR)
+TOPIC_PRESETS_FILE = Path(BASE_STR + TOPIC_PRESETS_FILE_STR)
 
 ADJACENT_SIMILARITIES = Path(BASE_STR + ADJACENT_SIMILARITIES_STR)
 EMBEDDINGS = Path(BASE_STR + EMBEDDINGS_STR)
 
 EXPORT = Path(BASE_STR + EXPORT_STR)
 EXPORT_RAW = Path(BASE_STR + EXPORT_RAW_STR)
+
+# Authentication (optional — if APP_PASSWORD is not set, auth is disabled)
+APP_PASSWORD = os.getenv("APP_PASSWORD")
+if not APP_PASSWORD:
+    logging.warning("APP_PASSWORD not set — authentication is disabled")
+JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+JWT_EXPIRY_SECONDS = 3600  # 1 hour
 
 # Model configuration
 CUSTOM_MODEL_DEFAULTS = {

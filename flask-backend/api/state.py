@@ -158,3 +158,4 @@ _lookup_table_cache: dict[str, tuple[pd.DataFrame, float]] = {}
 _matching_rosbag_cache = {"paths": [], "timestamp": 0.0}
 _file_path_cache_lock = Lock()
 _positional_lookup_cache: dict[str, dict[str, dict[str, int]]] = {"data": None, "mtime": None}  # type: ignore[assignment]
+_positional_boundaries_cache: dict = {"data": None, "mtime": None}

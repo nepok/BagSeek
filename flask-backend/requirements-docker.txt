@@ -27,6 +27,9 @@ transformers==4.47.0
 safetensors==0.4.5
 huggingface-hub==0.26.5
 
+# Authentication
+PyJWT==2.9.0
+
 # Utilities
 Pillow==10.2.0
 tqdm==4.67.1
