@@ -1,4 +1,4 @@
-import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, MenuItem, Paper, Popper, Slider, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, LinearProgress, MenuItem, Paper, Popper, Slider, TextField, Tooltip, Typography } from '@mui/material';
 import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import AddIcon from '@mui/icons-material/Add';
@@ -663,6 +663,8 @@ const PositionalOverview: React.FC = () => {
   const [selectedMcapIndex, setSelectedMcapIndex] = useState<number>(0);
   const [expandedLocation, setExpandedLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [loadingMcaps, setLoadingMcaps] = useState<boolean>(false);
+  const mcapPillRef = useRef<HTMLDivElement | null>(null);
+  const mcapPillHeight = useRef<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [useSatellite, setUseSatellite] = useState<boolean>(false);
   const [polygons, setPolygons] = useState<Polygon[]>([]);
@@ -2788,7 +2790,7 @@ const PositionalOverview: React.FC = () => {
           )}
         </Box>
 
-        {showMcaps && availableMcaps.length > 0 && (
+        {showMcaps && (loadingMcaps || availableMcaps.length > 0) && (
           <Box
             sx={{
               position: 'absolute',
@@ -2803,8 +2805,15 @@ const PositionalOverview: React.FC = () => {
             }}
           >
             <Box
+              ref={(el: HTMLDivElement | null) => {
+                mcapPillRef.current = el;
+                if (el && !loadingMcaps && availableMcaps.length > 0) {
+                  mcapPillHeight.current = el.offsetHeight;
+                }
+              }}
               sx={{
                 width: 'min(620px, 70vw)',
+                ...(loadingMcaps && mcapPillHeight.current ? { height: mcapPillHeight.current } : {}),
                 backgroundColor: 'rgba(18, 18, 18, 0.75)',
                 borderRadius: '14px',
                 boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
@@ -2818,6 +2827,10 @@ const PositionalOverview: React.FC = () => {
                 pointerEvents: 'auto', // Enable pointer events for this container
               }}
             >
+              {loadingMcaps ? (
+                <LinearProgress sx={{ width: '100%', borderRadius: 1 }} />
+              ) : (
+              <>
               {/* Background indicator for MCAPs outside polygons (like rosbag slider) */}
               {availableMcaps.length > 0 && (
                 <Box
@@ -3021,6 +3034,8 @@ const PositionalOverview: React.FC = () => {
                   </>
                 );
               })()}
+              </>
+              )}
             </Box>
           </Box>
         )}
