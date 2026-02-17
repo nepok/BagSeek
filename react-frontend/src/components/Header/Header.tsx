@@ -1,13 +1,21 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button } from '@mui/material';
+import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button, Divider } from '@mui/material';
 import './Header.css';
 import FolderIcon from '@mui/icons-material/Folder';
 import IosShareIcon from '@mui/icons-material/IosShare';
 import ViewQuiltRoundedIcon from '@mui/icons-material/ViewQuiltRounded';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import LogoutIcon from '@mui/icons-material/Logout';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { searchFilterCache } from '../GlobalSearch/searchFilterCache';
+import { useExportPreselection } from '../Export/ExportPreselectionContext';
+import { useAuth } from '../AuthContext/AuthContext';
+
+import MapIcon from '@mui/icons-material/Map';
+import SearchIcon from '@mui/icons-material/Search';
+import ExploreIcon from '@mui/icons-material/Explore';
+
 
 interface HeaderProps {
   setIsFileInputVisible: (visible: boolean | ((prev: boolean) => boolean)) => void; // Controls visibility of file input dialog
@@ -19,6 +27,9 @@ interface HeaderProps {
   availableTopics: Record<string, string>; // Unified: { topicName: messageType }
   canvasList: { [key: string]: { root: any, metadata: { [id: number]: any }, rosbag?: string } }; // Collection of saved canvases from App
   refreshCanvasList: () => Promise<void>; // Function to refresh canvas list from backend
+  currentMetadata: { [id: number]: { nodeTopic: string | null; nodeTopicType: string | null } }; // Current canvas metadata
+  selectedTimestampIndex: number | null; // Current Explore position
+  searchMarks: { value: number; rank?: number }[]; // Heatmap marks from search
 }
 
 // Generates a consistent color based on rosbag name hash for UI elements
@@ -67,9 +78,11 @@ const isCanvasCompatible = (canvas: any, availableTopics: Record<string, string>
 };
 
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics, canvasList, refreshCanvasList }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics, canvasList, refreshCanvasList, currentMetadata, selectedTimestampIndex, searchMarks }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { openExportWithPreselection } = useExportPreselection();
+  const { logout, authDisabled } = useAuth();
   const viewMode: 'explore' | 'search' | 'positional' = 
     location.pathname.startsWith('/search') ? 'search' : 
     location.pathname.startsWith('/positional-overview') ? 'positional' : 
@@ -170,6 +183,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               },
             }}
           >
+            <MapIcon sx={{ fontSize: 18, mr: 0.5 }} />
             MAP
           </Button>
           <Button
@@ -192,6 +206,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               },
             }}
           >
+            <SearchIcon sx={{ fontSize: 18, mr: 0.5 }} />
             SEARCH
           </Button>
           <Button
@@ -220,6 +235,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               },
             }}
           >
+            <ExploreIcon sx={{ fontSize: 18, mr: 0.5 }} />
             EXPLORE
           </Button>
         </Box>
@@ -312,7 +328,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         {viewMode === 'explore' && (
           <>
             {/* Button to toggle file input dialog */}
-            <Tooltip title="Open Rosbag" arrow>
+            <Tooltip title="Select Rosbag" arrow>
               <IconButton
                 className="header-icon"
                 onClick={() => {
@@ -334,11 +350,25 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         )}
 
         {/* Export button - shown on all pages */}
-        <Tooltip title="Export Rosbag" arrow>
-          <IconButton className="header-icon" onClick={() => setIsExportDialogVisible((prev: boolean) => !prev)}>
+        <Tooltip title="Open Export Menu" arrow>
+          <IconButton className="header-icon" onClick={() => {
+            if (viewMode === 'explore' && selectedRosbag) {
+              const activeTopics = extractTopicsFromCanvas({ metadata: currentMetadata });
+              openExportWithPreselection({
+                rosbagPath: selectedRosbag,
+                ...(activeTopics.length > 0 ? { topics: activeTopics } : {}),
+                ...(selectedTimestampIndex != null ? { timestampIndex: selectedTimestampIndex } : {}),
+                ...(searchMarks.length > 0 ? { searchMarks } : {}),
+              });
+            } else {
+              setIsExportDialogVisible((prev: boolean) => !prev);
+            }
+          }}>
             <IosShareIcon />
           </IconButton>
         </Tooltip>
+        
+        <Divider orientation="vertical" sx={{margin: '8px'}} flexItem />
 
         {/* Smart Farming Lab logo - always visible, links to Smart Farming Lab */}
         <Button
@@ -361,6 +391,17 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               style={{ height: 32, width: 'auto', display: 'block', filter: 'grayscale(100%)' }}
             />
         </Button>
+
+        <Divider orientation="vertical" sx={{margin: '8px'}} flexItem />
+
+        {/* Logout button - only shown when auth is enabled */}
+        {!authDisabled && (
+          <Tooltip title="Logout" arrow>
+            <IconButton className="header-icon" onClick={logout}>
+              <LogoutIcon />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
     </Box>
   );

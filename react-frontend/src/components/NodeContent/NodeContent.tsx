@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./NodeContent.css"; // Import the CSS file
 import { Box, Typography, CircularProgress } from "@mui/material";
-import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css'; // Ensure Leaflet CSS is loaded
+import L from "leaflet";
+import "leaflet/dist/leaflet.css"; // Ensure Leaflet CSS is loaded
 
 interface NodeContentProps {
   nodeTopic: string | null; 
@@ -244,10 +244,9 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     return <primitive object={new THREE.Points(geometry, material)} />;
   };
 
-  // Rotate Three.js scene for better viewing angle and log camera rotation continuously
+  // Rotate Three.js scene for better viewing angle
   const RotateScene = () => {
     const { scene, camera } = useThree();
-    const lastRotationRef = useRef<{ x: number; y: number; z: number } | null>(null);
 
     // Initial scene tilt
     useEffect(() => {
@@ -256,36 +255,25 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       scene.rotation.z = 1.6;
     }, [scene]);
 
-
-
-    // Continuously log camera rotation whenever it changes (per frame)
-    useFrame(() => {
-      const { x, y, z } = camera.rotation;
-      const last = lastRotationRef.current;
-      const eps = 1e-4;
-      if (
-        !last ||
-        Math.abs(last.x - x) > eps ||
-        Math.abs(last.y - y) > eps ||
-        Math.abs(last.z - z) > eps
-      ) {
-        lastRotationRef.current = { x, y, z };
-        console.log(
-          "Camera rotation (radians):",
-          x,
-          y,
-          z
-        );
-        console.log(
-          "Camera rotation (degrees):",
-          THREE.MathUtils.radToDeg(x),
-          THREE.MathUtils.radToDeg(y),
-          THREE.MathUtils.radToDeg(z)
-        );
-      }
-    });
-
     return null; // No need to render anything here
+  };
+
+  // One-time initial camera pose helper: sets a nice default view on mount
+  const InitialCameraPose: React.FC = () => {
+    const { camera } = useThree();
+    useEffect(() => {
+      // Position: reuse the Canvas default
+      camera.position.set(5, 0, -4);
+      // Quaternion: desired standard view (captured earlier)
+      camera.quaternion.set(
+        -0.008365159696284239,
+         0.8813901488717224,
+        -0.47205665119629964,
+        -0.015618823146245065
+      );
+      camera.updateProjectionMatrix();
+    }, [camera]);
+    return null;
   };
 
   // Render IMU visualization with orientation and vector arrows
@@ -377,6 +365,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       <div className="canvas-container">
         <Canvas camera={{ position: [5, 0, -4], fov: 75 }}>
           <RotateScene />
+          <InitialCameraPose />
           <OrbitControls />
           <pointLight position={[10, 10, 10]} />
           <PointCloud pointCloud={pointCloud} />
@@ -417,7 +406,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   }
 
   return (
-    <div className="node-content"> {/* container for rendered content */}
+    <div className="node-content">
       {renderedContent}
       <TypographyBox />
     </div>

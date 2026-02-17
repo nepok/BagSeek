@@ -17,6 +17,7 @@ import McapRangeFilter, { McapRangeFilterItem, McapFilterState, formatNsToTime }
 import { useSearchResultsCache } from './SearchCacheContext';
 import { searchFilterCache, getFilter, clearFilterCache } from './searchFilterCache';
 import TractorLoader from '../TractorLoader/TractorLoader';
+import { useError } from '../ErrorContext/ErrorContext';
 
 // Hover-still helper: true after delay ms with no meaningful cursor movement
 function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
@@ -289,6 +290,7 @@ function ResultImageCard({
 const GlobalSearch: React.FC = () => {
 
     const navigate = useNavigate();
+    const { setError } = useError();
     const { cache: resultsCache, updateCache: updateResultsCache, clearCache: clearResultsCache } = useSearchResultsCache();
     const applyToSearch = typeof window !== 'undefined' && sessionStorage.getItem('__BagSeekApplyToSearchJustNavigated') === '1';
 
@@ -296,7 +298,7 @@ const GlobalSearch: React.FC = () => {
     const [searchDone, setSearchDone] = useState(() => resultsCache.searchDone);
     const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => getFilter('viewMode', applyToSearch));
     const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>(() => resultsCache.searchResults);
-    const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
+    const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number; rank?: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
     const [searchStatus, setSearchStatus] = useState<{progress: number, status: string, message: string}>(() => resultsCache.searchStatus);
 
     const searchIconRef = useRef<HTMLDivElement | null>(null);
@@ -694,6 +696,9 @@ const GlobalSearch: React.FC = () => {
 
                 // Stop polling when search is done or errored
                 if (data.status === 'done' || data.status === 'error') {
+                    if (data.status === 'error' && data.message) {
+                        setError(data.message);
+                    }
                     if (pollingIntervalRef.current) {
                         clearInterval(pollingIntervalRef.current);
                         pollingIntervalRef.current = null;
@@ -816,6 +821,14 @@ const GlobalSearch: React.FC = () => {
                 const response = await fetch(`/api/search?${queryParams}`, { method: 'GET', signal: abortController.signal });
                 const data = await response.json();
                 if (data.cancelled) return; // Search was superseded, ignore results
+                if (data.error) {
+                    setError(data.error);
+                    setSearchDone(true);
+                    return;
+                }
+                if (data.warning) {
+                    setError(data.warning);
+                }
                 setSearchResults(data.results || []);
                 setMarksPerTopic(data.marksPerTopic || {});
                 setSearchDone(true);
@@ -824,7 +837,7 @@ const GlobalSearch: React.FC = () => {
             } catch (error) {
                 if (error instanceof DOMException && error.name === 'AbortError') return; // Cancelled, not an error
                 console.error('Search failed', error);
-                // Leave UI empty on failure since we cleared before starting
+                setError('Search failed. Please check the backend logs.');
                 setSearchDone(true);
             }
         }
@@ -928,12 +941,21 @@ const GlobalSearch: React.FC = () => {
             const response = await fetch(`/api/search-by-image?${queryParams}`, { method: 'GET', signal: abortController.signal });
             const data = await response.json();
             if (data.cancelled) return;
+            if (data.error) {
+                setError(data.error);
+                setSearchDone(true);
+                return;
+            }
+            if (data.warning) {
+                setError(data.warning);
+            }
             setSearchResults(data.results || []);
             setMarksPerTopic(data.marksPerTopic || {});
             setSearchDone(true);
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') return;
             console.error('Search by image failed', error);
+            setError('Search by image failed. Please check the backend logs.');
             setSearchDone(true);
         }
     };

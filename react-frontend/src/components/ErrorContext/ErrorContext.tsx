@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, ReactNode } from 'react';
+import React, { createContext, useState, useContext, useCallback, ReactNode } from 'react';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -36,19 +36,19 @@ export const ErrorProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [notification, setNotification] = useState<Notification | null>(null);
 
   // Handler to clear the notification
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setNotification(null);
-  };
+  }, []);
 
   // Set an error message
-  const setError = (message: string) => {
+  const setError = useCallback((message: string) => {
     setNotification({ message, severity: 'error' });
-  };
+  }, []);
 
   // Set an info message (optionally with loading indicator)
-  const setInfo = (message: string, loading?: boolean) => {
+  const setInfo = useCallback((message: string, loading?: boolean) => {
     setNotification({ message, severity: 'info', loading });
-  };
+  }, []);
 
   return (
     // Provide the notification functions to children components

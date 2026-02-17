@@ -12,7 +12,7 @@ export type SearchResultRow = {
   model: string;
 };
 
-interface MarksItem { value: number }
+interface MarksItem { value: number; rank?: number }
 type MarksStructure = Record<string, Record<string, Record<string, { marks: MarksItem[] }>>>;
 
 /** Context only for results + marks (expensive data). Filters use module-level cache. */
