@@ -36,6 +36,7 @@ class PositionalLookupProcessor(HybridProcessor):
         self.positional_grid_resolution = positional_grid_resolution  # 0.0001 degrees (~11 meters)
         self.logger: PipelineLogger = get_logger()
         self.completion_tracker = CompletionTracker(self.output_dir.parent, processor_name="positional_lookup_processor")
+        self.boundaries_tracker = CompletionTracker(self.output_dir.parent, processor_name="positional_boundaries_processor")
         self.positions: List[Dict[str, Any]] = []  # Store collected position data (accumulated across MCAPs)
         self.current_mcap_id: Optional[str] = None  # Track which MCAP we're currently collecting from
         self.combined_data: Dict[str, Dict] = {}  # Accumulate all rosbag data in memory for single file output
@@ -317,9 +318,12 @@ class PositionalLookupProcessor(HybridProcessor):
         # Also keep in memory for tracking (optional, for finalize summary)
         self.combined_data[rosbag_name] = final_location_data
         self.processed_rosbags.add(rosbag_name)
-        
+
         self.logger.success(f"Built aggregated lookup with {len(location_counts)} grid cells from {len(self.positions)} positions")
         self.logger.info(f"  Incrementally written to {self.output_dir}")
+
+        # Compute convex hull boundary for fast spatial pre-filtering
+        self._compute_and_write_boundaries(rosbag_name, final_location_data)
         
         # Mark rosbag as completed (output file is at rosbag level)
         self.completion_tracker.mark_completed(
@@ -361,6 +365,281 @@ class PositionalLookupProcessor(HybridProcessor):
         except (json.JSONDecodeError, IOError) as e:
             self.logger.error(f"Error reading combined file for finalization summary: {e}")
 
+
+    def _compute_concave_hull(self, points: List[Tuple[float, float]]) -> List[List[List[float]]]:
+        """
+        Compute concave hull (alpha shape) using Delaunay triangulation.
+
+        Filters out triangles whose longest edge exceeds an alpha threshold
+        based on grid resolution, then extracts all boundary loops.
+        Returns a multi-polygon (list of polygons) to handle disconnected
+        coverage areas (e.g. separate field paths).
+
+        Args:
+            points: List of (lat, lon) tuples
+
+        Returns:
+            List of polygon components, each as [[lat, lon], ...]
+        """
+        import numpy as np
+        from collections import defaultdict
+
+        pts = sorted(set(points))
+        if len(pts) <= 2:
+            return [[[p[0], p[1]] for p in pts]]
+
+        if len(pts) < 4:
+            return [[[p[0], p[1]] for p in pts]]
+
+        try:
+            from scipy.spatial import Delaunay
+        except ImportError:
+            self.logger.warning("scipy not available, falling back to convex hull")
+            return [self._compute_convex_hull_simple(pts)]
+
+        coords = np.array(pts)
+        tri = Delaunay(coords)
+
+        # Alpha = 2.5x grid resolution.
+        # Grid diagonal is ~1.41x grid_res, so this keeps direct neighbors
+        # and skip-one horizontal/vertical (2x grid_res) but cuts skip-one
+        # diagonal (2.83x grid_res), producing tight concave shapes.
+        alpha = self.positional_grid_resolution * 2.5
+
+        # Filter triangles: keep those where all edges are shorter than alpha
+        boundary_edges = defaultdict(int)
+        for simplex in tri.simplices:
+            verts = coords[simplex]
+            edges = [
+                np.linalg.norm(verts[0] - verts[1]),
+                np.linalg.norm(verts[1] - verts[2]),
+                np.linalg.norm(verts[2] - verts[0]),
+            ]
+            if max(edges) > alpha:
+                continue
+
+            for i in range(3):
+                edge = tuple(sorted((simplex[i], simplex[(i + 1) % 3])))
+                boundary_edges[edge] += 1
+
+        # Extract boundary: edges that appear exactly once
+        boundary = [e for e, count in boundary_edges.items() if count == 1]
+
+        if not boundary:
+            return [self._compute_convex_hull_simple(pts)]
+
+        # Build adjacency graph from boundary edges
+        adj = defaultdict(set)
+        for a, b in boundary:
+            adj[a].add(b)
+            adj[b].add(a)
+
+        # Extract ALL connected boundary components (not just one walk)
+        visited_nodes = set()
+        components = []
+
+        for start_node in adj:
+            if start_node in visited_nodes:
+                continue
+
+            ordered = [start_node]
+            visited_nodes.add(start_node)
+            current = start_node
+
+            while True:
+                next_node = None
+                for n in adj[current]:
+                    if n not in visited_nodes:
+                        next_node = n
+                        break
+                if next_node is None:
+                    break
+                ordered.append(next_node)
+                visited_nodes.add(next_node)
+                current = next_node
+
+            if len(ordered) >= 3:
+                hull = [[float(coords[i][0]), float(coords[i][1])] for i in ordered]
+
+                # Simplify with Douglas-Peucker if too many vertices
+                if len(hull) > 80:
+                    lats = [p[0] for p in hull]
+                    lons = [p[1] for p in hull]
+                    diag = ((max(lats) - min(lats)) ** 2 + (max(lons) - min(lons)) ** 2) ** 0.5
+                    hull = self._simplify_polygon(hull, epsilon=diag * 0.01)
+
+                components.append(hull)
+
+        if not components:
+            return [self._compute_convex_hull_simple(pts)]
+
+        # Sort by vertex count (largest first)
+        components.sort(key=lambda c: len(c), reverse=True)
+
+        return components
+
+    @staticmethod
+    def _simplify_polygon(points: List[List[float]], epsilon: float) -> List[List[float]]:
+        """Ramer-Douglas-Peucker polygon simplification."""
+        if len(points) < 3:
+            return points
+
+        def _perp_dist(pt, line_start, line_end):
+            dx = line_end[0] - line_start[0]
+            dy = line_end[1] - line_start[1]
+            if dx == 0 and dy == 0:
+                return ((pt[0] - line_start[0]) ** 2 + (pt[1] - line_start[1]) ** 2) ** 0.5
+            t = ((pt[0] - line_start[0]) * dx + (pt[1] - line_start[1]) * dy) / (dx * dx + dy * dy)
+            t = max(0, min(1, t))
+            proj_x = line_start[0] + t * dx
+            proj_y = line_start[1] + t * dy
+            return ((pt[0] - proj_x) ** 2 + (pt[1] - proj_y) ** 2) ** 0.5
+
+        def _rdp(pts, eps):
+            if len(pts) <= 2:
+                return pts
+            d_max = 0
+            idx = 0
+            for i in range(1, len(pts) - 1):
+                d = _perp_dist(pts[i], pts[0], pts[-1])
+                if d > d_max:
+                    d_max = d
+                    idx = i
+            if d_max > eps:
+                left = _rdp(pts[:idx + 1], eps)
+                right = _rdp(pts[idx:], eps)
+                return left[:-1] + right
+            return [pts[0], pts[-1]]
+
+        # Close the ring for simplification, then remove duplicate end
+        closed = points + [points[0]]
+        simplified = _rdp(closed, epsilon)
+        if len(simplified) > 1 and simplified[0] == simplified[-1]:
+            simplified = simplified[:-1]
+        return simplified
+
+    @staticmethod
+    def _compute_convex_hull_simple(pts: List[Tuple[float, float]]) -> List[List[float]]:
+        """Convex hull fallback using Andrew's monotone chain."""
+        if len(pts) <= 2:
+            return [[p[0], p[1]] for p in pts]
+
+        def cross(o, a, b):
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+        lower = []
+        for p in pts:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+                lower.pop()
+            lower.append(p)
+
+        upper = []
+        for p in reversed(pts):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+                upper.pop()
+            upper.append(p)
+
+        hull = lower[:-1] + upper[:-1]
+        return [[p[0], p[1]] for p in hull]
+
+    def _compute_and_write_boundaries(self, rosbag_name: str, location_data: Dict) -> None:
+        """
+        Compute concave hull + bbox from grid cell coordinates and write to boundaries file.
+
+        The boundaries file sits next to the positional lookup table and stores
+        a tight polygon per rosbag for fast spatial pre-filtering.
+
+        Args:
+            rosbag_name: Rosbag identifier (relative path)
+            location_data: Grid cell data {\"lat,lon\": {...}, ...}
+        """
+        boundaries_path = self.output_dir.parent / "positional_boundaries.json"
+
+        # Extract all grid cell coordinates
+        coords: List[Tuple[float, float]] = []
+        for lat_lon_key in location_data.keys():
+            try:
+                lat_str, lon_str = lat_lon_key.split(',')
+                coords.append((float(lat_str), float(lon_str)))
+            except (ValueError, TypeError):
+                continue
+
+        if not coords:
+            return
+
+        # Compute bounding box
+        lats = [c[0] for c in coords]
+        lons = [c[1] for c in coords]
+        bbox = [min(lats), min(lons), max(lats), max(lons)]
+
+        # Compute concave hull (alpha shape)
+        hull = self._compute_concave_hull(coords)
+
+        # Read existing boundaries file
+        existing = {}
+        if boundaries_path.exists():
+            try:
+                with open(boundaries_path, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing = {}
+
+        existing[rosbag_name] = {
+            "concave_hull": hull,
+            "bbox": bbox,
+        }
+
+        boundaries_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(boundaries_path, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+
+        # Track in completion.json (output_files stored once at processor level)
+        if not getattr(self, '_boundaries_status_set', False):
+            self.boundaries_tracker.mark_processor_status("in_progress")
+            self._boundaries_status_set = True
+        self.boundaries_tracker.mark_completed(
+            rosbag_name=rosbag_name,
+            status="completed",
+            output_files=[boundaries_path],
+        )
+
+        total_verts = sum(len(c) for c in hull)
+        self.logger.info(f"  Written boundary ({len(hull)} component(s), {total_verts} vertices) to {boundaries_path}")
+
+    def ensure_boundaries(self, rosbag_name: str) -> bool:
+        """
+        Ensure boundaries exist for a rosbag, regenerating from grid data if needed.
+
+        Called by main.py for already-completed rosbags that may lack boundaries
+        (e.g., preprocessed before the boundaries feature existed).
+
+        Args:
+            rosbag_name: Rosbag identifier (relative path)
+
+        Returns:
+            True if boundaries were generated, False if already complete or no data
+        """
+        # Check completion.json — single source of truth
+        if self.boundaries_tracker.is_rosbag_completed(rosbag_name):
+            return False
+
+        # Read grid data from the positional lookup table
+        if not self.output_dir.exists():
+            return False
+
+        try:
+            with open(self.output_dir, 'r', encoding='utf-8') as f:
+                lookup_data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return False
+
+        location_data = lookup_data.get(rosbag_name)
+        if not location_data:
+            return False
+
+        # _compute_and_write_boundaries writes the file AND marks completion.json
+        self._compute_and_write_boundaries(rosbag_name, location_data)
+        return True
 
     def _round_to_grid(self, lat: float, lon: float) -> Tuple[float, float]:
         """
