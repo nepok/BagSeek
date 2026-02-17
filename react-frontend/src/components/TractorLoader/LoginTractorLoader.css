@@ -1,0 +1,69 @@
+/* Import Bebas Neue font for the login page logo */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+
+/* ============ CONTAINER ============ */
+
+.login-tractor-loader {
+  position: relative;
+  width: 100%;
+  height: 160px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0a0a1a 0%, #151528 50%, #1a1a2e 100%);
+  border-radius: 8px;
+  margin-top: 16px;
+}
+
+/* ============ VIGNETTE (blend to Paper bg #1e1e1e) ============ */
+
+.login-tractor-loader .vignette {
+  background:
+    linear-gradient(90deg, #1e1e1e 0%, transparent 12%, transparent 88%, #1e1e1e 100%),
+    linear-gradient(180deg, transparent 0%, transparent 70%, rgba(30, 30, 30, 0.6) 100%);
+}
+
+/* ============ SCROLLING GROUND ============ */
+
+.login-tractor-loader .world::before {
+  animation: lt-scrollGround 4s linear infinite;
+}
+
+.login-tractor-loader .world::after {
+  animation: lt-scrollHills 14s linear infinite;
+}
+
+@keyframes lt-scrollGround {
+  from { background-position: 0 0; }
+  to { background-position: -140px 0; }
+}
+
+@keyframes lt-scrollHills {
+  from { background-position: 0 0; }
+  to { background-position: -420px 0; }
+}
+
+/* ============ TRACTOR (stationary, centered) ============ */
+
+.login-tractor-loader .tractor {
+  left: calc(50% - 35px);
+  animation: lt-bounce 0.35s ease-in-out infinite alternate;
+}
+
+@keyframes lt-bounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(-1px); }
+}
+
+/* ============ WHEELS (CSS rotation) ============ */
+
+.login-tractor-loader .wheel-back {
+  animation: lt-spinWheel 3.2s linear infinite;
+}
+
+.login-tractor-loader .wheel-front {
+  animation: lt-spinWheel 1.8s linear infinite;
+}
+
+@keyframes lt-spinWheel {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
