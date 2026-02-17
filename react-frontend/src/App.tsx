@@ -15,6 +15,9 @@ import PositionalOverview from './components/PositionalOverview/PositionalOvervi
 import TractorLoader from './components/TractorLoader/TractorLoader';
 import { sortTopicsObject } from './utils/topics';
 import { extractRosbagName } from './utils/rosbag';
+import Login from './components/Login/Login';
+import PrivateRoute from './components/AuthContext/PrivateRoute';
+import { useAuth } from './components/AuthContext/AuthContext';
 
 function TractorDebugPage() {
   const [progress, setProgress] = useState(0);
@@ -54,6 +57,7 @@ interface NodeMetadata {
 function App() {
 
   const { setError } = useError(); // Hook to set global error messages for user feedback
+  const { isAuthenticated, authDisabled } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -75,7 +79,7 @@ function App() {
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
-  const [searchMarks, setSearchMarks] = useState<{ value: number; label: string }[]>([]);  // Marks used for search heatmap in timestamp player (from search -> explore navigation)
+  const [searchMarks, setSearchMarks] = useState<{ value: number; rank?: number }[]>([]);  // Marks used for search heatmap in timestamp player (from search -> explore navigation)
 
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
@@ -229,10 +233,12 @@ function App() {
     }
   }, [setError]);
 
-  // Effect to load all saved canvases once on component mount
+  // Effect to load all saved canvases once authenticated
   useEffect(() => {
-    refreshCanvasList();
-  }, [refreshCanvasList]);
+    if (isAuthenticated || authDisabled) {
+      refreshCanvasList();
+    }
+  }, [refreshCanvasList, isAuthenticated, authDisabled]);
 
   // Handler for when user changes the timestamp slider (receives index)
   const handleSliderChange = async (index: number) => {
@@ -387,10 +393,10 @@ function App() {
               const decoded = JSON.parse(stored);
               if (Array.isArray(decoded)) {
                 const normalized = decoded.map((m: any) => {
-                  if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, label: '' };
-                  if (typeof m === 'number') return { value: m, label: '' };
+                  if (m && typeof m === 'object' && typeof m.value === 'number') return { value: m.value, ...(m.rank != null ? { rank: m.rank } : {}) };
+                  if (typeof m === 'number') return { value: m };
                   return null;
-                }).filter(Boolean) as { value: number; label: string }[];
+                }).filter(Boolean) as { value: number; rank?: number }[];
                 setSearchMarks(normalized);
               } else {
                 setSearchMarks([]);
@@ -482,6 +488,10 @@ function App() {
 
 
   return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/*" element={
+        <PrivateRoute>
     <ExportPreselectionProvider onOpenExport={() => setIsExportDialogVisible(true)}>
     <>
       {/* File input dialog for uploading rosbag files and fetching initial data */}
@@ -506,14 +516,17 @@ function App() {
         {/* Header bar with controls to open dialogs and load/save canvases */}
         <Header 
           setIsFileInputVisible={setIsFileInputVisible} 
-          setIsExportDialogVisible={setIsExportDialogVisible} 
+          setIsExportDialogVisible={setIsExportDialogVisible}
           selectedRosbag={selectedRosbag}
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}
           handleResetCanvas={handleResetCanvas}
           availableTopics={availableTopics}
-          canvasList={canvasList}    
+          canvasList={canvasList}
           refreshCanvasList={refreshCanvasList}
+          currentMetadata={currentMetadata}
+          selectedTimestampIndex={selectedTimestampIndex}
+          searchMarks={searchMarks}
         />
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <SearchResultsCacheProvider>
@@ -561,6 +574,9 @@ function App() {
       </div>
     </>
     </ExportPreselectionProvider>
+        </PrivateRoute>
+      } />
+    </Routes>
   );
 }
 
