@@ -1,4 +1,5 @@
 import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import StorageIcon from '@mui/icons-material/Storage';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import TopicIcon from '@mui/icons-material/Topic';
@@ -94,13 +95,13 @@ function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true
   const isActive = count > 0;
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <Box sx={{
+      <Box sx={(theme) => ({
         display: 'flex', alignItems: 'center', gap: 0.75,
         px: 1.25, py: 0.6, borderRadius: 1.5,
-        bgcolor: isActive ? 'rgba(144,202,249,0.08)' : 'rgba(255,255,255,0.04)',
-        border: '1px solid', borderColor: isActive ? 'rgba(144,202,249,0.3)' : 'rgba(255,255,255,0.1)',
+        bgcolor: isActive ? alpha(theme.palette.primary.main, 0.08) : 'rgba(255,255,255,0.04)',
+        border: '1px solid', borderColor: isActive ? alpha(theme.palette.primary.main, 0.3) : 'rgba(255,255,255,0.1)',
         transition: 'all 0.2s',
-      }}>
+      })}>
         <Box sx={{ color: isActive ? 'primary.main' : 'rgba(255,255,255,0.3)', display: 'flex', fontSize: 14 }}>
           {icon}
         </Box>
