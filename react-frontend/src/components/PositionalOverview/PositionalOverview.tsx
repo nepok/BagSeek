@@ -697,6 +697,8 @@ const PositionalOverview: React.FC = () => {
   const [deletingPolygon, setDeletingPolygon] = useState<string | null>(null);
   const polygonButtonRef = useRef<HTMLButtonElement | null>(null);
   const prevPolygonCountRef = useRef<number>(0);
+  const polygonItemRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [overflowingPolygonItems, setOverflowingPolygonItems] = useState<Record<string, boolean>>({});
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -870,6 +872,19 @@ const PositionalOverview: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  // Check which polygon filenames overflow their container when the Popper opens
+  useEffect(() => {
+    if (!showPolygonPopper) return;
+    const timer = setTimeout(() => {
+      const overflows: Record<string, boolean> = {};
+      for (const [key, el] of Object.entries(polygonItemRefs.current)) {
+        if (el) overflows[key] = el.scrollWidth > el.clientWidth;
+      }
+      setOverflowingPolygonItems(overflows);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [showPolygonPopper, polygonFiles]);
 
   // Handle polygon import
   const handleImportPolygon = useCallback(async (filename: string) => {
@@ -2848,7 +2863,8 @@ const PositionalOverview: React.FC = () => {
                 >
                   {availableMcaps.map((mcap, index) => {
                     const overlaps = mcapOverlapIds === null || mcapOverlapIds.has(mcap.id);
-                    const segmentWidth = 100 / availableMcaps.length;
+                    const N = availableMcaps.length;
+                    const segmentWidth = N <= 1 ? 100 : index === 0 || index === N - 1 ? (0.5 / (N - 1)) * 100 : (1 / (N - 1)) * 100;
                     return (
                       <Box
                         key={mcap.id}
@@ -2859,7 +2875,7 @@ const PositionalOverview: React.FC = () => {
                             overlaps
                               ? `${theme.palette.primary.main}40`
                               : 'rgba(30, 30, 30, 0.4)',
-                          borderRadius: index === 0 ? '2px 0 0 2px' : index === availableMcaps.length - 1 ? '0 2px 2px 0' : '0',
+                          borderRadius: index === 0 ? '2px 0 0 2px' : index === N - 1 ? '0 2px 2px 0' : '0',
                         }}
                       />
                     );
@@ -3087,7 +3103,8 @@ const PositionalOverview: React.FC = () => {
                 >
                   {rosbags.map((rosbag, index) => {
                     const overlaps = rosbagOverlapStatus.get(rosbag.name) ?? true;
-                    const segmentWidth = 100 / rosbags.length;
+                    const N = rosbags.length;
+                    const segmentWidth = N <= 1 ? 100 : index === 0 || index === N - 1 ? (0.5 / (N - 1)) * 100 : (1 / (N - 1)) * 100;
                     return (
                       <Box
                         key={rosbag.name}
@@ -3098,7 +3115,7 @@ const PositionalOverview: React.FC = () => {
                             overlaps
                               ? `${theme.palette.primary.main}40`
                               : 'rgba(30, 30, 30, 0.4)',
-                          borderRadius: index === 0 ? '2px 0 0 2px' : index === rosbags.length - 1 ? '0 2px 2px 0' : '0',
+                          borderRadius: index === 0 ? '2px 0 0 2px' : index === N - 1 ? '0 2px 2px 0' : '0',
                         }}
                       />
                     );
@@ -3395,8 +3412,8 @@ const PositionalOverview: React.FC = () => {
                     polygonFiles.map((filename) => {
                       const isProtected = filename.startsWith('Lehr- und Forsch');
                       return (
+                        <Tooltip key={filename} title={filename.replace('.json', '')} placement="left" arrow disableHoverListener={!overflowingPolygonItems[filename]} componentsProps={{ popper: { sx: { zIndex: 10001 } } }}>
                         <MenuItem
-                          key={filename}
                           sx={{
                             fontSize: '0.8rem',
                             padding: '4px 8px',
@@ -3413,7 +3430,7 @@ const PositionalOverview: React.FC = () => {
                           }}
                           disabled={importingPolygon || deletingPolygon === filename}
                         >
-                          <Box sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <Box ref={(el) => { polygonItemRefs.current[filename] = el as HTMLElement; }} sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {filename.replace('.json', '')}
                           </Box>
                           <IconButton
@@ -3432,6 +3449,7 @@ const PositionalOverview: React.FC = () => {
                             )}
                           </IconButton>
                         </MenuItem>
+                        </Tooltip>
                       );
                     })
                   )}
@@ -3493,30 +3511,32 @@ const PositionalOverview: React.FC = () => {
               {/* First row: Button and TextField */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <Button
-                  ref={polygonButtonRef}
-                  onClick={() => setShowPolygonPopper(!showPolygonPopper)}
-                  variant="outlined"
-                  size="small"
-                  disabled={loadingPolygonFiles}
-                  sx={{
-                    fontSize: '8pt',
-                    flex: 1,
-                    backgroundColor: 'rgba(30, 30, 30, 0.8)',
-                    color: '#ffffff',
-                    borderColor: 'rgba(255, 255, 255, 0.23)',
-                    textTransform: 'none',
-                    justifyContent: 'flex-start',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    '&:hover': {
-                      borderColor: 'rgba(255, 255, 255, 0.4)',
-                      backgroundColor: 'rgba(40, 40, 40, 0.8)',
-                    },
-                  }}
-                >
-                  {selectedPolygonFile ? selectedPolygonFile.replace('.json', '') : 'Load/Save Polygons'}
-                </Button>
+                    ref={polygonButtonRef}
+                    onClick={() => setShowPolygonPopper(!showPolygonPopper)}
+                    variant="outlined"
+                    size="small"
+                    disabled={loadingPolygonFiles}
+                    sx={{
+                      fontSize: '8pt',
+                      flex: 1.8,
+                      minWidth: 0,
+                      height: '33px',
+                      backgroundColor: 'rgba(30, 30, 30, 0.8)',
+                      color: '#ffffff',
+                      borderColor: 'rgba(255, 255, 255, 0.23)',
+                      textTransform: 'none',
+                      justifyContent: 'flex-start',
+                      overflow: 'hidden',
+                      '&:hover': {
+                        borderColor: 'rgba(255, 255, 255, 0.4)',
+                        backgroundColor: 'rgba(40, 40, 40, 0.8)',
+                      },
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', width: '100%' }}>
+                      {selectedPolygonFile ? selectedPolygonFile.replace('.json', '') : 'Load/Save Polygons'}
+                    </span>
+                  </Button>
                 <TextField
                   type="number"
                   value={offsetDistance}
@@ -3670,7 +3690,7 @@ const PositionalOverview: React.FC = () => {
                 >
                   Clear All
                 </Button>
-                <Button
+                {/*<Button
                   size="small"
                   variant="outlined"
                   onClick={() => {
@@ -3679,8 +3699,7 @@ const PositionalOverview: React.FC = () => {
                   sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
                 >
                   Export List
-                </Button>
-
+                </Button>*/}
               </Box>
             </Box>
           </Box>
