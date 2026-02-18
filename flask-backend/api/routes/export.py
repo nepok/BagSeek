@@ -239,9 +239,12 @@ def _run_single_export(data: dict):
 
         output_mcap_path = output_rosbag_dir / f"{new_rosbag_name}_{out_id}.mcap"
 
+        topics_str = f"{len(topics)}" if topics else "all topics"
         EXPORT_PROGRESS["progress"] = min(out_id / max(total_source, 1), 0.95)
         EXPORT_PROGRESS["message"] = (
-            f"Exporting MCAP {out_id + 1}/{total_source} (source id {mcap_id})..."
+            f"Exporting MCAP: {out_id + 1} / {total_source}\n"
+            f"Output: {new_rosbag_name}_{out_id}.mcap\n"
+            f"Topics: {topics_str}"
         )
 
         try:
@@ -912,13 +915,14 @@ def _run_single_raw_export(data: dict):
                                 EXPORT_PROGRESS["message"] = (
                                     f"MCAP {mcap_index + 1}/{total_mcaps}\n"
                                     f"Topic {topic_idx + 1}/{len(topics_in_mcap)}: {current_topic}\n"
-                                    f"({topic_processed}/{topic_expected}) | {exported_files} files written"
+                                    f"{topic_processed}/{topic_expected} messages written\n"
+                                    f"{exported_files} files written in total"
                                 )
                 else:
                     # Fallback: no per-topic info available, iterate all messages
                     EXPORT_PROGRESS["message"] = (
-                        f"MCAP {mcap_index + 1}/{total_mcaps} (id {mcap_id_str}) | "
-                        f"{exported_files} files written"
+                        f"MCAP {mcap_index + 1}/{total_mcaps}\n"
+                        f"{exported_files} files written in total"
                     )
                     for schema, channel, message, ros2_msg in reader.iter_decoded_messages(
                         topics=topics if topics else None,
@@ -936,8 +940,9 @@ def _run_single_raw_export(data: dict):
                             if total_messages_estimate > 0:
                                 EXPORT_PROGRESS["progress"] = min(messages_processed / total_messages_estimate, 0.99)
                             EXPORT_PROGRESS["message"] = (
-                                f"MCAP {mcap_index + 1}/{total_mcaps} | "
-                                f"{channel.topic} | {exported_files} files written"
+                                f"MCAP {mcap_index + 1}/{total_mcaps}\n"
+                                f"Topic: {channel.topic}\n"
+                                f"{exported_files} files written in total"
                             )
         except Exception as e:
             current_app.logger.error(f"Failed to raw-export MCAP {mcap_id_str}: {e}", exc_info=True)

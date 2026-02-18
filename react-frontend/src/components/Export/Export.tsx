@@ -1008,16 +1008,19 @@ const Export: React.FC<ExportProps> = ({
               position: 'fixed',
               bottom: 80,
               left: 20,
-              bgcolor: exportStatus.status === 'error' ? 'error.main' : '#202020',
+              bgcolor: exportStatus.status === 'error' ? '#3a1010' : '#0e1e35',
               color: 'white',
-              p: '8px 16px',
+              p: '16px 22px',
               borderRadius: 2,
               zIndex: 9999,
-              boxShadow: 3,
-              maxWidth: 500,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
+              border: '1px solid',
+              borderColor: exportStatus.status === 'error' ? 'rgba(255,80,80,0.4)' : 'rgba(80,140,255,0.35)',
+              width: 500,
+              maxWidth: 'calc(100vw - 40px)',
             }}
           >
-            <Typography variant="body2" fontWeight={exportStatus.status === 'error' ? 'bold' : 'normal'}>
+            <Typography variant="body2" fontWeight={exportStatus.status === 'error' ? 'bold' : 'normal'} sx={{ mb: 1.5, lineHeight: 1.6, whiteSpace: 'pre-line', fontSize: '0.8rem' }}>
               {exportStatus.status === 'error'
                 ? exportStatus.message || 'Export failed!'
                 : exportStatus.progress === -1
@@ -1026,13 +1029,13 @@ const Export: React.FC<ExportProps> = ({
                     ? exportStatus.message || 'Finished!'
                     : exportStatus.message || `${(exportStatus.progress * 100).toFixed(0)}%`}
             </Typography>
-            <Box sx={{ width: 200, mt: 1 }}>
+            <Box sx={{ width: '100%' }}>
               {exportStatus.status === 'error' ? (
-                <LinearProgress variant="determinate" value={100} color="error" />
+                <LinearProgress variant="determinate" value={100} color="error" sx={{ height: 7, borderRadius: 3 }} />
               ) : exportStatus.progress === -1 ? (
-                <LinearProgress />
+                <LinearProgress sx={{ height: 7, borderRadius: 3 }} />
               ) : (
-                <LinearProgress variant="determinate" value={exportStatus.progress * 100} />
+                <LinearProgress variant="determinate" value={exportStatus.progress * 100} sx={{ height: 7, borderRadius: 3 }} />
               )}
             </Box>
           </Box>

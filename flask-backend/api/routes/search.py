@@ -195,7 +195,7 @@ def cancel_search():
     cancel_current_search()
     SEARCH_PROGRESS["status"] = "idle"
     SEARCH_PROGRESS["progress"] = -1
-    SEARCH_PROGRESS["message"] = "Search cancelled."
+    #SEARCH_PROGRESS["message"] = "Search cancelled."
     logging.info("[SEARCH] Search cancelled by user")
     return jsonify({'cancelled': True})
 
@@ -328,9 +328,9 @@ def search():
                 phase_starts = {PHASE_CHUNKS: 0.0, PHASE_INDEX: 0.25, PHASE_SEARCH: 0.95}
 
                 def update_progress(
+                    current_phase: str,
                     embeddings_processed: int,
                     total_embeddings: int,
-                    message_suffix: str = "",
                     phase: str = PHASE_CHUNKS,
                 ):
                     """Update progress within the current rosbag's range. Phases: chunks (0-70%%), index (70-95%%), search (95-100%%)."""
@@ -343,12 +343,11 @@ def search():
                     SEARCH_PROGRESS["status"] = "running"
                     SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
                     SEARCH_PROGRESS["message"] = (
-                        f"Searching embeddings...\n\n"
+                        f"{current_phase}\n\n"
                         f"Model: {model_name}\n"
                         f"Rosbag: {rosbag_name}\n"
                         f"Progress: {embeddings_processed:,} / {total_embeddings:,} embeddings\n"
                         f"(Sampling every {k_subsample}th embedding)"
-                        + (f"\n{message_suffix}" if message_suffix else "")
                     )
 
                 # Initial progress update for this rosbag (before we know total)
@@ -498,7 +497,7 @@ def search():
                 logging.info("[SEARCH-DEBUG] Manifest rows after filter: %d, unique shards: %d",
                             total_embeddings, len(shard_ids))
 
-                update_progress(embeddings_processed, total_embeddings)
+                update_progress("Searching embeddings...", embeddings_processed, total_embeddings)
                 t_chunks_start = time.perf_counter()
 
                 for shard_id, df_s in mf_sel.groupby("shard_id", sort=False):
@@ -565,7 +564,7 @@ def search():
                         # Update progress tracking
                         embeddings_processed += (b - a + 1)
                         if embeddings_processed - last_progress_update >= progress_update_interval:
-                            update_progress(embeddings_processed, total_embeddings)
+                            update_progress("Searching embeddings...", embeddings_processed, total_embeddings)
                             last_progress_update = embeddings_processed
 
                 t_chunks_end = time.perf_counter()
@@ -615,9 +614,9 @@ def search():
                         t_add_total += time.perf_counter() - t_a
                         vectors_in_index += X_batch.shape[0]
                         update_progress(
+                            "Building search index...",
                             vectors_in_index,
                             total_vectors,
-                            f"Building search index: {vectors_in_index:,} / {total_vectors:,}",
                             phase=PHASE_INDEX,
                         )
                         accumulated = []
@@ -629,13 +628,13 @@ def search():
                             t_vstack, t_add, index.ntotal)
                 logging.info("[FAISS-DEBUG] X total: %.2f MB", total_vectors * dim * 4 / 1024 / 1024)
 
-                update_progress(total_vectors, total_vectors, "Running search...", phase=PHASE_SEARCH)
+                update_progress("Running search...", total_vectors, total_vectors, phase=PHASE_SEARCH)
                 t3 = time.perf_counter()
                 q = query_embedding.reshape(1, -1)
                 logging.info("[FAISS-DEBUG] Starting search for k=%d neighbors", MAX_K)
                 D, I = index.search(q, MAX_K)
                 t_search = time.perf_counter()
-                update_progress(total_vectors, total_vectors, phase=PHASE_SEARCH)
+                update_progress("Running search...", total_vectors, total_vectors, phase=PHASE_SEARCH)
                 logging.info("[FAISS-DEBUG] index.search() took %.3fs", t_search - t3)
                 logging.info("[FAISS-DEBUG] Results: D.shape=%s, I.shape=%s", D.shape, I.shape)
                 logging.info("[FAISS-DEBUG] Distance range: min=%.4f, max=%.4f", D.min(), D.max())
@@ -757,7 +756,7 @@ def search():
                 gc.collect()
             SEARCH_PROGRESS["status"] = "cancelled"
             SEARCH_PROGRESS["progress"] = 0.0
-            SEARCH_PROGRESS["message"] = "Search cancelled."
+            #SEARCH_PROGRESS["message"] = "Search cancelled."
             return jsonify({'cancelled': True, 'results': [], 'marksPerTopic': {}})
 
         # ---- Post processing
@@ -968,9 +967,9 @@ def search_by_image():
                 phase_starts_i = {PHASE_CHUNKS_I: 0.0, PHASE_INDEX_I: 0.25, PHASE_SEARCH_I: 0.95}
 
                 def update_progress(
+                    current_phase: str,
                     embeddings_processed: int,
                     total_embeddings: int,
-                    message_suffix: str = "",
                     phase: str = PHASE_CHUNKS_I,
                 ):
                     if total_embeddings > 0:
@@ -982,12 +981,11 @@ def search_by_image():
                     SEARCH_PROGRESS["status"] = "running"
                     SEARCH_PROGRESS["progress"] = round(base_progress + within_step, 3)
                     SEARCH_PROGRESS["message"] = (
-                        f"Searching by image...\n\n"
+                        f"{current_phase}\n\n"
                         f"Model: {model_name}\n"
                         f"Rosbag: {rosbag_name}\n"
                         f"Progress: {embeddings_processed:,} / {total_embeddings:,} embeddings\n"
                         f"(Sampling every {k_subsample}th embedding)"
-                        + (f"\n{message_suffix}" if message_suffix else "")
                     )
 
                 SEARCH_PROGRESS["status"] = "running"
@@ -1084,7 +1082,7 @@ def search_by_image():
                 last_progress_update = 0
                 progress_update_interval = 1000
 
-                update_progress(embeddings_processed, total_embeddings)
+                update_progress("Searching by image...", embeddings_processed, total_embeddings)
 
                 for shard_id, df_s in mf_sel.groupby("shard_id", sort=False):
                     if is_search_cancelled(search_id):
@@ -1142,7 +1140,7 @@ def search_by_image():
                             meta_for_row.append(meta_map[i])
                         embeddings_processed += (b - a + 1)
                         if embeddings_processed - last_progress_update >= progress_update_interval:
-                            update_progress(embeddings_processed, total_embeddings)
+                            update_progress("Searching by image...", embeddings_processed, total_embeddings)
                             last_progress_update = embeddings_processed
 
                 if not chunks:
@@ -1172,18 +1170,18 @@ def search_by_image():
                         index.add(X_batch)
                         vectors_in_index += X_batch.shape[0]
                         update_progress(
+                            "Building search index...",
                             vectors_in_index,
                             total_vectors,
-                            f"Building search index: {vectors_in_index:,} / {total_vectors:,}",
                             phase=PHASE_INDEX_I,
                         )
                         accumulated = []
                         vectors_added = 0
 
-                update_progress(total_vectors, total_vectors, "Running search...", phase=PHASE_SEARCH_I)
+                update_progress("Running search...", total_vectors, total_vectors, phase=PHASE_SEARCH_I)
                 q = query_embedding.reshape(1, -1)
                 D, I = index.search(q, MAX_K)
-                update_progress(total_vectors, total_vectors, phase=PHASE_SEARCH_I)
+                update_progress("Running search...", total_vectors, total_vectors, phase=PHASE_SEARCH_I)
 
                 if D.size == 0 or I.size == 0:
                     continue
@@ -1257,7 +1255,7 @@ def search_by_image():
                 gc.collect()
             SEARCH_PROGRESS["status"] = "cancelled"
             SEARCH_PROGRESS["progress"] = 0.0
-            SEARCH_PROGRESS["message"] = "Search cancelled."
+            #SEARCH_PROGRESS["message"] = "Search cancelled."
             return jsonify({'cancelled': True, 'results': [], 'marksPerTopic': {}})
 
         all_results = sorted([r for r in all_results if isinstance(r, dict)], key=lambda x: x['similarityScore'])
