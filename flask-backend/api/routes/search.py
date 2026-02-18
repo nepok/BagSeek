@@ -853,6 +853,79 @@ def search():
         }), 500
 
 
+@search_bp.route('/api/pipeline-counts', methods=['GET'])
+def pipeline_counts():
+    """
+    Lightweight endpoint that counts embeddings at each filter stage without loading any model.
+    Reads only 3 lightweight columns from each manifest parquet.
+    Params: models, rosbags, timeRange, accuracy, mcapFilter (optional), topics (optional)
+    """
+    models_raw = request.args.get('models', default='', type=str)
+    rosbags_raw = request.args.get('rosbags', default='', type=str)
+    time_range_raw = request.args.get('timeRange', default='0,1440', type=str)
+    accuracy_raw = request.args.get('accuracy', default=1, type=int)
+    mcap_filter_raw = request.args.get('mcapFilter', default=None, type=str)
+    topics_raw = request.args.get('topics', default=None, type=str)
+
+    try:
+        models_list = [m.strip() for m in models_raw.split(',') if m.strip()]
+        rosbags_list = [r.strip() for r in rosbags_raw.split(',') if r.strip()]
+        time_start, time_end = map(int, time_range_raw.split(','))
+        k_subsample = max(1, accuracy_raw)
+        mcap_filter = json.loads(mcap_filter_raw) if mcap_filter_raw else None
+        topics_list = [t.strip() for t in topics_raw.split(',') if t.strip()] if topics_raw else None
+    except Exception as e:
+        return jsonify({'error': f'Invalid params: {e}'}), 400
+
+    counts = {'total': 0, 'after_time': 0, 'after_mcap': 0, 'after_topic': 0, 'after_sample': 0}
+
+    for model_name in models_list:
+        for rosbag_name in rosbags_list:
+            manifest_path = EMBEDDINGS / model_name / rosbag_name / 'manifest.parquet'
+            if not manifest_path.is_file():
+                continue
+            try:
+                mf = pd.read_parquet(manifest_path, columns=['minute_of_day', 'mcap_identifier', 'topic'])
+            except Exception:
+                continue
+
+            counts['total'] += len(mf)
+
+            # Order: MCAPs → Topics → Time → Sample (matches display order)
+            # Each stage counts rows AFTER applying all filters up to and including that stage.
+            # Snapshot the full mf so we can compute MCAP and topic counts independently of time.
+            mf_full = mf
+
+            if mcap_filter and rosbag_name in mcap_filter:
+                allowed_ranges = mcap_filter[rosbag_name]
+                mcap_ids = mf_full['mcap_identifier'].astype(int)
+                mask = pd.Series(False, index=mf_full.index)
+                for range_start, range_end in allowed_ranges:
+                    mask |= (mcap_ids >= int(range_start)) & (mcap_ids <= int(range_end))
+                mf = mf_full.loc[mask]
+            counts['after_mcap'] += len(mf)
+
+            if topics_list:
+                mf = mf[mf['topic'].isin(topics_list)]
+            counts['after_topic'] += len(mf)
+
+            if not mf.empty:
+                mod = mf['minute_of_day'].astype(int)
+                mf = mf.loc[(mod >= time_start) & (mod <= time_end)]
+            counts['after_time'] += len(mf)
+
+            after_sample = sum(len(df_t.iloc[::k_subsample]) for _, df_t in mf.groupby('topic', sort=False)) if not mf.empty else 0
+            counts['after_sample'] += after_sample
+
+    return jsonify({
+        'total': counts['total'],
+        'afterMcap': counts['after_mcap'],
+        'afterTopic': counts['after_topic'],
+        'afterTime': counts['after_time'],
+        'afterSample': counts['after_sample'],
+    })
+
+
 @search_bp.route('/api/search-by-image', methods=['GET'])
 def search_by_image():
     """

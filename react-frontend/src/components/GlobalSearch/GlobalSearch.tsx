@@ -1,4 +1,10 @@
 import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider } from '@mui/material';
+import StorageIcon from '@mui/icons-material/Storage';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import TopicIcon from '@mui/icons-material/Topic';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import FilterAltIcon from '@mui/icons-material/FilterAlt';
+import SearchIcon from '@mui/icons-material/Search';
 import HelpPopover from '../HelpPopover/HelpPopover';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -69,6 +75,57 @@ function useHoverStill(delay: number = 500, tolerancePx: number = 3) {
   }, []);
 
   return { still, onPointerEnter, onPointerMove, onPointerLeave } as const;
+}
+
+interface PipelineCounts {
+  total: number;
+  afterMcap: number;
+  afterTopic: number;
+  afterTime: number;
+  afterSample: number;
+  afterSearch: number;
+
+}
+
+function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true }: {
+  icon: React.ReactNode; label: string; count: number; prevCount: number; isLast?: boolean; showBadge?: boolean;
+}) {
+  const reductionPct = prevCount > 0 ? Math.round((1 - count / prevCount) * 100) : 0;
+  const isActive = count > 0;
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 0.75,
+        px: 1.25, py: 0.6, borderRadius: 1.5,
+        bgcolor: isActive ? 'rgba(144,202,249,0.08)' : 'rgba(255,255,255,0.04)',
+        border: '1px solid', borderColor: isActive ? 'rgba(144,202,249,0.3)' : 'rgba(255,255,255,0.1)',
+        transition: 'all 0.2s',
+      }}>
+        <Box sx={{ color: isActive ? 'primary.main' : 'rgba(255,255,255,0.3)', display: 'flex', fontSize: 14 }}>
+          {icon}
+        </Box>
+        <Box>
+          <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1, display: 'block' }}>
+            {label}
+          </Typography>
+          <Typography sx={{ color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)', fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 600, lineHeight: 1.2 }}>
+            {count.toLocaleString()}
+          </Typography>
+        </Box>
+        {showBadge && (
+          <Typography sx={{
+            color: reductionPct > 0 ? 'rgba(255,100,100,0.85)' : 'rgba(255,255,255,0.25)',
+            fontSize: '0.58rem', fontWeight: 600,
+          }}>
+            -{reductionPct}%
+          </Typography>
+        )}
+      </Box>
+      {!isLast && (
+        <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.7rem', mx: 0.25 }}>→</Typography>
+      )}
+    </Box>
+  );
 }
 
 type SearchResultItem = {
@@ -297,6 +354,7 @@ const GlobalSearch: React.FC = () => {
 
     const [search, setSearch] = useState(() => getFilter('search', applyToSearch));
     const [searchDone, setSearchDone] = useState(() => resultsCache.searchDone);
+    const [pipelineCounts, setPipelineCounts] = useState<PipelineCounts | null>(null);
     const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => getFilter('viewMode', applyToSearch));
     const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>(() => resultsCache.searchResults);
     const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number; rank?: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
@@ -592,6 +650,46 @@ const GlobalSearch: React.FC = () => {
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Fetch pipeline counts whenever filters change (debounced 400ms)
+    useEffect(() => {
+        if (rosbags.length === 0) {
+            setPipelineCounts(null);
+            return;
+        }
+        const effectiveModels = models.length > 0 ? models : availableModels;
+        if (effectiveModels.length === 0) {
+            setPipelineCounts(null);
+            return;
+        }
+        const timer = setTimeout(async () => {
+            try {
+                const rosbagSet = new Set(rosbags);
+                const mcapFilterParam: Record<string, [number, number][]> = {};
+                for (const [rosbag, filter] of Object.entries(mcapFilters)) {
+                    if (rosbagSet.has(rosbag) && filter.windows.length > 0 && filter.ranges.length > 0) {
+                        mcapFilterParam[rosbag] = filter.windows.map(([startIdx, endIdx]) => [
+                            parseInt(filter.ranges[startIdx]?.mcapIdentifier ?? '0', 10),
+                            parseInt(filter.ranges[endIdx]?.mcapIdentifier ?? '0', 10),
+                        ]);
+                    }
+                }
+                const params = new URLSearchParams({
+                    models: effectiveModels.join(','),
+                    rosbags: rosbags.join(','),
+                    timeRange: timeRange.join(','),
+                    accuracy: sampling.toString(),
+                });
+                if (Object.keys(mcapFilterParam).length > 0) params.set('mcapFilter', JSON.stringify(mcapFilterParam));
+                if (selectedTopics.length > 0) params.set('topics', selectedTopics.join(','));
+                const res = await fetch(`/api/pipeline-counts?${params}`);
+                if (res.ok) setPipelineCounts(await res.json());
+            } catch {
+                // silently ignore — pipeline counts are non-critical
+            }
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [models, rosbags, availableModels, timeRange, mcapFilters, selectedTopics, sampling]);
 
     // Persist results to context, filters to module cache (survives tab switch)
     useEffect(() => {
@@ -999,7 +1097,7 @@ const GlobalSearch: React.FC = () => {
 
     return (
         <>
-        <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', width: '100%' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', width: '100%' }}>
             {/* MCAP range logic - always mounted so effects run (fetch metadata, apply pending from map) */}
             <McapRangeFilter
                 selectedRosbags={rosbags}
@@ -1015,6 +1113,34 @@ const GlobalSearch: React.FC = () => {
                 deferPendingUntilAfterRefresh={isRefreshingFilePaths}
                 onLoadingChange={setLoadingMcapRosbags}
             />
+
+            {/* Pipeline summary strip - full width, above filters + results */}
+            {pipelineCounts && (
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0,
+                px: 1.5, py: 0.75,
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                overflowX: 'auto',
+                '&::-webkit-scrollbar': { height: 3 },
+              }}>
+                <Typography sx={{ color: 'rgba(255,255,255,0.3)', mr: 1.25, fontWeight: 600, fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
+                  Pipeline
+                </Typography>
+                {[
+                  { icon: <StorageIcon sx={{ fontSize: 14 }} />, label: 'Rosbags', count: pipelineCounts.total, prev: pipelineCounts.total, showBadge: false },
+                  { icon: <InsertDriveFileIcon sx={{ fontSize: 14 }} />, label: 'MCAPs', count: pipelineCounts.afterMcap, prev: pipelineCounts.total, showBadge: true },
+                  { icon: <TopicIcon sx={{ fontSize: 14 }} />, label: 'Topics', count: pipelineCounts.afterTopic, prev: pipelineCounts.afterMcap, showBadge: true },
+                  { icon: <ScheduleIcon sx={{ fontSize: 14 }} />, label: 'Time', count: pipelineCounts.afterTime, prev: pipelineCounts.afterTopic, showBadge: true },
+                  { icon: <FilterAltIcon sx={{ fontSize: 14 }} />, label: 'Sample', count: pipelineCounts.afterSample, prev: pipelineCounts.afterTime, showBadge: true },
+                  ...(searchDone && searchResults.length > 0 ? [{ icon: <SearchIcon sx={{ fontSize: 14 }} />, label: 'Results', count: searchResults.length, prev: pipelineCounts.afterSample, showBadge: true }] : []),
+                ].map((s, i, arr) => (
+                  <PipelineStage key={s.label} icon={s.icon} label={s.label} count={s.count} prevCount={s.prev} isLast={i === arr.length - 1} showBadge={s.showBadge} />
+                ))}
+              </Box>
+            )}
+
+            {/* Inner row: sidebar + content */}
+            <Box sx={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
             {/* Collapsible filter sidebar - stays below header, part of content area */}
             <Box
                 sx={{
@@ -1297,10 +1423,10 @@ const GlobalSearch: React.FC = () => {
                                         max={1439}
                                         valueLabelFormat={valueLabelFormat}
                                         marks={[
-                                            { value: 0, label: '00:00' },
-                                            { value: 360, label: '06:00' },
-                                            { value: 720, label: '12:00' },
-                                            { value: 1080, label: '18:00' },
+                                            ...Array.from({ length: 24 }, (_, i) => ({
+                                                value: i * 60,
+                                                label: i % 3 === 0 ? valueLabelFormat(i * 60) : undefined,
+                                            })),
                                             { value: 1439, label: '23:59' },
                                         ]}
                                         sx={{ mt: 0.5, fontSize: '0.65rem', '& .MuiSlider-valueLabel': { fontSize: '0.65rem' }, '& .MuiSlider-markLabel': { fontSize: '0.65rem' } }}
@@ -1486,9 +1612,9 @@ const GlobalSearch: React.FC = () => {
             </Box>
 
             {/* Scrollable results section */}
-            <Box sx={{ 
-                flex: 1, 
-                overflowY: 'auto', 
+            <Box sx={{
+                flex: 1,
+                overflowY: 'auto',
                 overflowX: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
@@ -1618,6 +1744,7 @@ const GlobalSearch: React.FC = () => {
             )}
             </Box>
             </Box>
+            </Box> {/* closes inner row: sidebar + content */}
         </Box>
         </>
     );
