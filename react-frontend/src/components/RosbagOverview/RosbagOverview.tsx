@@ -8,7 +8,7 @@ import { useExportPreselection } from '../Export/ExportPreselectionContext';
 import IconButton from '@mui/material/IconButton/IconButton';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, Chip, Box, Divider, Collapse } from '@mui/material';
+import { Card, CardContent, CardHeader, Chip, Box, Divider, Collapse, Tooltip } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { sortTopics } from '../../utils/topics';
 import { extractRosbagName } from '../../utils/rosbag';
@@ -242,14 +242,15 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                 });
                 
                 return (
-                    <Card 
+                    <Card
                         key={model}
-                        sx={{ 
-                            backgroundColor: '#252525',
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
+                        sx={{
+                            backgroundColor: 'transparent',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
                             borderRadius: 2,
+                            boxShadow: 'none',
                             '&:hover': {
-                                borderColor: 'rgba(255, 255, 255, 0.25)',
+                                borderColor: 'rgba(255, 255, 255, 0.18)',
                             }
                         }}
                     >
@@ -281,21 +282,23 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                             }
                             action={
                                 modelRosbags.length > 0 ? (
-                                    <IconButton
-                                        onClick={(e) => {
-                                            e.stopPropagation(); // Prevent triggering the CardHeader onClick
-                                            // Only toggle model visibility, preserve rosbag states
-                                            setExpandedModels(prev => ({ ...prev, [model]: !isModelExpanded }));
-                                        }}
-                                        sx={{
-                                            color: 'rgba(255, 255, 255, 0.7)',
-                                            transform: isModelExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                                            transition: 'transform 0.2s',
-                                        }}
-                                        aria-label={isModelExpanded ? 'collapse model' : 'expand model'}
-                                    >
-                                        <ExpandMoreIcon />
-                                    </IconButton>
+                                    <Tooltip title={isModelExpanded ? 'Collapse model' : 'Expand model'} arrow>
+                                      <IconButton
+                                          onClick={(e) => {
+                                              e.stopPropagation(); // Prevent triggering the CardHeader onClick
+                                              // Only toggle model visibility, preserve rosbag states
+                                              setExpandedModels(prev => ({ ...prev, [model]: !isModelExpanded }));
+                                          }}
+                                          sx={{
+                                              color: 'rgba(255, 255, 255, 0.7)',
+                                              transform: isModelExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                              transition: 'transform 0.2s',
+                                          }}
+                                          aria-label={isModelExpanded ? 'collapse model' : 'expand model'}
+                                      >
+                                          <ExpandMoreIcon />
+                                      </IconButton>
+                                    </Tooltip>
                                 ) : null
                             }
                             sx={{ 
@@ -310,7 +313,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                 }
                             }}
                         />
-                        <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.12)' }} />
+                        <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.07)' }} />
                         <CardContent sx={{ pt: 2 }}>
                             <Collapse in={isModelExpanded || modelRosbags.length === 0}>
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -332,14 +335,15 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                         });
                                         
                                         return (
-                                            <Card 
-                                                key={rosbag} 
-                                                sx={{ 
-                                                    backgroundColor: '#1e1e1e',
-                                                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                                            <Card
+                                                key={rosbag}
+                                                sx={{
+                                                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                                                    border: '1px solid rgba(255, 255, 255, 0.08)',
                                                     borderRadius: 2,
+                                                    boxShadow: 'none',
                                                     '&:hover': {
-                                                        borderColor: 'rgba(255, 255, 255, 0.23)',
+                                                        borderColor: 'rgba(255, 255, 255, 0.14)',
                                                     }
                                                 }}
                                             >
@@ -367,21 +371,23 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         </Box>
                                                     }
                                                     action={
-                                                        <IconButton
-                                                            onClick={(e) => {
-                                                                e.stopPropagation(); // Prevent triggering the CardHeader onClick
-                                                                // Only toggle rosbag visibility, preserve individual topic states
-                                                                setExpandedRosbags(prev => ({ ...prev, [rosbagKey]: !isRosbagExpanded }));
-                                                            }}
-                                                            sx={{
-                                                                color: 'rgba(255, 255, 255, 0.7)',
-                                                                transform: isRosbagExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                                                                transition: 'transform 0.2s',
-                                                            }}
-                                                            aria-label={isRosbagExpanded ? 'collapse rosbag' : 'expand rosbag'}
-                                                        >
-                                                            <ExpandMoreIcon />
-                                                        </IconButton>
+                                                        <Tooltip title={isRosbagExpanded ? 'Collapse rosbag' : 'Expand rosbag'} arrow>
+                                                          <IconButton
+                                                              onClick={(e) => {
+                                                                  e.stopPropagation(); // Prevent triggering the CardHeader onClick
+                                                                  // Only toggle rosbag visibility, preserve individual topic states
+                                                                  setExpandedRosbags(prev => ({ ...prev, [rosbagKey]: !isRosbagExpanded }));
+                                                              }}
+                                                              sx={{
+                                                                  color: 'rgba(255, 255, 255, 0.7)',
+                                                                  transform: isRosbagExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                                  transition: 'transform 0.2s',
+                                                              }}
+                                                              aria-label={isRosbagExpanded ? 'collapse rosbag' : 'expand rosbag'}
+                                                          >
+                                                              <ExpandMoreIcon />
+                                                          </IconButton>
+                                                        </Tooltip>
                                                     }
                                                     sx={{ 
                                                         pb: 1,
@@ -395,7 +401,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         }
                                                     }}
                                                 />
-                                                <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.12)' }} />
+                                                <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.07)' }} />
                                                 <CardContent sx={{ pt: 2 }}>
                                                     <Collapse in={isRosbagExpanded || rosbagTopics.length === 0}>
                                                         {rosbagTopics.length === 0 ? (
@@ -411,13 +417,13 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                 const isExpanded = expandedTopics[rowKey] !== false;
                                                 
                                                 return (
-                                                    <Box 
+                                                    <Box
                                                         key={topic}
                                                         sx={{
-                                                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                                                            border: '1px solid rgba(255, 255, 255, 0.06)',
                                                             borderRadius: 1,
                                                             overflow: 'hidden',
-                                                            backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                                                            backgroundColor: 'rgba(255, 255, 255, 0.02)',
                                                         }}
                                                     >
                                                         <Box
@@ -446,16 +452,18 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                             >
                                                                 {topic}
                                                             </Typography>
-                                                            <IconButton
-                                                                size="small"
-                                                                sx={{
-                                                                    color: 'rgba(255, 255, 255, 0.7)',
-                                                                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                                                                    transition: 'transform 0.2s',
-                                                                }}
-                                                            >
-                                                                <ExpandMoreIcon />
-                                                            </IconButton>
+                                                            <Tooltip title={isExpanded ? 'Collapse topic' : 'Expand topic'} arrow>
+                                                              <IconButton
+                                                                  size="small"
+                                                                  sx={{
+                                                                      color: 'rgba(255, 255, 255, 0.7)',
+                                                                      transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                                      transition: 'transform 0.2s',
+                                                                  }}
+                                                              >
+                                                                  <ExpandMoreIcon />
+                                                              </IconButton>
+                                                            </Tooltip>
                                                         </Box>
                                                         <Collapse in={isExpanded}>
                                                             <Box sx={{ p: 1.5, pt: 0 }}>
@@ -484,6 +492,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         }}
                                                     />
                                                     <Box sx={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }}>
+                                                        <Tooltip title="Open topic in Explore" arrow placement="left">
                                                         <IconButton
                                                             aria-label="open in explore"
                                                             size="small"
@@ -520,6 +529,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                         >
                                                             <KeyboardArrowRightIcon />
                                                         </IconButton>
+                                                        </Tooltip>
                                                     </Box>
                                                     </Box>
 

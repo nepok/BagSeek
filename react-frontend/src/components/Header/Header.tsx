@@ -145,99 +145,105 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
     <Box className="header-container" display="flex" justifyContent="space-between" alignItems="center" padding="8px 16px">
       {/* Left side: Logo + Navigation buttons */}
       <Box display="flex" alignItems="center">
-        <Typography
-          variant="h4"
-          className="header-title"
-          component="a"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate('/search');
-          }}
-          sx={{
-            cursor: 'pointer',
-            textDecoration: 'none',
-            color: 'inherit',
-            '&:hover': {
-              opacity: 0.8,
-            },
-          }}
-        >
-          BagSeek
-        </Typography>
-        {/* Mode selection buttons */}
-        <Box sx={{ flexGrow: 0, display: 'flex', marginLeft: 4, gap: 1 }}>
-          <Button
-            variant="text"
-            onClick={() => {
-              navigate('/positional-overview');
-            }}
-            sx={{ 
-              color: 'white',
-              textTransform: 'none',
-              fontWeight: viewMode === 'positional' ? 700 : 400,
-              opacity: viewMode === 'positional' ? 1 : 0.7,
-              '&:hover': {
-                opacity: 1,
-                backgroundColor: 'transparent',
-              },
-            }}
-          >
-            <MapIcon sx={{ fontSize: 18, mr: 0.5 }} />
-            MAP
-          </Button>
-          <Button
-            variant="text"
-            onClick={() => {
-              // Save current explore query so we can restore it later
-              if (location.pathname.startsWith('/explore')) {
-                try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
-              }
+          <Typography
+            variant="h4"
+            className="header-title"
+            component="a"
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
               navigate('/search');
             }}
-            sx={{ 
-              color: 'white',
-              textTransform: 'none',
-              fontWeight: viewMode === 'search' ? 700 : 400,
-              opacity: viewMode === 'search' ? 1 : 0.7,
+            sx={{
+              cursor: 'pointer',
+              textDecoration: 'none',
+              color: 'inherit',
               '&:hover': {
-                opacity: 1,
-                backgroundColor: 'transparent',
+                opacity: 0.8,
               },
             }}
           >
-            <SearchIcon sx={{ fontSize: 18, mr: 0.5 }} />
-            SEARCH
-          </Button>
-          <Button
-            variant="text"
-            onClick={() => {
-              // Cache current search tab before navigating to explore
-              if (location.pathname.startsWith('/search')) {
-                try { 
-                  if (searchFilterCache.viewMode) {
-                    sessionStorage.setItem('lastSearchTab', searchFilterCache.viewMode);
-                  }
-                } catch {}
-              }
-              let qs = '';
-              try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
-              navigate(`/explore${qs}`);
-            }}
-            sx={{ 
-              color: 'white',
-              textTransform: 'none',
-              fontWeight: viewMode === 'explore' ? 700 : 400,
-              opacity: viewMode === 'explore' ? 1 : 0.7,
-              '&:hover': {
-                opacity: 1,
-                backgroundColor: 'transparent',
-              },
-            }}
-          >
-            <ExploreIcon sx={{ fontSize: 18, mr: 0.5 }} />
-            EXPLORE
-          </Button>
+            BagSeek
+          </Typography>
+        {/* Mode selection buttons */}
+        <Box sx={{ flexGrow: 0, display: 'flex', marginLeft: 4, gap: 1 }}>
+          <Tooltip title="Explore rosbag locations on a map and filter by area" arrow>
+            <Button
+              variant="text"
+              onClick={() => {
+                navigate('/positional-overview');
+              }}
+              sx={{
+                color: 'white',
+                textTransform: 'none',
+                fontWeight: viewMode === 'positional' ? 700 : 400,
+                opacity: viewMode === 'positional' ? 1 : 0.7,
+                '&:hover': {
+                  opacity: 1,
+                  backgroundColor: 'transparent',
+                },
+              }}
+            >
+              <MapIcon sx={{ fontSize: 18, mr: 0.5 }} />
+              MAP
+            </Button>
+          </Tooltip>
+          <Tooltip title="Search and filter content in rosbags" arrow>
+            <Button
+              variant="text"
+              onClick={() => {
+                // Save current explore query so we can restore it later
+                if (location.pathname.startsWith('/explore')) {
+                  try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
+                }
+                navigate('/search');
+              }}
+              sx={{
+                color: 'white',
+                textTransform: 'none',
+                fontWeight: viewMode === 'search' ? 700 : 400,
+                opacity: viewMode === 'search' ? 1 : 0.7,
+                '&:hover': {
+                  opacity: 1,
+                  backgroundColor: 'transparent',
+                },
+              }}
+            >
+              <SearchIcon sx={{ fontSize: 18, mr: 0.5 }} />
+              SEARCH
+            </Button>
+          </Tooltip>
+          <Tooltip title="Visualise rosbag sensor topics in resizable panels" arrow>
+            <Button
+              variant="text"
+              onClick={() => {
+                // Cache current search tab before navigating to explore
+                if (location.pathname.startsWith('/search')) {
+                  try {
+                    if (searchFilterCache.viewMode) {
+                      sessionStorage.setItem('lastSearchTab', searchFilterCache.viewMode);
+                    }
+                  } catch {}
+                }
+                let qs = '';
+                try { qs = sessionStorage.getItem('lastExploreSearch') || ''; } catch {}
+                navigate(`/explore${qs}`);
+              }}
+              sx={{
+                color: 'white',
+                textTransform: 'none',
+                fontWeight: viewMode === 'explore' ? 700 : 400,
+                opacity: viewMode === 'explore' ? 1 : 0.7,
+                '&:hover': {
+                  opacity: 1,
+                  backgroundColor: 'transparent',
+                },
+              }}
+            >
+              <ExploreIcon sx={{ fontSize: 18, mr: 0.5 }} />
+              EXPLORE
+            </Button>
+          </Tooltip>
         </Box>
       </Box>
 
@@ -247,22 +253,24 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         <Popper open={showCanvasPopper} anchorEl={canvasIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '300px' }}>
           <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px' }}>
             {/* RESET canvas button */}
-            <Button
-              onClick={() => {
-                handleResetCanvas();
-                setShowCanvasPopper(false);
-              }}
-              variant="contained"
-              color="primary"
-              fullWidth
-              sx={{ 
-                fontSize: '0.8rem', 
-                marginBottom: '8px',
-                textTransform: 'none'
-              }}
-            >
-              RESET
-            </Button>
+            <Tooltip title="Clear all panels and reset the canvas layout" arrow componentsProps={{ popper: { sx: { zIndex: 10001 } } }}>
+              <Button
+                onClick={() => {
+                  handleResetCanvas();
+                  setShowCanvasPopper(false);
+                }}
+                variant="contained"
+                color="primary"
+                fullWidth
+                sx={{
+                  fontSize: '0.8rem',
+                  marginBottom: '8px',
+                  textTransform: 'none'
+                }}
+              >
+                RESET
+              </Button>
+            </Tooltip>
             
             {mappedCanvasList.map((canvas, index) => {
               const isExactMatch = selectedRosbag === canvas.rosbag;
@@ -286,7 +294,15 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
                   <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: canvas.color, marginRight: '8px', marginBottom: '3.5px' }} />
                   {canvas.name}
                   {/* Delete button for canvas */}
-                  <IconButton onClick={() => onDeleteCanvas(canvas.name)} sx={{ marginLeft: 'auto', color: 'white' }}>
+                  <IconButton
+                    onClick={(e) => { e.stopPropagation(); onDeleteCanvas(canvas.name); }}
+                    sx={{
+                      marginLeft: 'auto',
+                      color: 'rgba(255,255,255,0.5)',
+                      transition: 'color 0.15s',
+                      '&:hover': { color: 'error.main' },
+                    }}
+                  >
                     <DeleteIcon fontSize="small" />
                   </IconButton>
                 </MenuItem>
@@ -318,9 +334,11 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               />
             ) : (
               // Add button to show TextField for new canvas name
-              <MenuItem onClick={() => setShowTextField(true)} sx={{ fontSize: '0.8rem', padding: '0px 8px', display: 'flex', justifyContent: 'center' }}>
-                <AddIcon fontSize="small" />
-              </MenuItem>
+              <Tooltip title="Save canvas layout with a name" arrow componentsProps={{ popper: { sx: { zIndex: 10001 } } }}>
+                <MenuItem onClick={() => setShowTextField(true)} sx={{ fontSize: '0.8rem', padding: '0px 8px', display: 'flex', justifyContent: 'center' }}>
+                  <AddIcon fontSize="small" />
+                </MenuItem>
+              </Tooltip>
             )}
           </Paper>
         </Popper>
@@ -371,26 +389,28 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         <Divider orientation="vertical" sx={{margin: '8px'}} flexItem />
 
         {/* Smart Farming Lab logo - always visible, links to Smart Farming Lab */}
-        <Button
-          component="a"
-          href="https://research.uni-leipzig.de/smart-farming/#/"
-          target="_blank"
-          rel="noopener noreferrer"
-          sx={{
-            minWidth: 0,
-            p: 0.5,
-            marginLeft: 1,
-            color: 'inherit',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
-            '& .MuiTouchRipple-root': { borderRadius: 4 },
-          }}
-        >
+        <Tooltip title="Smart Farming Lab, University of Leipzig" arrow componentsProps={{ popper: { sx: { zIndex: 10001 } } }}>
+          <Button
+            component="a"
+            href="https://research.uni-leipzig.de/smart-farming/#/"
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              minWidth: 0,
+              p: 0.5,
+              marginLeft: 1,
+              color: 'inherit',
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+              '& .MuiTouchRipple-root': { borderRadius: 4 },
+            }}
+          >
             <img
               src="/smart-farming-lab-logo.png"
               alt="Smart Farming Lab"
               style={{ height: 32, width: 'auto', display: 'block', filter: 'grayscale(100%)' }}
             />
-        </Button>
+          </Button>
+        </Tooltip>
 
         <Divider orientation="vertical" sx={{margin: '8px'}} flexItem />
 

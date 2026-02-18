@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Box, IconButton, Popper, Paper, MenuItem } from '@mui/material';
+import { Box, IconButton, Popper, Paper, MenuItem, Tooltip } from '@mui/material';
+import HelpPopover from '../HelpPopover/HelpPopover';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import './SplittableCanvas.css';
 import NodeContent from '../NodeContent/NodeContent';
@@ -284,13 +285,32 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, ma
             }
             mcapIdentifier={mcapIdentifier}
           />
-          <IconButton
-            size="small"
-            onClick={(e) => handleClickMenu(e, node)}
-            sx={{ position: 'absolute', top: 5, right: 5, padding: 0.5 }}
-          >
-            <MoreVertIcon fontSize="small" />
-          </IconButton>
+          <Tooltip title="Panel options" arrow placement="left">
+            <IconButton
+              size="small"
+              onClick={(e) => handleClickMenu(e, node)}
+              sx={{ position: 'absolute', top: 5, right: 5, padding: 0.5 }}
+            >
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+
+          {!metadata.nodeTopic && (
+            <Box sx={{ position: 'absolute', top: 30, right: 10 }}>
+              <HelpPopover
+                title="Panel controls"
+                content={
+                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                    <Box component="li" sx={{ mb: 0.5 }}>Click <strong>⋮</strong> (top right) to open panel options.</Box>
+                    <Box component="li" sx={{ mb: 0.5 }}><strong>Choose Topic</strong> — assign a sensor data stream to this panel (image, point cloud, GPS, IMU, …).</Box>
+                    <Box component="li" sx={{ mb: 0.5 }}><strong>Split Horizontally / Vertically</strong> — divide this panel into two side-by-side or stacked panes.</Box>
+                    <Box component="li" sx={{ mb: 0.5 }}><strong>Delete Panel</strong> — remove this panel from the layout.</Box>
+                    <Box component="li">Drag the <strong>divider</strong> between panels to resize them.</Box>
+                  </Box>
+                }
+              />
+            </Box>
+          )}
 
           <Popper
             open={Boolean(anchorEl) && currentNode?.id === node.id}

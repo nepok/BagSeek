@@ -1,7 +1,8 @@
 // React component for interacting with and controlling timestamp-based playback, search, and model filtering
 import React, { useEffect, useState, useRef } from 'react';
 import './TimestampPlayer.css'; // Import the CSS file
-import { FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Typography } from '@mui/material';
+import { Box, FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Tooltip, Typography } from '@mui/material';
+import HelpPopover from '../HelpPopover/HelpPopover';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
 //import FilterAltIcon from '@mui/icons-material/FilterAlt';
@@ -288,28 +289,32 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       </FormControl>
 
       {/* Play icon button */}
-      <IconButton
-        aria-label={isPlaying ? "pause" : "play"}
-        color="primary"
-        onClick={togglePlayback}>
-        {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
-      </IconButton>
+      <Tooltip title={isPlaying ? "Pause" : "Play"} arrow>
+        <IconButton
+          aria-label={isPlaying ? "pause" : "play"}
+          color="primary"
+          onClick={togglePlayback}>
+          {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
+        </IconButton>
+      </Tooltip>
 
       {/* Duration display */}
-      <Typography
-        variant="body2"
-        onClick={() => setShowRemaining(prev => !prev)}
-        sx={{
-          fontSize: '0.8rem',
-          whiteSpace: 'nowrap',
-          cursor: 'pointer',
-          userSelect: 'none',
-          fontFamily: 'monospace',
-          minWidth: 105,
-        }}
-      >
-        {getDurationDisplay()}
-      </Typography>
+      <Tooltip title="Click to toggle elapsed / remaining time" arrow>
+        <Typography
+          variant="body2"
+          onClick={() => setShowRemaining(prev => !prev)}
+          sx={{
+            fontSize: '0.8rem',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            userSelect: 'none',
+            fontFamily: 'monospace',
+            minWidth: 105,
+          }}
+        >
+          {getDurationDisplay()}
+        </Typography>
+      </Tooltip>
 
       {/* Timestamp slider */}
       <Slider
@@ -351,7 +356,8 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       </Typography>
 
       {/* Select for Timestamp Unit */}
-      <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
+      <Tooltip title="Timestamp format: ROS nanoseconds or Time of Day" arrow>
+        <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
         <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
         <Select
           labelId="timestamp-unit-select-label"
@@ -364,6 +370,21 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
         </Select>
       </FormControl>
+      </Tooltip>
+
+      <HelpPopover
+        title="Timeline"
+        content={
+          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+            <Box component="li" sx={{ mb: 0.5 }}>Drag the slider to scrub through the sensory data of the rosbag.</Box>
+            <Box component="li" sx={{ mb: 0.5 }}><strong>Thin vertical lines</strong> mark MCAP file boundaries within the rosbag.</Box>
+            <Box component="li" sx={{ mb: 0.5 }}>Click the <strong>Play/Pause button</strong> to start/pause the playback of the rosbag.</Box>
+            <Box component="li" sx={{ mb: 0.5 }}>Click the <strong>duration display</strong> to toggle between elapsed and remaining time.</Box>
+            <Box component="li"><strong>ROS</strong> shows the raw nanosecond timestamp; <strong>TOD</strong> shows wall-clock time of day.</Box>
+          </Box>
+        }
+        iconSx={{ ml: 0.5 }}
+      />
       
       {/* Filter icon button */}  
       {/*<IconButton

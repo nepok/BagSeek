@@ -22,6 +22,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import McapRangeFilter, { McapRangeFilterItem, formatNsToTime, type McapFilterState } from '../McapRangeFilter/McapRangeFilter';
 import { useExportPreselection } from './ExportPreselectionContext';
 import { extractRosbagName } from '../../utils/rosbag';
+import HelpPopover from '../HelpPopover/HelpPopover';
 import { sortTopicsObject, sortTopics } from '../../utils/topics';
 
 interface ExportProps {
@@ -1512,10 +1513,23 @@ const Export: React.FC<ExportProps> = ({
 
             {/* Export name – checkboxes + custom text input(s); multi-part when multiple MCAP ranges or rosbags */}
             <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, width: DRAWER_WIDTH - 48, maxWidth: '100%', overflow: 'hidden', flexShrink: 0 }}>
-              <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
                   Export name
                 </Typography>
+                <HelpPopover
+                  title="Export filename"
+                  content={
+                    <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                      <Box component="li" sx={{ mb: 0.5 }}>The checkboxes control which parts appear in the exported filename.</Box>
+                      <Box component="li" sx={{ mb: 0.5 }}><strong>Rosbag Name</strong> — the source rosbag folder name.</Box>
+                      <Box component="li" sx={{ mb: 0.5 }}><strong>MCAP Range</strong> — the start/end MCAP identifiers of the exported slice (only available when a range is set).</Box>
+                      <Box component="li" sx={{ mb: 0.5 }}><strong>Part Number</strong> — a sequential index when exporting multiple ranges.</Box>
+                      <Box component="li" sx={{ mb: 0.5 }}><strong>Shared custom text</strong> — one free-text suffix applied to all parts at once.</Box>
+                      <Box component="li">You can also type an individual suffix into each part's text field below.</Box>
+                    </Box>
+                  }
+                />
               </Box>
               <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, width: '100%' }}>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>

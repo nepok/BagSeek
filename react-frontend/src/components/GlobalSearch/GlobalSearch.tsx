@@ -1,4 +1,5 @@
-import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu } from '@mui/material';
+import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider } from '@mui/material';
+import HelpPopover from '../HelpPopover/HelpPopover';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RosbagOverview from '../RosbagOverview/RosbagOverview';
@@ -1043,9 +1044,23 @@ const GlobalSearch: React.FC = () => {
                 >
                     {filtersOpen ? (
                         <>
-                            <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.87)', fontWeight: 500, flexShrink: 0 }}>
-                                Filters
-                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flexShrink: 0 }}>
+                                <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.87)', fontWeight: 500 }}>
+                                    Filters
+                                </Typography>
+                                <HelpPopover
+                                    title="How filters work"
+                                    content={
+                                        <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                                            <Box component="li">Use <strong>Positional Filter</strong> to restrict results to parts of rosbags recorded within a geographic area you draw on the map.</Box>
+                                            <Box component="li" sx={{ mb: 0.5 }}>Select which <strong>rosbags</strong>, <strong>topics</strong>, and <strong>time range</strong> to include before running a search.</Box>
+                                            <Box component="li" sx={{ mb: 0.5 }}><strong>Sampling</strong> — only every <em>n</em>th frame per topic is searched, reducing compute at the cost of granularity.</Box>
+                                            <Box component="li" sx={{ mb: 0.5 }}>Filters narrow the amount of data that is searched — a smaller selection means faster and more focused results.</Box>
+                                            <Box component="li" sx={{ mb: 0.5 }}>The search is done by the Vision Language Model(s) you select in the searchbar.</Box>
+                                        </Box>
+                                    }
+                                />
+                            </Box>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 1, minWidth: 0 }}>
                                 <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.primary.main}59`, color: 'primary.main', whiteSpace: 'nowrap' }}>
                                     {rosbags.length}{availableRosbags.length > 0 ? `/${availableRosbags.length}` : ''} rosbags
@@ -1060,24 +1075,28 @@ const GlobalSearch: React.FC = () => {
                                 <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.info.main}59`, color: 'info.main', whiteSpace: 'nowrap' }}>
                                     {sampling}
                                 </Box>
-                                <IconButton
-                                    onClick={() => setFiltersOpen(!filtersOpen)}
-                                    size="small"
-                                    sx={{ color: 'rgba(255,255,255,0.7)', p: 0.25 }}
-                                    aria-label="Collapse filters"
-                                >
-                                    <ChevronLeftIcon sx={{ fontSize: 20 }} />
-                                </IconButton>
+                                <Tooltip title="Collapse filters" arrow>
+                                  <IconButton
+                                      onClick={() => setFiltersOpen(!filtersOpen)}
+                                      size="small"
+                                      sx={{ color: 'rgba(255,255,255,0.7)', p: 0.25 }}
+                                      aria-label="Collapse filters"
+                                  >
+                                      <ChevronLeftIcon sx={{ fontSize: 20 }} />
+                                  </IconButton>
+                                </Tooltip>
                             </Box>
                         </>
                     ) : (
-                        <IconButton
-                            onClick={() => setFiltersOpen(!filtersOpen)}
-                            sx={{ color: 'rgba(255,255,255,0.7)' }}
-                            aria-label="Expand filters"
-                        >
-                            <FilterListIcon />
-                        </IconButton>
+                        <Tooltip title="Expand filters" arrow>
+                          <IconButton
+                              onClick={() => setFiltersOpen(!filtersOpen)}
+                              sx={{ color: 'rgba(255,255,255,0.7)' }}
+                              aria-label="Expand filters"
+                          >
+                              <FilterListIcon />
+                          </IconButton>
+                        </Tooltip>
                     )}
                 </Box>
 
@@ -1086,6 +1105,7 @@ const GlobalSearch: React.FC = () => {
                     <Box sx={{ overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0, py: 1.5, px: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                         {/* Positional Filter + CLEAR */}
                         <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            <Tooltip title="Filter search by geographic area(s)" arrow>
                             <Button
                                 variant={positionallyFilteredRosbags ? "contained" : "outlined"}
                                 color={"primary"}
@@ -1118,7 +1138,9 @@ const GlobalSearch: React.FC = () => {
                                     />
                                 )}
                             </Button>
+                            </Tooltip>
                             {positionallyFilteredRosbags && (
+                                <Tooltip title="Clear positional filter" arrow>
                                 <Button
                                     size="small"
                                     variant="outlined"
@@ -1139,6 +1161,7 @@ const GlobalSearch: React.FC = () => {
                                 >
                                     CLEAR
                                 </Button>
+                                </Tooltip>
                             )}
                         </Box>
 
@@ -1164,14 +1187,15 @@ const GlobalSearch: React.FC = () => {
                                     )}
                                 </Box>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <IconButton
-                                        size="small"
-                                        onClick={(e) => { e.stopPropagation(); handleRosbagToggle('ALL'); }}
-                                        title="Toggle all"
-                                        sx={{ color: rosbags.length === rosbagsToUse.length && rosbagsToUse.length > 0 ? 'primary.main' : 'rgba(255,255,255,0.4)', p: 0.25 }}
-                                    >
-                                        <SelectAllIcon sx={{ fontSize: 16 }} />
-                                    </IconButton>
+                                    <Tooltip title="Toggle all rosbags" arrow>
+                                      <IconButton
+                                          size="small"
+                                          onClick={(e) => { e.stopPropagation(); handleRosbagToggle('ALL'); }}
+                                          sx={{ color: rosbags.length === rosbagsToUse.length && rosbagsToUse.length > 0 ? 'primary.main' : 'rgba(255,255,255,0.4)', p: 0.25 }}
+                                      >
+                                          <SelectAllIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                    </Tooltip>
                                     <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedRosbags ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                                 </Box>
                             </Box>
@@ -1228,14 +1252,15 @@ const GlobalSearch: React.FC = () => {
                                     )}
                                 </Box>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <IconButton
-                                        size="small"
-                                        onClick={(e) => { e.stopPropagation(); handleTopicToggle('ALL'); }}
-                                        title="Toggle all"
-                                        sx={{ color: selectedTopics.length === allTopics.length && allTopics.length > 0 ? 'primary.main' : 'rgba(255,255,255,0.4)', p: 0.25 }}
-                                    >
-                                        <SelectAllIcon sx={{ fontSize: 16 }} />
-                                    </IconButton>
+                                    <Tooltip title="Toggle all topics" arrow>
+                                      <IconButton
+                                          size="small"
+                                          onClick={(e) => { e.stopPropagation(); handleTopicToggle('ALL'); }}
+                                          sx={{ color: selectedTopics.length === allTopics.length && allTopics.length > 0 ? 'primary.main' : 'rgba(255,255,255,0.4)', p: 0.25 }}
+                                      >
+                                          <SelectAllIcon sx={{ fontSize: 16 }} />
+                                      </IconButton>
+                                    </Tooltip>
                                     <ExpandMoreIcon sx={{ color: 'rgba(255,255,255,0.6)', transform: expandedTopics ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                                 </Box>
                             </Box>
@@ -1407,7 +1432,7 @@ const GlobalSearch: React.FC = () => {
                 <Box sx={{ width: '1px', height: 24, bgcolor: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
 
                 {/* Enhance toggle - right side (fixed width so divider stays put) */}
-                <Box sx={{ width: 110, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Box sx={{ width: 130, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <FormControlLabel
                     control={
                       <Checkbox
@@ -1419,7 +1444,21 @@ const GlobalSearch: React.FC = () => {
                         sx={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                       />
                     }
-                    label="ENHANCE"
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                        <span>ENHANCE</span>
+                        <HelpPopover
+                          title="Enhance prompt"
+                          content={
+                            <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                              <Box component="li" sx={{ mb: 0.5 }}>Your query is rewritten by a Large Language Model before being used for the search.</Box>
+                              <Box component="li" sx={{ mb: 0.5 }}>Useful for short or abstract queries — e.g. <em>"tractor"</em> becomes <em>"A photo of a tractor, a type of agricultural equipment"</em>.</Box>
+                              <Box component="li">Adds ~6–7 s of latency to the search.</Box>
+                            </Box>
+                          }
+                        />
+                      </Box>
+                    }
                     sx={{
                       ml: 0,
                       mr: 0,

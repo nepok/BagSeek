@@ -1,4 +1,5 @@
 import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, LinearProgress, MenuItem, Paper, Popper, Slider, TextField, Tooltip, Typography } from '@mui/material';
+import HelpPopover from '../HelpPopover/HelpPopover';
 import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import AddIcon from '@mui/icons-material/Add';
@@ -3203,6 +3204,23 @@ const PositionalOverview: React.FC = () => {
             color: '#fff',
           }}
         >
+          {/* Help icon — absolutely positioned in the top-left corner of the panel */}
+          <Box sx={{ position: 'absolute', top: 6, right: 6 }}>
+            <HelpPopover
+              title="Area filter"
+              content={
+                <Box component="ol" sx={{ m: 0, pl: 2 }}>
+                  <Box component="li" sx={{ mb: 0.5 }}><strong>Right-click</strong> the map to place vertices. Click the <strong>first point</strong> to close the polygon.</Box>
+                  <Box component="li" sx={{ mb: 0.5 }}><strong>Drag</strong> any vertex to reposition it.</Box>
+                  <Box component="li" sx={{ mb: 0.5 }}><strong>Right-click a segment</strong> to insert a new vertex between two existing ones.</Box>
+                  <Box component="li" sx={{ mb: 0.5 }}>Set an <strong>Offset</strong> (m) to expand or shrink the area boundary.</Box>
+                  <Box component="li" sx={{ mb: 0.5 }}>Use <strong>Load/Save Polygons</strong> to save the current polygon or reload a previous one.</Box>
+                  <Box component="li">Click <strong>Apply to Search</strong> to pre-filter the Search page to parts of rosbags recorded within the polygon.</Box>
+                </Box>
+              }
+            />
+          </Box>
+
           {/* First Part: Selected Rosbag Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>

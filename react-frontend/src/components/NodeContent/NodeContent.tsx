@@ -257,25 +257,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
 
     return null; // No need to render anything here
   };
-
-  // One-time initial camera pose helper: sets a nice default view on mount
-  const InitialCameraPose: React.FC = () => {
-    const { camera } = useThree();
-    useEffect(() => {
-      // Position: reuse the Canvas default
-      camera.position.set(5, 0, -4);
-      // Quaternion: desired standard view (captured earlier)
-      camera.quaternion.set(
-        -0.008365159696284239,
-         0.8813901488717224,
-        -0.47205665119629964,
-        -0.015618823146245065
-      );
-      camera.updateProjectionMatrix();
-    }, [camera]);
-    return null;
-  };
-
   // Render IMU visualization with orientation and vector arrows
   const ImuVisualizer: React.FC<{ imu: NonNullable<typeof imuData> }> = ({ imu }) => {
     const groupRef = useRef<THREE.Group>(null);
@@ -365,7 +346,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       <div className="canvas-container">
         <Canvas camera={{ position: [5, 0, -4], fov: 75 }}>
           <RotateScene />
-          <InitialCameraPose />
           <OrbitControls />
           <pointLight position={[10, 10, 10]} />
           <PointCloud pointCloud={pointCloud} />
