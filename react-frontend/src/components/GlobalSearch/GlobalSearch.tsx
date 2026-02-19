@@ -1,4 +1,4 @@
-import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider } from '@mui/material';
+import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider, Skeleton } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import StorageIcon from '@mui/icons-material/Storage';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -88,11 +88,11 @@ interface PipelineCounts {
 
 }
 
-function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true }: {
-  icon: React.ReactNode; label: string; count: number; prevCount: number; isLast?: boolean; showBadge?: boolean;
+function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true, loading = false }: {
+  icon: React.ReactNode; label: string; count: number; prevCount: number; isLast?: boolean; showBadge?: boolean; loading?: boolean;
 }) {
   const reductionPct = prevCount > 0 ? Math.round((1 - count / prevCount) * 100) : 0;
-  const isActive = count > 0;
+  const isActive = !loading && count > 0;
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
       <Box sx={(theme) => ({
@@ -109,11 +109,15 @@ function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true
           <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1, display: 'block' }}>
             {label}
           </Typography>
-          <Typography sx={{ color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)', fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 600, lineHeight: 1.2 }}>
-            {count.toLocaleString()}
-          </Typography>
+          {loading ? (
+            <Skeleton variant="text" width={32} sx={{ bgcolor: 'rgba(255,255,255,0.12)', fontSize: '0.78rem', borderRadius: 0.5 }} />
+          ) : (
+            <Typography sx={{ color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)', fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 600, lineHeight: 1.2 }}>
+              {count.toLocaleString()}
+            </Typography>
+          )}
         </Box>
-        {showBadge && (
+        {showBadge && !loading && (
           <Typography sx={{
             color: reductionPct > 0 ? 'rgba(255,100,100,0.85)' : 'rgba(255,255,255,0.25)',
             fontSize: '0.58rem', fontWeight: 600,
@@ -356,6 +360,7 @@ const GlobalSearch: React.FC = () => {
     const [search, setSearch] = useState(() => getFilter('search', applyToSearch));
     const [searchDone, setSearchDone] = useState(() => resultsCache.searchDone);
     const [pipelineCounts, setPipelineCounts] = useState<PipelineCounts | null>(null);
+    const [countsLoading, setCountsLoading] = useState(false);
     const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => getFilter('viewMode', applyToSearch));
     const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>(() => resultsCache.searchResults);
     const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number; rank?: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
@@ -656,14 +661,17 @@ const GlobalSearch: React.FC = () => {
     useEffect(() => {
         if (rosbags.length === 0) {
             setPipelineCounts(null);
+            setCountsLoading(false);
             return;
         }
         const effectiveModels = models.length > 0 ? models : availableModels;
         if (effectiveModels.length === 0) {
             setPipelineCounts(null);
+            setCountsLoading(false);
             return;
         }
         const timer = setTimeout(async () => {
+            setCountsLoading(true);
             try {
                 const rosbagSet = new Set(rosbags);
                 const mcapFilterParam: Record<string, [number, number][]> = {};
@@ -687,6 +695,8 @@ const GlobalSearch: React.FC = () => {
                 if (res.ok) setPipelineCounts(await res.json());
             } catch {
                 // silently ignore — pipeline counts are non-critical
+            } finally {
+                setCountsLoading(false);
             }
         }, 400);
         return () => clearTimeout(timer);
@@ -1116,7 +1126,7 @@ const GlobalSearch: React.FC = () => {
             />
 
             {/* Pipeline summary strip - full width, above filters + results */}
-            {pipelineCounts && (
+            {(pipelineCounts !== null || countsLoading) && (
               <Box sx={{
                 display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0,
                 px: 1.5, py: 0.75,
@@ -1128,14 +1138,14 @@ const GlobalSearch: React.FC = () => {
                   Pipeline
                 </Typography>
                 {[
-                  { icon: <StorageIcon sx={{ fontSize: 14 }} />, label: 'Rosbags', count: pipelineCounts.total, prev: pipelineCounts.total, showBadge: false },
-                  { icon: <InsertDriveFileIcon sx={{ fontSize: 14 }} />, label: 'MCAPs', count: pipelineCounts.afterMcap, prev: pipelineCounts.total, showBadge: true },
-                  { icon: <TopicIcon sx={{ fontSize: 14 }} />, label: 'Topics', count: pipelineCounts.afterTopic, prev: pipelineCounts.afterMcap, showBadge: true },
-                  { icon: <ScheduleIcon sx={{ fontSize: 14 }} />, label: 'Time', count: pipelineCounts.afterTime, prev: pipelineCounts.afterTopic, showBadge: true },
-                  { icon: <FilterAltIcon sx={{ fontSize: 14 }} />, label: 'Sample', count: pipelineCounts.afterSample, prev: pipelineCounts.afterTime, showBadge: true },
-                  ...(searchDone && searchResults.length > 0 ? [{ icon: <SearchIcon sx={{ fontSize: 14 }} />, label: 'Results', count: searchResults.length, prev: pipelineCounts.afterSample, showBadge: true }] : []),
+                  { icon: <StorageIcon sx={{ fontSize: 14 }} />, label: 'Rosbags', count: pipelineCounts?.total ?? 0, prev: pipelineCounts?.total ?? 0, showBadge: false },
+                  { icon: <InsertDriveFileIcon sx={{ fontSize: 14 }} />, label: 'MCAPs', count: pipelineCounts?.afterMcap ?? 0, prev: pipelineCounts?.total ?? 0, showBadge: true },
+                  { icon: <TopicIcon sx={{ fontSize: 14 }} />, label: 'Topics', count: pipelineCounts?.afterTopic ?? 0, prev: pipelineCounts?.afterMcap ?? 0, showBadge: true },
+                  { icon: <ScheduleIcon sx={{ fontSize: 14 }} />, label: 'Time', count: pipelineCounts?.afterTime ?? 0, prev: pipelineCounts?.afterTopic ?? 0, showBadge: true },
+                  { icon: <FilterAltIcon sx={{ fontSize: 14 }} />, label: 'Sample', count: pipelineCounts?.afterSample ?? 0, prev: pipelineCounts?.afterTime ?? 0, showBadge: true },
+                  ...(searchDone && searchResults.length > 0 ? [{ icon: <SearchIcon sx={{ fontSize: 14 }} />, label: 'Results', count: searchResults.length, prev: pipelineCounts?.afterSample ?? 0, showBadge: true }] : []),
                 ].map((s, i, arr) => (
-                  <PipelineStage key={s.label} icon={s.icon} label={s.label} count={s.count} prevCount={s.prev} isLast={i === arr.length - 1} showBadge={s.showBadge} />
+                  <PipelineStage key={s.label} icon={s.icon} label={s.label} count={s.count} prevCount={s.prev} isLast={i === arr.length - 1} showBadge={s.showBadge} loading={countsLoading} />
                 ))}
               </Box>
             )}
