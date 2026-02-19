@@ -1,4 +1,4 @@
-import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider, Skeleton } from '@mui/material';
+import { Slider, Checkbox, ListItemText, IconButton, Box, Typography, TextField, LinearProgress, Button, Chip, Tabs, Tab, FormControlLabel, Collapse, Select, MenuItem, Menu, Tooltip, Divider } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import StorageIcon from '@mui/icons-material/Storage';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -109,18 +109,27 @@ function PipelineStage({ icon, label, count, prevCount, isLast, showBadge = true
           <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1, display: 'block' }}>
             {label}
           </Typography>
-          {loading ? (
-            <Skeleton variant="text" width={32} sx={{ bgcolor: 'rgba(255,255,255,0.12)', fontSize: '0.78rem', borderRadius: 0.5 }} />
-          ) : (
-            <Typography sx={{ color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)', fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 600, lineHeight: 1.2 }}>
-              {count.toLocaleString()}
-            </Typography>
-          )}
+          <Typography sx={{
+            color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)',
+            fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 600, lineHeight: 1.2,
+            ...(loading && {
+              animation: 'pipelinePulse 1.2s ease-in-out infinite',
+              '@keyframes pipelinePulse': {
+                '0%, 100%': { opacity: 1 },
+                '50%': { opacity: 0.25 },
+              },
+            }),
+          }}>
+            {count.toLocaleString()}
+          </Typography>
         </Box>
-        {showBadge && !loading && (
+        {showBadge && (
           <Typography sx={{
             color: reductionPct > 0 ? 'rgba(255,100,100,0.85)' : 'rgba(255,255,255,0.25)',
             fontSize: '0.58rem', fontWeight: 600,
+            ...(loading && {
+              animation: 'pipelinePulse 1.2s ease-in-out infinite',
+            }),
           }}>
             -{reductionPct}%
           </Typography>
