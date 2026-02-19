@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button, Divider } from '@mui/material';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { IconButton, Typography, Box, Tooltip, Popper, Paper, MenuItem, TextField, Button, Divider, CircularProgress } from '@mui/material';
 import './Header.css';
 import FolderIcon from '@mui/icons-material/Folder';
 import IosShareIcon from '@mui/icons-material/IosShare';
@@ -8,6 +8,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { extractRosbagName } from '../../utils/rosbag';
 import { searchFilterCache } from '../GlobalSearch/searchFilterCache';
 import { useExportPreselection } from '../Export/ExportPreselectionContext';
 import { useAuth } from '../AuthContext/AuthContext';
@@ -17,9 +18,16 @@ import SearchIcon from '@mui/icons-material/Search';
 import ExploreIcon from '@mui/icons-material/Explore';
 
 
+interface RosbagMeta {
+  mcapCount: number;
+  firstTimestampNs: string | null;
+  lastTimestampNs: string | null;
+}
+
 interface HeaderProps {
   setIsFileInputVisible: (visible: boolean | ((prev: boolean) => boolean)) => void; // Controls visibility of file input dialog
   setIsExportDialogVisible: (visible: boolean | ((prev: boolean) => boolean)) => void; // Controls visibility of export dialog
+  onRosbagSelect: (path: string) => Promise<void>; // Callback when user selects a rosbag in the Popper
   selectedRosbag: string | null; // Currently selected ROS bag name
   handleLoadCanvas: (name: string) => void; // Callback to load a canvas by name
   handleAddCanvas: (name: string) => void; // Callback to add a new canvas by name
@@ -77,8 +85,26 @@ const isCanvasCompatible = (canvas: any, availableTopics: Record<string, string>
   return normalizedRequiredTopics.every(topic => normalizedAvailableTopics.includes(topic));
 };
 
+// Format nanosecond timestamp to date string only (e.g. "24.07.2025")
+const formatNsToDate = (ns: string | null): string => {
+  if (!ns) return '';
+  try {
+    const ms = Number(BigInt(ns) / BigInt(1_000_000));
+    return new Date(ms).toLocaleDateString('de-DE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  } catch { return ''; }
+};
+
+// Format nanosecond timestamp to time string only (e.g. "16:22:34")
+const formatNsToTime = (ns: string | null): string => {
+  if (!ns) return '';
+  try {
+    const ms = Number(BigInt(ns) / BigInt(1_000_000));
+    return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  } catch { return ''; }
+};
+
 // Header component displays app title and controls for file input, canvas management, and export
-const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics, canvasList, refreshCanvasList, currentMetadata, selectedTimestampIndex, searchMarks }) => {
+const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialogVisible, onRosbagSelect, selectedRosbag, handleLoadCanvas, handleAddCanvas, handleResetCanvas, availableTopics, canvasList, refreshCanvasList, currentMetadata, selectedTimestampIndex, searchMarks }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { openExportWithPreselection } = useExportPreselection();
@@ -96,6 +122,13 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   // Ref for the canvas icon button to anchor the popper menu
   const canvasIconRef = useRef<HTMLButtonElement | null>(null);
 
+  // Rosbag selector Popper state
+  const [showRosbagPopper, setShowRosbagPopper] = useState(false);
+  const [rosbagList, setRosbagList] = useState<string[]>([]);
+  const [rosbagMeta, setRosbagMeta] = useState<Record<string, RosbagMeta>>({});
+  const [loadingRosbagList, setLoadingRosbagList] = useState(false);
+  const rosbagIconRef = useRef<HTMLButtonElement | null>(null);
+
   // Map canvasList prop to the format needed for display (with colors)
   const mappedCanvasList = useMemo(() => {
     return Object.keys(canvasList).map((name) => ({
@@ -105,6 +138,78 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
       color: generateColor(canvasList[name].rosbag || ''),
     }));
   }, [canvasList]);
+
+  // Fetch metadata for a list of paths and merge into rosbagMeta state
+  const fetchMetaForPaths = async (paths: string[], existingMeta: Record<string, RosbagMeta>) => {
+    const newPaths = paths.filter(p => !(p in existingMeta));
+    if (newPaths.length === 0) return;
+    const entries = await Promise.all(
+      newPaths.map(async (p) => {
+        try {
+          const res = await fetch(`/api/get-timestamp-summary?rosbag=${encodeURIComponent(extractRosbagName(p))}`);
+          const d = await res.json();
+          return [p, {
+            mcapCount: (d.mcapRanges ?? []).length,
+            firstTimestampNs: d.firstTimestampNs ?? null,
+            lastTimestampNs: d.lastTimestampNs ?? null,
+          }] as [string, RosbagMeta];
+        } catch {
+          return [p, { mcapCount: 0, firstTimestampNs: null, lastTimestampNs: null }] as [string, RosbagMeta];
+        }
+      })
+    );
+    setRosbagMeta(prev => ({ ...prev, ...Object.fromEntries(entries) }));
+  };
+
+  // Stale-while-revalidate: show cached list immediately, then silently refresh against disk
+  useEffect(() => {
+    if (!showRosbagPopper) return;
+    let cancelled = false;
+
+    const load = async () => {
+      // 1. Show cached list right away
+      setLoadingRosbagList(true);
+      try {
+        const r = await fetch('/api/get-file-paths');
+        const data = await r.json();
+        const paths: string[] = data.paths ?? [];
+        if (!cancelled) {
+          setRosbagList(paths);
+          setLoadingRosbagList(false);
+          fetchMetaForPaths(paths, {});
+        }
+      } catch {
+        if (!cancelled) setLoadingRosbagList(false);
+      }
+
+      // 2. Background rescan against disk — silently update if list changed
+      try {
+        const r = await fetch('/api/refresh-file-paths', { method: 'POST' });
+        const data = await r.json();
+        const freshPaths: string[] = data.paths ?? [];
+        if (!cancelled) {
+          setRosbagList(prev => {
+            const prevSorted = [...prev].sort().join('\n');
+            const freshSorted = [...freshPaths].sort().join('\n');
+            if (prevSorted === freshSorted) return prev;
+            // Fetch metadata only for paths that are new
+            setRosbagMeta(existingMeta => {
+              fetchMetaForPaths(freshPaths, existingMeta);
+              // Remove stale entries
+              const kept = Object.fromEntries(
+                Object.entries(existingMeta).filter(([k]) => freshPaths.includes(k))
+              );
+              return kept;
+            });
+            return freshPaths;
+          });
+        }
+      } catch { /* silently ignore background refresh errors */ }
+    };
+
+    load();
+    return () => { cancelled = true; };
+  }, [showRosbagPopper]);
 
   // Toggle the visibility of the canvas selection popper
   const toggleCanvasOptions = () => {
@@ -345,13 +450,82 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
 
         {viewMode === 'explore' && (
           <>
-            {/* Button to toggle file input dialog */}
+            {/* Rosbag selector Popper */}
+            <Popper open={showRosbagPopper} anchorEl={rosbagIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '600px' }}>
+              <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px', maxHeight: '50vh', overflowY: 'auto' }}>
+                {loadingRosbagList ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                    <CircularProgress size={24} sx={{ color: 'white' }} />
+                  </Box>
+                ) : rosbagList.length === 0 ? (
+                  <Typography sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)', px: 1, py: 0.5 }}>
+                    No rosbags found
+                  </Typography>
+                ) : rosbagList.map((path) => {
+                  const displayName = extractRosbagName(path);
+                  const meta = rosbagMeta[path];
+                  const isSelected = selectedRosbag ? extractRosbagName(path) === extractRosbagName(selectedRosbag) : false;
+                  const color = generateColor(displayName);
+                  const date = meta?.firstTimestampNs ? formatNsToDate(meta.firstTimestampNs) : null;
+                  const firstTime = meta?.firstTimestampNs ? formatNsToTime(meta.firstTimestampNs) : null;
+                  const lastTime = meta?.lastTimestampNs ? formatNsToTime(meta.lastTimestampNs) : null;
+                  const timeRange = firstTime && lastTime && firstTime !== lastTime ? `${firstTime} – ${lastTime}` : firstTime;
+                  return (
+                    <MenuItem
+                      key={path}
+                      onClick={async () => {
+                        setShowRosbagPopper(false);
+                        await onRosbagSelect(path);
+                      }}
+                      sx={{
+                        fontSize: '0.8rem',
+                        padding: '6px 8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        backgroundColor: isSelected ? 'rgba(255,255,255,0.08)' : 'transparent',
+                        borderRadius: '4px',
+                        '&:hover': { backgroundColor: 'rgba(255,255,255,0.12)' },
+                      }}
+                    >
+                      {/* Colored dot */}
+                      <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: color, flexShrink: 0 }} />
+                      {/* Rosbag name */}
+                      <Typography sx={{ fontSize: '0.8rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {displayName}
+                      </Typography>
+                      {/* Pills */}
+                      {meta && meta.mcapCount > 0 && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+                          <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.secondary.main}59`, color: 'secondary.main', whiteSpace: 'nowrap' }}>
+                            {meta.mcapCount} MCAP{meta.mcapCount !== 1 ? 's' : ''}
+                          </Box>
+                          {date && (
+                            <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.warning.main}59`, color: 'warning.main', whiteSpace: 'nowrap' }}>
+                              {date}
+                            </Box>
+                          )}
+                          {timeRange && (
+                            <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme) => `${theme.palette.warning.main}59`, color: 'warning.main', whiteSpace: 'nowrap' }}>
+                              {timeRange}
+                            </Box>
+                          )}
+                        </Box>
+                      )}
+                    </MenuItem>
+                  );
+                })}
+              </Paper>
+            </Popper>
+
+            {/* Button to open rosbag selector Popper */}
             <Tooltip title="Select Rosbag" arrow>
               <IconButton
                 className="header-icon"
+                ref={rosbagIconRef}
                 onClick={() => {
-                  setShowCanvasPopper(false); // Close canvas popper if open
-                  setIsFileInputVisible((prev) => !prev); // Toggle file input visibility
+                  setShowCanvasPopper(false);
+                  setShowRosbagPopper(prev => !prev);
                 }}
               >
                 <FolderIcon />

@@ -325,7 +325,16 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
 
   // Render content based on the topicType
   let renderedContent: React.ReactNode = null;
-  if (isLoading) {
+  const isGpsTopic = nodeTopicType === "sensor_msgs/msg/NavSatFix" || nodeTopicType === "novatel_oem7_msgs/msg/BESTPOS";
+  if (isGpsTopic) {
+    // Always keep the map container in the DOM so mapRef stays attached across timestamp changes.
+    // The spinner is overlaid on top instead of replacing the content.
+    renderedContent = (
+      <div className="gps-container">
+        <div ref={mapContainerRef} className="map-container"></div>
+      </div>
+    );
+  } else if (isLoading) {
     renderedContent = (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%' }}>
         <CircularProgress size={40} sx={{ color: 'white' }} />
@@ -360,12 +369,6 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
         </Typography>
       </Box>
     ); // text rendering block
-  } else if (position) {
-    renderedContent = (
-      <div className="gps-container">
-        <div ref={mapContainerRef} className="map-container"></div>
-      </div>
-    ); // map rendering block
   } else if (imuData) {
     renderedContent = (
       <div className="canvas-container">

@@ -60,9 +60,12 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   const formatDuration = (totalSeconds: number): string => {
     const sign = totalSeconds < 0 ? '-' : '';
     const abs = Math.floor(Math.abs(totalSeconds));
-    const minutes = Math.floor(abs / 60);
+    const hours = Math.floor(abs / 3600);
+    const minutes = Math.floor((abs % 3600) / 60);
     const seconds = abs % 60;
-    return `${sign}${minutes}:${seconds.toString().padStart(2, '0')}`;
+    const mm = minutes.toString().padStart(2, '0');
+    const ss = seconds.toString().padStart(2, '0');
+    return hours > 0 ? `${sign}${hours}:${mm}:${ss}` : `${sign}${minutes}:${ss}`;
   };
 
   const getDurationDisplay = (): string => {
@@ -87,7 +90,8 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1); // playback multiplier (e.g., 0.5x, 1x, 2x)
   const [isPlaying, setIsPlaying] = useState(false); // whether playback is running
   const [timestampUnit, setTimestampUnit] = useState<'ROS' | 'TOD'>('ROS'); // display mode: ROS or formatted time
-  const [showRemaining, setShowRemaining] = useState(false); // toggle elapsed vs remaining time
+  const [showRemaining, setShowRemaining] = useState(false);
+  const [tsSelectOpen, setTsSelectOpen] = useState(false); // toggle elapsed vs remaining time
   //const [showFilter, setShowFilter] = useState(false); // toggle polygon filter view
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null); // interval reference for playback
@@ -356,7 +360,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
       </Typography>
 
       {/* Select for Timestamp Unit */}
-      <Tooltip title="Timestamp format: ROS nanoseconds or Time of Day" arrow>
+      <Tooltip title="Timestamp format: ROS nanoseconds or Time of Day" arrow disableHoverListener={tsSelectOpen}>
         <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
         <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
         <Select
@@ -364,6 +368,8 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           id="timestamp-unit-select"
           value={timestampUnit}
           onChange={handleTimestampUnitChange}
+          onOpen={() => setTsSelectOpen(true)}
+          onClose={() => setTsSelectOpen(false)}
           sx={{ fontSize: '0.8rem' }}
         >
           <MenuItem value="ROS" sx={{ fontSize: '0.8rem' }}>ROS</MenuItem>

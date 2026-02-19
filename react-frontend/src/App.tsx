@@ -83,6 +83,8 @@ function App() {
 
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
+  const pendingMcapRef = useRef<number | null>(null); // MCAP id to jump to (resolved via mcapBoundaries)
+  const pendingMcapHighlightRef = useRef<string[] | null>(null); // MCAP ids to show as marks (from positional overview)
   const pendingCanvasRef = useRef<{ root: Node; metadata: { [id: number]: NodeMetadata } } | null>(null);
   const pendingRosbagParamRef = useRef<string | null>(null);
   const isUpdatingTimestampRef = useRef<boolean>(false); // Track if we're updating timestamp from user action
@@ -330,6 +332,25 @@ function App() {
     }
   };
 
+  // Handler: user picks a rosbag from the Popper selector
+  const handleRosbagSelect = async (path: string) => {
+    try {
+      await fetch('/api/set-file-paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      await Promise.all([
+        fetchAvailableTopics(),
+        fetchAvailableTimestampsAndDensity(),
+        fetchSelectedRosbag(),
+      ]);
+    } catch (e) {
+      setError('Error selecting rosbag');
+      console.error('Error selecting rosbag:', e);
+    }
+  };
+
   // Keep selected rosbag in URL on change
   useEffect(() => {
     if (location.pathname.startsWith('/explore')) {
@@ -348,6 +369,7 @@ function App() {
 
     const rosbagParam = searchParams.get('rosbag');
     const tsParam = searchParams.get('ts');
+    const mcapParam = searchParams.get('mcap');
     const canvasParam = searchParams.get('canvas');
 
     // 1) Ensure selected rosbag matches URL
@@ -413,14 +435,36 @@ function App() {
       } catch (e) {
         setSearchMarks([]);
       }
-    } else {
+    } else if (!sessionStorage.getItem('__BagSeekMapMcapHighlight')) {
       setSearchMarks([]);
+    }
+
+    // Load MCAP highlight marks written by positional-overview "Open in Explore"
+    const mcapHighlightRaw = sessionStorage.getItem('__BagSeekMapMcapHighlight');
+    if (mcapHighlightRaw) {
+      sessionStorage.removeItem('__BagSeekMapMcapHighlight');
+      try {
+        const ids: string[] = JSON.parse(mcapHighlightRaw);
+        pendingMcapHighlightRef.current = ids;
+        // Apply immediately if mcapBoundaries are already populated (same rosbag, no re-fetch)
+        if (mcapBoundaries.length > 0) {
+          const marks = ids
+            .map((id) => { const idx = mcapBoundaries[Number(id)]; return idx != null ? { value: idx } : null; })
+            .filter((m): m is { value: number } => m !== null);
+          if (marks.length > 0) { setSearchMarks(marks); pendingMcapHighlightRef.current = null; }
+        }
+      } catch { /* ignore */ }
     }
 
     // 3) Stash ts index to apply when data is ready
     if (tsParam) {
       const tsIndex = Number(tsParam);
       if (!Number.isNaN(tsIndex) && tsIndex !== selectedTimestampIndex) pendingTsRef.current = tsIndex;
+    }
+    // Stash mcap id (from positional-overview "Open in Explore") — resolved to a ts index once mcapBoundaries load
+    if (mcapParam) {
+      const mcapId = Number(mcapParam);
+      if (!Number.isNaN(mcapId)) pendingMcapRef.current = mcapId;
     }
     if (canvasParam) {
       const parsed = decodeCanvas(canvasParam);
@@ -486,6 +530,34 @@ function App() {
     }
   }, [timestampCount]);
 
+  // Resolve pending mcap navigation + highlight marks once mcapBoundaries arrive
+  useEffect(() => {
+    if (mcapBoundaries.length === 0) return;
+
+    // Jump to the selected MCAP's first timestamp
+    if (pendingMcapRef.current !== null) {
+      const tsIndex = mcapBoundaries[pendingMcapRef.current] ?? mcapBoundaries[0];
+      pendingMcapRef.current = null;
+      pendingTsRef.current = tsIndex;
+      if (timestampCount > 0) {
+        const clamped = Math.max(0, Math.min(tsIndex, timestampCount - 1));
+        pendingTsRef.current = null;
+        handleSliderChange(clamped);
+      }
+    }
+
+    // Convert highlighted MCAP ids to timestamp-index marks for the slider
+    if (pendingMcapHighlightRef.current !== null) {
+      const ids = pendingMcapHighlightRef.current;
+      pendingMcapHighlightRef.current = null;
+      const marks = ids
+        .map((id) => { const idx = mcapBoundaries[Number(id)]; return idx != null ? { value: idx } : null; })
+        .filter((m): m is { value: number } => m !== null);
+      if (marks.length > 0) setSearchMarks(marks);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcapBoundaries]);
+
 
   return (
     <Routes>
@@ -514,9 +586,10 @@ function App() {
       {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         {/* Header bar with controls to open dialogs and load/save canvases */}
-        <Header 
-          setIsFileInputVisible={setIsFileInputVisible} 
+        <Header
+          setIsFileInputVisible={setIsFileInputVisible}
           setIsExportDialogVisible={setIsExportDialogVisible}
+          onRosbagSelect={handleRosbagSelect}
           selectedRosbag={selectedRosbag}
           handleLoadCanvas={handleLoadCanvas}
           handleAddCanvas={handleAddCanvas}

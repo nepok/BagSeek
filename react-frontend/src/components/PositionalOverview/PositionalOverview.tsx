@@ -4,6 +4,7 @@ import MapIcon from '@mui/icons-material/Map';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import Switch from '@mui/material/Switch';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -3320,6 +3321,27 @@ const PositionalOverview: React.FC = () => {
                 />
               </Box>
             </Box>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={!selectedRosbag}
+              startIcon={<OpenInNewIcon sx={{ fontSize: '12px !important' }} />}
+              onClick={() => {
+                if (!selectedRosbag) return;
+                const mcapId = availableMcaps[selectedMcapIndex]?.id ?? '0';
+                // Store the highlighted MCAP IDs so Explore can show them as slider marks.
+                // Prefer polygon-overlap IDs; fall back to just the currently selected MCAP.
+                const highlightIds =
+                  mcapOverlapIds && mcapOverlapIds.size > 0
+                    ? Array.from(mcapOverlapIds)
+                    : [mcapId];
+                sessionStorage.setItem('__BagSeekMapMcapHighlight', JSON.stringify(highlightIds));
+                navigate(`/explore?rosbag=${encodeURIComponent(selectedRosbag.name)}&mcap=${encodeURIComponent(mcapId)}`);
+              }}
+              sx={{ fontSize: '8pt', py: 0.25, px: 1, borderRadius: 1, alignSelf: 'flex-start' }}
+            >
+              Open in Explore
+            </Button>
           </Box>
 
           {/* Separator */}
