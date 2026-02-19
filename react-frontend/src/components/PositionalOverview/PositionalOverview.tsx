@@ -419,12 +419,14 @@ const convertPolygonsToGeoJSON = (polygons: Polygon[]): any => {
   };
 };
 
-// Offset polygon by distance in meters using Clipper2-ts
-// Positive offset = shrink inward, negative offset = expand outward
+// Offset polygon by distance in meters using Clipper2-ts.
+// Positive offset = shrink inward, negative offset = expand outward.
+// Returns an array of polygons because a concave polygon can split into
+// multiple non-overlapping pieces when the offset is large enough.
 // Based on: https://www.angusj.com/clipper2/Docs/Units/Clipper.Offset/Classes/ClipperOffset/_Body.htm
-const offsetPolygon = (polygon: PolygonPoint[], offsetMeters: number): PolygonPoint[] => {
+const offsetPolygon = (polygon: PolygonPoint[], offsetMeters: number): PolygonPoint[][] => {
   if (polygon.length < 3 || offsetMeters === 0) {
-    return polygon;
+    return [polygon];
   }
 
   // Remove duplicate first/last point if polygon is already closed
@@ -432,132 +434,109 @@ const offsetPolygon = (polygon: PolygonPoint[], offsetMeters: number): PolygonPo
   if (workingPoints.length > 0) {
     const first = workingPoints[0];
     const last = workingPoints[workingPoints.length - 1];
-    // Check if first and last points are the same (closed polygon)
     if (first.lat === last.lat && first.lon === last.lon && workingPoints.length > 3) {
-      workingPoints = workingPoints.slice(0, -1); // Remove duplicate last point
+      workingPoints = workingPoints.slice(0, -1);
     }
   }
-  
+
   if (workingPoints.length < 3) {
-    return polygon; // Return original if not enough points after deduplication
+    return [polygon];
   }
 
   // Calculate average latitude for coordinate conversion
   const avgLat = workingPoints.reduce((sum, p) => sum + p.lat, 0) / workingPoints.length;
-  
-  // Convert lat/lon to local meter-based coordinate system for better precision
-  // Use the centroid as the origin
+
+  // Convert lat/lon to local meter-based coordinate system centred on centroid
   const centroidLat = avgLat;
   const centroidLon = workingPoints.reduce((sum, p) => sum + p.lon, 0) / workingPoints.length;
-  
-  // Conversion factors
+
   const metersPerDegreeLat = 111000;
   const metersPerDegreeLon = 111000 * Math.cos((avgLat * Math.PI) / 180);
-  
-  // Scale factor to convert meters to a reasonable coordinate system
-  // Use 1:1 mapping (1 unit = 1 meter) for best precision
   const scale = 1.0;
-  
+
   try {
-    // Convert polygon points to local meter-based coordinates
-    // PathD: array of {x, y} where x and y are in meters from centroid
     const pathD: PathD = workingPoints.map((p) => ({
       x: (p.lon - centroidLon) * metersPerDegreeLon * scale,
       y: (p.lat - centroidLat) * metersPerDegreeLat * scale,
     }));
-    
-    // Create PathsD containing our path
+
     const pathsD: PathsD = [pathD];
-    
-    // Clipper2's inflatePathsD: positive delta = expand, negative = shrink
-    // Our convention: positive = shrink inward, so we negate
-    // Delta is in the same units as the coordinates (meters * scale)
+
+    // Clipper2's inflatePathsD: positive delta = expand, negative = shrink.
+    // Our convention: positive offsetMeters = shrink inward, so negate.
     const delta = -offsetMeters * scale;
-    
-    // Apply offset using Clipper2's inflatePathsD
-    // According to docs: positive delta expands outer contours, negative contracts them
+
     const offsetResult = inflatePathsD(
       pathsD,
       delta,
       JoinType.Miter,
       EndType.Polygon,
-      10.0,  // miterLimit
+      10.0,      // miterLimit
       undefined, // precision (use default)
-      0.1    // arcTolerance (in meters, relative to coordinate system)
+      0.1        // arcTolerance in meters
     );
-    
-    // Check if we got a result
-    if (!offsetResult || offsetResult.length === 0 || offsetResult[0].length === 0) {
-      // Offset failed (e.g., too large offset), return original
-      return polygon;
+
+    if (!offsetResult || offsetResult.length === 0) {
+      return [polygon];
     }
-    
-    // Get the first path from result
-    const resultPath = offsetResult[0];
-    
-    // Convert back from local meter-based coordinates to lat/lon
-    const offsetPoints: PolygonPoint[] = resultPath.map((pt, index) => ({
-      lat: centroidLat + (pt.y / scale) / metersPerDegreeLat,
-      lon: centroidLon + (pt.x / scale) / metersPerDegreeLon,
-      id: workingPoints[index]?.id || `offset_${index}`,
-    }));
-    
-    // Remove duplicate consecutive points
-    if (offsetPoints.length > 1) {
-      const cleanedPoints: PolygonPoint[] = [offsetPoints[0]];
-      
+
+    // Convert every result path back to lat/lon — a concave polygon with a
+    // large offset can produce multiple disjoint pieces, all of which are valid.
+    const resultPolygons: PolygonPoint[][] = [];
+
+    for (const resultPath of offsetResult) {
+      if (resultPath.length === 0) continue;
+
+      const offsetPoints: PolygonPoint[] = resultPath.map((pt, index) => ({
+        lat: centroidLat + (pt.y / scale) / metersPerDegreeLat,
+        lon: centroidLon + (pt.x / scale) / metersPerDegreeLon,
+        id: `offset_${index}`,
+      }));
+
+      // Remove duplicate consecutive points
+      const cleaned: PolygonPoint[] = [offsetPoints[0]];
       for (let i = 1; i < offsetPoints.length; i++) {
-        const current = offsetPoints[i];
-        const prev = cleanedPoints[cleanedPoints.length - 1];
-        const dist = Math.sqrt(
-          Math.pow(current.lat - prev.lat, 2) +
-          Math.pow(current.lon - prev.lon, 2)
-        );
-        
-        // Only add if point is different from previous
-        if (dist > 1e-9) {
-          cleanedPoints.push(current);
-        }
+        const cur = offsetPoints[i];
+        const prev = cleaned[cleaned.length - 1];
+        const dist = Math.sqrt(Math.pow(cur.lat - prev.lat, 2) + Math.pow(cur.lon - prev.lon, 2));
+        if (dist > 1e-9) cleaned.push(cur);
       }
-      
-      // Check if last point is same as first (closed polygon)
-      if (cleanedPoints.length > 1) {
-        const firstPoint = cleanedPoints[0];
-        const lastPoint = cleanedPoints[cleanedPoints.length - 1];
-        const dist = Math.sqrt(
-          Math.pow(lastPoint.lat - firstPoint.lat, 2) +
-          Math.pow(lastPoint.lon - firstPoint.lon, 2)
-        );
-        if (dist < 1e-6) {
-          // Remove duplicate last point
-          cleanedPoints.pop();
-        }
+
+      // Drop duplicate closing point if present
+      if (cleaned.length > 1) {
+        const first = cleaned[0];
+        const last = cleaned[cleaned.length - 1];
+        const dist = Math.sqrt(Math.pow(last.lat - first.lat, 2) + Math.pow(last.lon - first.lon, 2));
+        if (dist < 1e-6) cleaned.pop();
       }
-      
-      return cleanedPoints.length >= 3 ? cleanedPoints : polygon;
+
+      if (cleaned.length >= 3) {
+        resultPolygons.push(cleaned);
+      }
     }
-    
-    return offsetPoints.length >= 3 ? offsetPoints : polygon;
+
+    return resultPolygons.length > 0 ? resultPolygons : [polygon];
   } catch (error) {
-    // If offset fails, return original polygon
     console.warn('Polygon offset failed:', error);
-    return polygon;
+    return [polygon];
   }
 };
 
-// Get polygons to use for filtering (offset if offsetDistance !== 0, otherwise original)
+// Get polygons to use for filtering (offset if offsetDistance !== 0, otherwise original).
+// A single source polygon can split into multiple pieces after offsetting, so the result
+// is flattened — callers receive one entry per actual polygon to check against.
 const getPolygonsForFiltering = (polygons: Polygon[], offsetDistance: number): PolygonPoint[][] => {
   const closedPolygons = polygons.filter((p) => p.isClosed);
-  
+
   if (offsetDistance === 0) {
     return closedPolygons.map((p) => p.points);
   }
-  
-  return closedPolygons.map((polygon) => {
+
+  return closedPolygons.flatMap((polygon) => {
     try {
       return offsetPolygon(polygon.points, offsetDistance);
     } catch {
-      return polygon.points; // Fallback to original if offset fails
+      return [polygon.points]; // Fallback to original if offset fails
     }
   });
 };
@@ -709,7 +688,7 @@ const PositionalOverview: React.FC = () => {
   const mcapHeatLayerRef = useRef<L.Layer | null>(null);
   const hoverTooltipRef = useRef<L.Popup | null>(null);
   const polygonLayersRef = useRef<Map<string, { markers: L.Marker[]; polyline: L.Polyline | null; polygon: L.Polygon | null }>>(new Map());
-  const offsetPolygonLayersRef = useRef<Map<string, L.Polyline>>(new Map());
+  const offsetPolygonLayersRef = useRef<L.Polyline[]>([]);
   const edgeGhostMarkerRef = useRef<L.Marker | null>(null);
   const isRestoringRef = useRef(false);
   const prevPointsRef = useRef<RosbagPoint[]>([]);
@@ -1351,7 +1330,7 @@ const PositionalOverview: React.FC = () => {
       offsetPolygonLayersRef.current.forEach((polyline) => {
         map.removeLayer(polyline);
       });
-      offsetPolygonLayersRef.current.clear();
+      offsetPolygonLayersRef.current = [];
       map.remove();
       mapRef.current = null;
       if (heatLayerRef.current) {
@@ -2341,42 +2320,41 @@ const PositionalOverview: React.FC = () => {
     offsetPolygonLayersRef.current.forEach((polyline) => {
       map.removeLayer(polyline);
     });
-    offsetPolygonLayersRef.current.clear();
+    offsetPolygonLayersRef.current = [];
 
     // Only render offset polygons if offsetDistance is not zero
     if (offsetDistance !== 0) {
       const closedPolygons = polygons.filter((p) => p.isClosed);
-      
-      // Process each polygon
+
       closedPolygons.forEach((polygon) => {
-        if (polygon.points.length < 3) {
-          return;
-        }
+        if (polygon.points.length < 3) return;
 
         try {
-          const offsetPoints = offsetPolygon(polygon.points, offsetDistance);
-          
-          if (offsetPoints.length >= 2) {
+          // offsetPolygon now returns an array of polygons — a concave shape can
+          // split into multiple disjoint pieces, each rendered as its own polyline.
+          const resultPolygons = offsetPolygon(polygon.points, offsetDistance);
+
+          resultPolygons.forEach((offsetPoints) => {
+            if (offsetPoints.length < 2) return;
+
             const latLngs = offsetPoints.map((p) => [p.lat, p.lon] as L.LatLngTuple);
-            // Close the polygon by adding the first point at the end (only if not already closed)
+            // Close the ring visually
             const firstPoint = latLngs[0];
             const lastPoint = latLngs[latLngs.length - 1];
-            const isAlreadyClosed = firstPoint[0] === lastPoint[0] && firstPoint[1] === lastPoint[1];
-            if (!isAlreadyClosed) {
+            if (firstPoint[0] !== lastPoint[0] || firstPoint[1] !== lastPoint[1]) {
               latLngs.push([firstPoint[0], firstPoint[1]]);
             }
-            
-            // Create dark blue polyline (lines only, no fill, no points)
+
             const offsetPolyline = L.polyline(latLngs, {
-              color: '#000080', // Dark blue
+              color: '#000080',
               weight: 2,
               opacity: 0.8,
               fill: false,
             });
-            
+
             offsetPolyline.addTo(map);
-            offsetPolygonLayersRef.current.set(polygon.id, offsetPolyline);
-          }
+            offsetPolygonLayersRef.current.push(offsetPolyline);
+          });
         } catch (error) {
           console.error(`Error creating offset polygon for ${polygon.id}:`, error);
         }
@@ -2387,7 +2365,7 @@ const PositionalOverview: React.FC = () => {
       offsetPolygonLayersRef.current.forEach((polyline) => {
         map.removeLayer(polyline);
       });
-      offsetPolygonLayersRef.current.clear();
+      offsetPolygonLayersRef.current = [];
     };
   }, [polygons, offsetDistance]);
 
