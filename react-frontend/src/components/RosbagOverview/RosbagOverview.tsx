@@ -27,9 +27,10 @@ interface RosbagOverviewProps {
         };
     };
     selectedTopics?: string[];
+    availableImageTopics: { [model: string]: { [rosbag: string]: string[] } };
 }
 
-const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic, selectedTopics }) => {
+const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksPerTopic, selectedTopics, availableImageTopics }) => {
     const { openExportWithPreselection } = useExportPreselection();
     const PREVIEW_W = 240; // fixed preview width in px
     const PREVIEW_HALF = PREVIEW_W / 2;
@@ -53,37 +54,15 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
     const [expandedModels, setExpandedModels] = useState<{ [key: string]: boolean }>({});
 
     useEffect(() => {
-        const fetchTopics = async () => {
-            try {
-                const response = await axios.get('/api/get-available-image-topics', {
-                    params: {
-                        models: models,
-                        rosbags: rosbags
-                    },
-                    paramsSerializer: params => {
-                        const searchParams = new URLSearchParams();
-                        params.models.forEach((m: string) => searchParams.append('models', m));
-                        params.rosbags.forEach((r: string) => searchParams.append('rosbags', r));
-                        return searchParams.toString();
-                    }
-                });
-
-                const data = response.data.availableTopics || {};
-                // Sort topics for each model/rosbag combination
-                const sortedData: typeof data = {};
-                for (const model in data) {
-                    sortedData[model] = {};
-                    for (const rosbag in data[model]) {
-                        sortedData[model][rosbag] = sortTopics(data[model][rosbag] || []);
-                    }
-                }
-                setTopics(sortedData);
-            } catch (error) {
-                console.error('Failed to fetch topics:', error);
+        const sortedData: { [model: string]: { [rosbag: string]: string[] } } = {};
+        for (const model in availableImageTopics) {
+            sortedData[model] = {};
+            for (const rosbag in availableImageTopics[model]) {
+                sortedData[model][rosbag] = sortTopics(availableImageTopics[model][rosbag] || []);
             }
-        };
-        fetchTopics();
-    }, [rosbags, models]);
+        }
+        setTopics(sortedData);
+    }, [availableImageTopics]);
 
     // Clear fetched mappings when rosbags/models change (separate effect to avoid double-fetch)
     useEffect(() => {
