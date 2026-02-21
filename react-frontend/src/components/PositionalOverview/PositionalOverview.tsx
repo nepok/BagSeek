@@ -636,12 +636,23 @@ const PositionalOverview: React.FC = () => {
   const [allPoints, setAllPoints] = useState<RosbagPoint[]>([]);
   const [loadingAllPoints, setLoadingAllPoints] = useState<boolean>(false);
   const [allPointsLoaded, setAllPointsLoaded] = useState<boolean>(false);
-  const [showAllRosbags, setShowAllRosbags] = useState<boolean>(false);
-  const [showMcaps, setShowMcaps] = useState<boolean>(false);
+  const [showAllRosbags, setShowAllRosbags] = useState<boolean>(() => sessionStorage.getItem('__MapShowAllRosbags') === 'true');
+  const [showMcaps, setShowMcaps] = useState<boolean>(() => sessionStorage.getItem('__MapShowMcaps') === 'true');
+
+  useEffect(() => { sessionStorage.setItem('__MapShowAllRosbags', String(showAllRosbags)); }, [showAllRosbags]);
+  useEffect(() => { sessionStorage.setItem('__MapShowMcaps', String(showMcaps)); }, [showMcaps]);
+
   const [mcapLocationPoints, setMcapLocationPoints] = useState<McapLocationPoint[]>([]);
   const [availableMcaps, setAvailableMcaps] = useState<McapInfo[]>([]);
   const [mcapRanges, setMcapRanges] = useState<McapRangeMeta[]>([]);
   const [selectedMcapIndex, setSelectedMcapIndex] = useState<number>(0);
+
+  useEffect(() => {
+    if (!showMcaps || availableMcaps.length === 0) return;
+    const rosbagName = rosbags[selectedIndex]?.name;
+    if (!rosbagName) return;
+    sessionStorage.setItem(`__MapMcapIndex_${rosbagName}`, String(selectedMcapIndex));
+  }, [selectedMcapIndex, showMcaps, availableMcaps, rosbags, selectedIndex]);
   const [expandedLocation, setExpandedLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [loadingMcaps, setLoadingMcaps] = useState<boolean>(false);
   const mcapPillRef = useRef<HTMLDivElement | null>(null);
@@ -1190,7 +1201,9 @@ const PositionalOverview: React.FC = () => {
           setMcapLocationPoints(newPoints);
           setAvailableMcaps(newMcaps);
           setMcapRanges(ranges);
-          setSelectedMcapIndex(0);
+          const cachedIdx = sessionStorage.getItem(`__MapMcapIndex_${selected.name}`);
+          const parsed = cachedIdx !== null ? parseInt(cachedIdx, 10) : 0;
+          setSelectedMcapIndex(!isNaN(parsed) ? Math.min(Math.max(0, parsed), Math.max(0, newMcaps.length - 1)) : 0);
         }
       } catch (fetchError) {
         if (!cancelled) {
@@ -2634,6 +2647,14 @@ const PositionalOverview: React.FC = () => {
     }
   }, [loadingAllPoints, allPointsLoaded]);
 
+  // Restore "show all visited locations" on mount when session storage has it enabled
+  useEffect(() => {
+    if (showAllRosbags) {
+      fetchAllPoints();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selectedRosbag = rosbags[selectedIndex] ?? null;
 
   return (
@@ -2675,31 +2696,21 @@ const PositionalOverview: React.FC = () => {
               position: 'absolute',
               top: 16,
               left: '50%',
-              zIndex: 1300,
-              px: 3,
-              py: 1.5,
-              borderRadius: 2,
-              backgroundColor: 'rgba(18, 18, 18, 0.95)',
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              backdropFilter: 'blur(8px)',
               transform: 'translateX(-50%)',
-              animation: 'slideDown 0.3s ease-out',
-              '@keyframes slideDown': {
-                '0%': {
-                  transform: 'translateX(-50%) translateY(-100%)',
-                  opacity: 0,
-                },
-                '100%': {
-                  transform: 'translateX(-50%) translateY(0)',
-                  opacity: 1,
-                },
-              },
+              zIndex: 1300,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 2,
+              py: 1,
+              borderRadius: 999,
+              backgroundColor: 'rgba(18, 18, 18, 0.92)',
+              boxShadow: '0 6px 16px rgba(0, 0, 0, 0.35)',
+              color: '#fff',
             }}
           >
-            <Typography variant="body2" sx={{ color: '#fff', fontWeight: 500 }}>
-              Computing overlaps...
-            </Typography>
+            <CircularProgress size={16} color="inherit" />
+            <Typography variant="body2">Computing overlaps…</Typography>
           </Box>
         )}
 
@@ -2728,10 +2739,12 @@ const PositionalOverview: React.FC = () => {
           sx={{
             position: 'absolute',
             top: 16,
-            left: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
             zIndex: 1200,
             display: 'flex',
             flexDirection: 'column',
+            alignItems: 'center',
             gap: 1,
             maxWidth: 'min(340px, 80vw)',
           }}
@@ -3321,27 +3334,6 @@ const PositionalOverview: React.FC = () => {
                 />
               </Box>
             </Box>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={!selectedRosbag}
-              startIcon={<OpenInNewIcon sx={{ fontSize: '12px !important' }} />}
-              onClick={() => {
-                if (!selectedRosbag) return;
-                const mcapId = availableMcaps[selectedMcapIndex]?.id ?? '0';
-                // Store the highlighted MCAP IDs so Explore can show them as slider marks.
-                // Prefer polygon-overlap IDs; fall back to just the currently selected MCAP.
-                const highlightIds =
-                  mcapOverlapIds && mcapOverlapIds.size > 0
-                    ? Array.from(mcapOverlapIds)
-                    : [mcapId];
-                sessionStorage.setItem('__BagSeekMapMcapHighlight', JSON.stringify(highlightIds));
-                navigate(`/explore?rosbag=${encodeURIComponent(selectedRosbag.name)}&mcap=${encodeURIComponent(mcapId)}`);
-              }}
-              sx={{ fontSize: '8pt', py: 0.25, px: 1, borderRadius: 1, alignSelf: 'flex-start' }}
-            >
-              Open in Explore
-            </Button>
           </Box>
 
           {/* Separator */}
@@ -3667,6 +3659,24 @@ const PositionalOverview: React.FC = () => {
               >
                 {applyingToSearch ? 'Computing...' : isRestoringPolygons ? 'Restoring...' : 'Apply to Search'}
               </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  disabled={!selectedRosbag}
+                  onClick={() => {
+                    if (!selectedRosbag) return;
+                    const mcapId = availableMcaps[selectedMcapIndex]?.id ?? '0';
+                    const highlightIds =
+                      mcapOverlapIds && mcapOverlapIds.size > 0
+                        ? Array.from(mcapOverlapIds)
+                        : [mcapId];
+                    sessionStorage.setItem('__BagSeekMapMcapHighlight', JSON.stringify(highlightIds));
+                    navigate(`/explore?rosbag=${encodeURIComponent(selectedRosbag.name)}&mcap=${encodeURIComponent(mcapId)}`);
+                  }}
+                  sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
+                >
+                  Open in Explore
+                </Button>
                 <Button
                   size="small"
                   variant="outlined"
