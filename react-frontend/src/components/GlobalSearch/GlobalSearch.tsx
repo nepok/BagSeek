@@ -419,12 +419,15 @@ const GlobalSearch: React.FC = () => {
     const getBasename = (fullPath: string) => fullPath.split(/[\\/]/).pop() ?? fullPath;
     
     // Compute filtered rosbags based on positional filter
-    const filteredAvailableRosbags = positionallyFilteredRosbags
-        ? availableRosbags.filter(rosbagPath => {
-            const name = extractRosbagName(rosbagPath);
-            return positionallyFilteredRosbags.some(f => extractRosbagName(f) === name);
-          })
-        : availableRosbags;
+    const filteredAvailableRosbags = useMemo(
+        () => positionallyFilteredRosbags
+            ? availableRosbags.filter(rosbagPath => {
+                const name = extractRosbagName(rosbagPath);
+                return positionallyFilteredRosbags.some(f => extractRosbagName(f) === name);
+              })
+            : availableRosbags,
+        [availableRosbags, positionallyFilteredRosbags]
+    );
 
     // Compute all unique topics from availableImageTopics, sorted by topics.ts priority
     const allTopics = useMemo(() => {
@@ -779,16 +782,16 @@ const GlobalSearch: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [positionallyFilteredRosbags]);
 
-    // Fetch available image topics (independent of selection - uses all available models/rosbags)
+    // Fetch available image topics for the currently relevant rosbags (positionally filtered if active)
     useEffect(() => {
-        if (availableModels.length === 0 || availableRosbags.length === 0) {
+        if (availableModels.length === 0 || filteredAvailableRosbags.length === 0) {
             setAvailableImageTopics({});
             setTopicTypes({});
             return;
         }
         const params = new URLSearchParams();
         availableModels.forEach(m => params.append('models', m));
-        availableRosbags.forEach(r => params.append('rosbags', extractRosbagName(r)));
+        filteredAvailableRosbags.forEach(r => params.append('rosbags', extractRosbagName(r)));
         fetch(`/api/get-available-image-topics?${params.toString()}`)
             .then(res => res.json())
             .then(data => {
@@ -796,7 +799,7 @@ const GlobalSearch: React.FC = () => {
                 setTopicTypes(data.topicTypes || {});
             })
             .catch(err => console.error('Failed to fetch image topics:', err));
-    }, [availableModels, availableRosbags]);
+    }, [availableModels, filteredAvailableRosbags]);
 
     // Helper function to start polling - called directly from search handler
     const startStatusPolling = () => {
@@ -1757,6 +1760,7 @@ const GlobalSearch: React.FC = () => {
                       searchDone={searchDone}
                       marksPerTopic={marksPerTopic}
                       selectedTopics={selectedTopics}
+                      availableImageTopics={availableImageTopics}
                     />
                   )}
                 </Box>
