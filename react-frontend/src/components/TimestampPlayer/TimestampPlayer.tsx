@@ -313,7 +313,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
             cursor: 'pointer',
             userSelect: 'none',
             fontFamily: 'monospace',
-            minWidth: 105,
+            flexShrink: 0,
           }}
         >
           {getDurationDisplay()}
@@ -343,6 +343,8 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
           ),
         }}
         sx={{
+          flex: '1 1 auto',
+          minWidth: 0,
           marginRight: '12px',
           marginLeft: '10px',
         }}
