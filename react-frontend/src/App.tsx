@@ -88,6 +88,7 @@ function App() {
   const pendingCanvasRef = useRef<{ root: Node; metadata: { [id: number]: NodeMetadata } } | null>(null);
   const pendingRosbagParamRef = useRef<string | null>(null);
   const isUpdatingTimestampRef = useRef<boolean>(false); // Track if we're updating timestamp from user action
+  const switchingToRosbagRef = useRef<string | null>(null); // Track rosbag currently being switched to (sync guard against double-switch)
 
   // Helpers to encode/decode canvas JSON into query param
   const encodeCanvas = (canvas: { root: Node; metadata: { [id: number]: NodeMetadata } }) => {
@@ -375,8 +376,10 @@ function App() {
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
       if (!rosbagParam) return;
-      // Compare rosbag names to avoid full-path vs name mismatches
+      // Already matches current state or already switching to this rosbag — skip
       if (getRosbagName(selectedRosbag) === rosbagParam) return;
+      if (switchingToRosbagRef.current === rosbagParam) return;
+      switchingToRosbagRef.current = rosbagParam;
       try {
         const res = await fetch('/api/get-file-paths');
         const data = await res.json();
@@ -396,6 +399,8 @@ function App() {
         }
       } catch (e) {
         console.error('Failed to set rosbag from URL', e);
+      } finally {
+        switchingToRosbagRef.current = null;
       }
     };
 
@@ -539,6 +544,9 @@ function App() {
       const tsIndex = mcapBoundaries[pendingMcapRef.current] ?? mcapBoundaries[0];
       pendingMcapRef.current = null;
       pendingTsRef.current = tsIndex;
+      // Remove mcap from URL immediately so the ts URL update doesn't re-trigger
+      // the URL params effect with mcap still present, which would cause a second call.
+      updateSearchParams({ mcap: null });
       if (timestampCount > 0) {
         const clamped = Math.max(0, Math.min(tsIndex, timestampCount - 1));
         pendingTsRef.current = null;
