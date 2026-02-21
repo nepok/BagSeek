@@ -8,11 +8,51 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 import pandas as pd
 import pyarrow.parquet as pq
-from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS, LOOKUP_TABLES
+from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS, LOOKUP_TABLES, SUMMARIES_INDEX
 from ..state import get_selected_rosbag, get_aligned_data
 from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
 
 topics_bp = Blueprint('topics', __name__)
+
+
+def _summary_to_response(summary: dict) -> dict:
+    """Convert snake_case summary dict (from summaries.json) to camelCase API response."""
+    mcap_ranges = []
+    needs_ts_backfill = False
+    for r in summary.get('mcap_ranges', []):
+        entry = {
+            'startIndex': r['start_index'],
+            'mcapIdentifier': r['mcap_id'],
+            'count': r.get('count', 0),
+        }
+        if 'first_timestamp_ns' in r:
+            entry['firstTimestampNs'] = str(r['first_timestamp_ns'])
+        if 'last_timestamp_ns' in r:
+            entry['lastTimestampNs'] = str(r['last_timestamp_ns'])
+        else:
+            needs_ts_backfill = True
+        mcap_ranges.append(entry)
+
+    first_ts = summary.get('first_timestamp_ns')
+    last_ts = summary.get('last_timestamp_ns')
+    return {
+        'count': summary.get('total_count', 0),
+        'firstTimestampNs': str(first_ts) if first_ts is not None else None,
+        'lastTimestampNs': str(last_ts) if last_ts is not None else None,
+        'mcapRanges': mcap_ranges,
+        '_needsBackfill': needs_ts_backfill,
+    }
+
+
+def _read_global_summaries() -> dict:
+    """Load all rosbag entries from the global summaries.json, or {} on failure."""
+    if not SUMMARIES_INDEX.exists():
+        return {}
+    try:
+        with open(SUMMARIES_INDEX, 'r') as f:
+            return json.load(f).get('rosbags', {})
+    except Exception:
+        return {}
 
 
 @topics_bp.route('/api/get-topics-for-rosbag', methods=['GET'])
@@ -87,6 +127,8 @@ def get_available_rosbag_topics():
         return jsonify({'topics': {}}), 200
 
 
+IMAGE_MSG_TYPES = {'sensor_msgs/msg/CompressedImage', 'sensor_msgs/msg/Image'}
+
 @topics_bp.route('/api/get-available-image-topics', methods=['GET'])
 def get_available_image_topics():
     try:
@@ -99,51 +141,91 @@ def get_available_image_topics():
         results = {}
         all_topic_types = {}
 
-        for model_param in model_params:
-            model_path = os.path.join(ADJACENT_SIMILARITIES, model_param)
-            if not os.path.isdir(model_path):
+        for rosbag_param in rosbag_params:
+            rosbag_name = extract_rosbag_name_from_path(rosbag_param)
+            topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
+            if not os.path.exists(topics_json_path):
+                continue
+            try:
+                with open(topics_json_path, 'r') as f:
+                    topics_data = json.load(f)
+                topics_dict = topics_data.get("topics", {})
+                if not isinstance(topics_dict, dict):
+                    continue
+            except Exception as e:
+                logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
                 continue
 
-            model_entry = {}
-            for rosbag_param in rosbag_params:
-                rosbag_name = extract_rosbag_name_from_path(rosbag_param)
-                rosbag_path = os.path.join(model_path, rosbag_name)
-                if not os.path.isdir(rosbag_path):
-                    continue
+            image_topics = [t for t, msg_type in topics_dict.items() if msg_type in IMAGE_MSG_TYPES]
+            for t in image_topics:
+                if t not in all_topic_types:
+                    all_topic_types[t] = topics_dict[t]
 
-                topics = []
-                for topic in os.listdir(rosbag_path):
-                    topics.append(topic.replace("__", "/"))
-
-                # Try to load topic types from topics JSON file
-                topic_types = {}
-                try:
-                    topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
-                    if os.path.exists(topics_json_path):
-                        with open(topics_json_path, 'r') as f:
-                            topics_data = json.load(f)
-                            topics_dict = topics_data.get("topics", {})
-                            if isinstance(topics_dict, dict):
-                                topic_types = topics_dict
-                except Exception as e:
-                    logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
-
-                # Accumulate topic types for response
-                for t in topics:
-                    if t in topic_types and t not in all_topic_types:
-                        all_topic_types[t] = topic_types[t]
-
-                # Return topics as-is (sorting is now handled in frontend)
-                model_entry[rosbag_name] = topics
-
-            if model_entry:
-                results[model_param] = model_entry
+            for model_param in model_params:
+                results.setdefault(model_param, {})[rosbag_name] = image_topics
 
         return jsonify({'availableTopics': results, 'topicTypes': all_topic_types}), 200
 
     except Exception as e:
-        logging.error(f"Error scanning adjacent similarities: {e}")
+        logging.error(f"Error getting available image topics: {e}")
         return jsonify({'availableTopics': {}}), 200
+
+    # --- Old implementation (directory scan) ---
+    # try:
+    #     model_params = request.args.getlist("models")
+    #     rosbag_params = request.args.getlist("rosbags")
+    #
+    #     if not model_params or not rosbag_params:
+    #         return jsonify({'availableTopics': {}}), 200
+    #
+    #     results = {}
+    #     all_topic_types = {}
+    #
+    #     for model_param in model_params:
+    #         model_path = os.path.join(ADJACENT_SIMILARITIES, model_param)
+    #         if not os.path.isdir(model_path):
+    #             continue
+    #
+    #         model_entry = {}
+    #         for rosbag_param in rosbag_params:
+    #             rosbag_name = extract_rosbag_name_from_path(rosbag_param)
+    #             rosbag_path = os.path.join(model_path, rosbag_name)
+    #             if not os.path.isdir(rosbag_path):
+    #                 continue
+    #
+    #             topics = []
+    #             for topic in os.listdir(rosbag_path):
+    #                 topics.append(topic.replace("__", "/"))
+    #
+    #             # Try to load topic types from topics JSON file
+    #             topic_types = {}
+    #             try:
+    #                 topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
+    #                 if os.path.exists(topics_json_path):
+    #                     with open(topics_json_path, 'r') as f:
+    #                         topics_data = json.load(f)
+    #                         topics_dict = topics_data.get("topics", {})
+    #                         if isinstance(topics_dict, dict):
+    #                             topic_types = topics_dict
+    #             except Exception as e:
+    #                 logging.debug(f"Could not load topic types for {rosbag_name}: {e}")
+    #
+    #             # Accumulate topic types for response
+    #             for t in topics:
+    #                 if t in topic_types and t not in all_topic_types:
+    #                     all_topic_types[t] = topic_types[t]
+    #
+    #             # Return topics as-is (sorting is now handled in frontend)
+    #             model_entry[rosbag_name] = topics
+    #
+    #         if model_entry:
+    #             results[model_param] = model_entry
+    #
+    #     return jsonify({'availableTopics': results, 'topicTypes': all_topic_types}), 200
+    #
+    # except Exception as e:
+    #     logging.error(f"Error scanning adjacent similarities: {e}")
+    #     return jsonify({'availableTopics': {}}), 200
 
 
 @topics_bp.route('/api/get-timestamp-summary', methods=['GET'])
@@ -174,32 +256,13 @@ def get_timestamp_summary():
         logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: relative_rosbag_path=%s, rosbag_name=%s", relative_rosbag_path, rosbag_name)
         lookup_dir = Path(LOOKUP_TABLES) / rosbag_name
 
-        # Fast path: precomputed summary.json
-        summary_path = lookup_dir / 'summary.json'
-        logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: lookup_dir=%s, summary exists=%s", lookup_dir, summary_path.exists())
-        if summary_path.exists():
-            with open(summary_path, 'r') as f:
-                summary = json.load(f)
-
-            mcap_ranges = []
-            needs_ts_backfill = False
-            for r in summary.get('mcap_ranges', []):
-                entry = {
-                    'startIndex': r['start_index'],
-                    'mcapIdentifier': r['mcap_id'],
-                    'count': r.get('count', 0),
-                }
-                if 'first_timestamp_ns' in r:
-                    entry['firstTimestampNs'] = str(r['first_timestamp_ns'])
-                if 'last_timestamp_ns' in r:
-                    entry['lastTimestampNs'] = str(r['last_timestamp_ns'])
-                else:
-                    needs_ts_backfill = True
-                mcap_ranges.append(entry)
-
-            # Backfill per-MCAP timestamps from parquet metadata if summary.json is old
-            if needs_ts_backfill:
-                for entry in mcap_ranges:
+        # Fast path: global summaries.json (single shared file, written by preprocessing)
+        all_summaries = _read_global_summaries()
+        if rosbag_name in all_summaries:
+            resp = _summary_to_response(all_summaries[rosbag_name])
+            needs_backfill = resp.pop('_needsBackfill', False)
+            if needs_backfill:
+                for entry in resp['mcapRanges']:
                     if 'firstTimestampNs' in entry:
                         continue
                     pf_path = lookup_dir / f"{entry['mcapIdentifier']}.parquet"
@@ -223,18 +286,8 @@ def get_timestamp_summary():
                             entry['lastTimestampNs'] = str(int(f_max))
                     except Exception:
                         pass
-
-            first_ts = summary.get('first_timestamp_ns')
-            last_ts = summary.get('last_timestamp_ns')
-            logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: returning %d mcapRanges for %s (IDs: %s)",
-                            len(mcap_ranges), rosbag_name,
-                            [r.get('mcapIdentifier') for r in mcap_ranges[:5]])
-            return jsonify({
-                'count': summary.get('total_count', 0),
-                'firstTimestampNs': str(first_ts) if first_ts is not None else None,
-                'lastTimestampNs': str(last_ts) if last_ts is not None else None,
-                'mcapRanges': mcap_ranges,
-            }), 200
+            logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: returning %d mcapRanges for %s (global)", len(resp['mcapRanges']), rosbag_name)
+            return jsonify(resp), 200
 
         # Fallback: read pyarrow parquet metadata (file footers only)
         if not lookup_dir.exists():
@@ -309,6 +362,26 @@ def get_timestamp_summary():
 
     except Exception as e:
         logging.error(f"Error in get_timestamp_summary: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@topics_bp.route('/api/get-all-summaries', methods=['GET'])
+def get_all_summaries():
+    """Return timestamp summaries for every rosbag in a single response.
+
+    Reads the global summaries.json written by preprocessing.
+    Response: { rosbags: { rosbag_name: { count, firstTimestampNs, lastTimestampNs, mcapRanges } } }
+    """
+    try:
+        all_summaries = _read_global_summaries()
+        result = {}
+        for rosbag_name, summary in all_summaries.items():
+            resp = _summary_to_response(summary)
+            resp.pop('_needsBackfill', None)  # internal flag, not for clients
+            result[rosbag_name] = resp
+        return jsonify({'rosbags': result}), 200
+    except Exception as e:
+        logging.error(f"Error in get_all_summaries: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 

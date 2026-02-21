@@ -24,14 +24,31 @@ _ALIGNED_DATA: pd.DataFrame | None = None
 
 
 def get_aligned_data() -> pd.DataFrame | None:
-    """Get or initialize ALIGNED_DATA (thread-safe). Triggers lazy load if needed."""
+    """Get or initialize ALIGNED_DATA (thread-safe). Triggers lazy load if needed.
+
+    The NAS/disk I/O happens OUTSIDE the lock so that set_aligned_data(None) is never
+    blocked by a long-running Parquet read from another thread.
+    """
     global _ALIGNED_DATA
     with _aligned_data_lock:
-        if _ALIGNED_DATA is None and _SELECTED_ROSBAG is not None:
-            # Lazy import to avoid circular dependency
-            from .utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
-            rosbag_name = extract_rosbag_name_from_path(str(_SELECTED_ROSBAG))
-            _ALIGNED_DATA = load_lookup_tables_for_rosbag(rosbag_name)
+        if _ALIGNED_DATA is not None:
+            return _ALIGNED_DATA
+        if _SELECTED_ROSBAG is None:
+            return None
+        # Snapshot the rosbag path before releasing the lock
+        rosbag_snapshot = str(_SELECTED_ROSBAG)
+
+    # Load data WITHOUT holding the lock so other threads (e.g. set_aligned_data)
+    # are not blocked during potentially slow NAS reads.
+    from .utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
+    rosbag_name = extract_rosbag_name_from_path(rosbag_snapshot)
+    loaded = load_lookup_tables_for_rosbag(rosbag_name)
+
+    # Re-acquire lock to store result only if nothing else has updated _ALIGNED_DATA
+    # in the meantime (e.g. a concurrent set_aligned_data(None) for a rosbag switch).
+    with _aligned_data_lock:
+        if _ALIGNED_DATA is None:
+            _ALIGNED_DATA = loaded
         return _ALIGNED_DATA
 
 

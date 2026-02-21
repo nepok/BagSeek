@@ -33,6 +33,7 @@ OTHER_MODELS_STR = _require_env("OTHER_MODELS")
 # Relative path environment variables (appended to BASE)
 IMAGE_TOPIC_PREVIEWS_STR = _require_env("IMAGE_TOPIC_PREVIEWS")
 POSITIONAL_LOOKUP_TABLE_STR = _require_env("POSITIONAL_LOOKUP_TABLE")
+METADATA_DIR_STR = _require_env("METADATA_DIR")
 LOOKUP_TABLES_STR = _require_env("LOOKUP_TABLES")
 TOPICS_STR = _require_env("TOPICS")
 CANVASES_FILE_STR = _require_env("CANVASES_FILE")
@@ -53,6 +54,7 @@ IMAGE_TOPIC_PREVIEWS = Path(BASE_STR + IMAGE_TOPIC_PREVIEWS_STR)
 POSITIONAL_LOOKUP_TABLE = Path(BASE_STR + POSITIONAL_LOOKUP_TABLE_STR)
 POSITIONAL_BOUNDARIES = POSITIONAL_LOOKUP_TABLE.parent / "positional_boundaries.json"
 
+METADATA_DIR = Path(BASE_STR + METADATA_DIR_STR)
 LOOKUP_TABLES = Path(BASE_STR + LOOKUP_TABLES_STR)
 TOPICS = Path(BASE_STR + TOPICS_STR)
 
@@ -87,6 +89,9 @@ FILE_PATH_CACHE_TTL_SECONDS = 3600  # 1 hour - index file is the source of truth
 
 # Index file for valid rosbags (written by preprocessing, read by API)
 VALID_ROSBAGS_INDEX = Path(BASE_STR) / "valid_rosbags.json"
+
+# Global summaries file: all rosbag timestamp summaries in one place
+SUMMARIES_INDEX = METADATA_DIR / "summaries.json"
 
 # Gemma model for prompt enhancement (optional - requires HuggingFace auth)
 try:

@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from flask import Blueprint, jsonify, request
@@ -57,6 +58,15 @@ def post_file_paths():
         SEARCHED_ROSBAGS.clear()
         SEARCHED_ROSBAGS.append(path_value)  # Reset searched rosbags to the selected one
         logging.warning(SEARCHED_ROSBAGS)
+
+        # Pre-warm aligned data in background so the first set-reference-timestamp call
+        # is fast (otherwise it would trigger a slow NAS read on-demand).
+        def _prewarm_aligned_data():
+            from ..state import get_aligned_data
+            get_aligned_data()
+
+        threading.Thread(target=_prewarm_aligned_data, daemon=True).start()
+
         return jsonify({"message": f"File path updated successfully to {path_value}."}), 200
 
     except Exception as e:
