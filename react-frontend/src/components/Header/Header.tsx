@@ -99,7 +99,7 @@ const formatNsToTime = (ns: string | null): string => {
   if (!ns) return '';
   try {
     const ms = Number(BigInt(ns) / BigInt(1_000_000));
-    return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
   } catch { return ''; }
 };
 
@@ -139,26 +139,22 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
     }));
   }, [canvasList]);
 
-  // Fetch metadata for a list of paths and merge into rosbagMeta state
-  const fetchMetaForPaths = async (paths: string[], existingMeta: Record<string, RosbagMeta>) => {
-    const newPaths = paths.filter(p => !(p in existingMeta));
-    if (newPaths.length === 0) return;
-    const entries = await Promise.all(
-      newPaths.map(async (p) => {
-        try {
-          const res = await fetch(`/api/get-timestamp-summary?rosbag=${encodeURIComponent(extractRosbagName(p))}`);
-          const d = await res.json();
-          return [p, {
-            mcapCount: (d.mcapRanges ?? []).length,
-            firstTimestampNs: d.firstTimestampNs ?? null,
-            lastTimestampNs: d.lastTimestampNs ?? null,
-          }] as [string, RosbagMeta];
-        } catch {
-          return [p, { mcapCount: 0, firstTimestampNs: null, lastTimestampNs: null }] as [string, RosbagMeta];
-        }
-      })
-    );
-    setRosbagMeta(prev => ({ ...prev, ...Object.fromEntries(entries) }));
+  // Fetch all rosbag summaries in one call and populate rosbagMeta for the given paths
+  const fetchAllSummaries = async (paths: string[]) => {
+    try {
+      const r = await fetch('/api/get-all-summaries');
+      const data = await r.json();
+      const allSummaries: Record<string, any> = data.rosbags ?? {};
+      const newMeta: Record<string, RosbagMeta> = {};
+      for (const path of paths) {
+        const name = extractRosbagName(path);
+        const s = allSummaries[name];
+        newMeta[path] = s
+          ? { mcapCount: (s.mcapRanges ?? []).length, firstTimestampNs: s.firstTimestampNs ?? null, lastTimestampNs: s.lastTimestampNs ?? null }
+          : { mcapCount: 0, firstTimestampNs: null, lastTimestampNs: null };
+      }
+      setRosbagMeta(newMeta);
+    } catch { /* silently ignore */ }
   };
 
   // Stale-while-revalidate: show cached list immediately, then silently refresh against disk
@@ -169,40 +165,34 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
     const load = async () => {
       // 1. Show cached list right away
       setLoadingRosbagList(true);
+      let initialPaths: string[] = [];
       try {
         const r = await fetch('/api/get-file-paths');
         const data = await r.json();
-        const paths: string[] = data.paths ?? [];
+        initialPaths = data.paths ?? [];
         if (!cancelled) {
-          setRosbagList(paths);
+          setRosbagList(initialPaths);
           setLoadingRosbagList(false);
-          fetchMetaForPaths(paths, {});
         }
       } catch {
         if (!cancelled) setLoadingRosbagList(false);
       }
 
-      // 2. Background rescan against disk — silently update if list changed
+      // 2. Fetch all summaries in one request
+      if (!cancelled) await fetchAllSummaries(initialPaths);
+
+      // 3. Background rescan against disk — silently update list if changed
       try {
         const r = await fetch('/api/refresh-file-paths', { method: 'POST' });
         const data = await r.json();
         const freshPaths: string[] = data.paths ?? [];
         if (!cancelled) {
-          setRosbagList(prev => {
-            const prevSorted = [...prev].sort().join('\n');
-            const freshSorted = [...freshPaths].sort().join('\n');
-            if (prevSorted === freshSorted) return prev;
-            // Fetch metadata only for paths that are new
-            setRosbagMeta(existingMeta => {
-              fetchMetaForPaths(freshPaths, existingMeta);
-              // Remove stale entries
-              const kept = Object.fromEntries(
-                Object.entries(existingMeta).filter(([k]) => freshPaths.includes(k))
-              );
-              return kept;
-            });
-            return freshPaths;
-          });
+          const prevSorted = [...initialPaths].sort().join('\n');
+          const freshSorted = [...freshPaths].sort().join('\n');
+          if (prevSorted !== freshSorted) {
+            setRosbagList(freshPaths);
+            await fetchAllSummaries(freshPaths);
+          }
         }
       } catch { /* silently ignore background refresh errors */ }
     };
@@ -451,7 +441,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         {viewMode === 'explore' && (
           <>
             {/* Rosbag selector Popper */}
-            <Popper open={showRosbagPopper} anchorEl={rosbagIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '600px' }}>
+            <Popper open={showRosbagPopper} anchorEl={rosbagIconRef.current} placement="bottom-end" sx={{ zIndex: 10000, width: '630px' }}>
               <Paper sx={{ padding: '8px', background: '#202020', borderRadius: '8px', maxHeight: '50vh', overflowY: 'auto' }}>
                 {loadingRosbagList ? (
                   <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
@@ -491,7 +481,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
                       {/* Colored dot */}
                       <Box sx={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: color, flexShrink: 0 }} />
                       {/* Rosbag name */}
-                      <Typography sx={{ fontSize: '0.8rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <Typography sx={{ fontSize: '0.8rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left' }}>
                         {displayName}
                       </Typography>
                       {/* Pills */}
