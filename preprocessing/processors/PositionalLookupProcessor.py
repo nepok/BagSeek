@@ -151,22 +151,33 @@ class PositionalLookupProcessor(HybridProcessor):
     def is_mcap_completed(self, context: McapProcessingContext) -> bool:
         """
         Check if a specific MCAP is completed by checking completion.json.
-        
+
         For PositionalLookupProcessor, completion.json is the source of truth since
         we cannot reliably determine if a specific MCAP was processed by looking at
         the positional_lookup_table.json (all MCAPs write to the same aggregated file).
-        
+
         Args:
             context: MCAP processing context
-            
+
         Returns:
             True if this MCAP is marked as completed in completion.json, False otherwise
         """
         rosbag_name = str(context.get_relative_path())
         mcap_name = context.get_mcap_name()
-        
-        # Use new unified interface
         return self.completion_tracker.is_mcap_completed(rosbag_name, mcap_name)
+
+    def is_mcap_complete(self, context: McapProcessingContext) -> bool:
+        """Uniform interface — delegates to is_mcap_completed."""
+        return self.is_mcap_completed(context)
+
+    def is_boundaries_complete(self, rosbag_name: str) -> bool:
+        """Check if positional boundaries have been computed for this rosbag."""
+        return self.boundaries_tracker.is_rosbag_completed(rosbag_name)
+
+    def on_rosbag_complete(self, context) -> None:
+        """Generate boundaries from grid data if not already done (idempotent)."""
+        rosbag_name = str(context.get_relative_path())
+        self.ensure_boundaries(rosbag_name)
     
     def _verify_mcap_data_in_json(self, rosbag_name: str, mcap_id: str) -> bool:
         """
@@ -635,10 +646,18 @@ class PositionalLookupProcessor(HybridProcessor):
 
         location_data = lookup_data.get(rosbag_name)
         if not location_data:
+            # No position data for this rosbag (e.g. no GPS messages).
+            # Mark as completed so the pipeline doesn't retry on every run.
+            self.boundaries_tracker.mark_completed(
+                rosbag_name=rosbag_name,
+                status="completed",
+            )
+            self.logger.info(f"No position data for {rosbag_name} — marking boundaries as skipped")
             return False
 
         # _compute_and_write_boundaries writes the file AND marks completion.json
         self._compute_and_write_boundaries(rosbag_name, location_data)
+        self.logger.success(f"Computed boundaries for {rosbag_name}")
         return True
 
     def _round_to_grid(self, lat: float, lon: float) -> Tuple[float, float]:
