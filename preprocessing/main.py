@@ -11,7 +11,7 @@ Uses granular completion checking to skip already-processed work at multiple lev
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import sys
 
 # Add parent directory to path for imports
@@ -46,223 +46,9 @@ from preprocessing.processors import (
     AdjacentSimilaritiesPostprocessor,
 )
 
-# Import processor types for isinstance checks
-from preprocessing.abstract import McapProcessor, HybridProcessor
+from preprocessing.abstract import HybridProcessor
 
 
-# =============================================================================
-# COMPLETION CHECKING HELPERS
-# =============================================================================
-
-def is_rosbag_complete_for_mcap_processor(
-    processor: McapProcessor,
-    rosbag_name: str,
-    mcap_names: List[str]
-) -> bool:
-    """
-    Check if all MCAPs in a rosbag are complete for an MCAP-level processor.
-
-    First checks rosbag-level "status": "completed" (fast path).
-    Only falls back to MCAP-level checks if rosbag status is not complete.
-
-    Args:
-        processor: The MCAP processor to check
-        rosbag_name: Name of the rosbag
-        mcap_names: List of MCAP names in this rosbag
-
-    Returns:
-        True if all MCAPs are complete, False otherwise
-    """
-    if not mcap_names:
-        return True
-
-    tracker = processor.completion_tracker
-
-    # FAST PATH: Check rosbag-level completion status first
-    if tracker.is_rosbag_completed(rosbag_name):
-        return True
-
-    # SLOW PATH: Check each MCAP individually
-    for mcap_name in mcap_names:
-        if not tracker.is_mcap_completed(rosbag_name, mcap_name):
-            return False
-    return True
-
-
-def extract_mcap_id(mcap_filename: str) -> str:
-    """
-    Extract MCAP ID from filename.
-
-    Args:
-        mcap_filename: MCAP filename like "rosbag2_2025_07_23-07_29_39_0.mcap"
-
-    Returns:
-        MCAP ID like "0"
-    """
-    # Remove .mcap extension and get last underscore-separated part
-    stem = mcap_filename.replace('.mcap', '')
-    return stem.split('_')[-1]
-
-
-def construct_embeddings_mcap_name(rosbag_name: str, mcap_filename: str) -> str:
-    """
-    Construct the MCAP name as stored in embeddings completion.json.
-
-    The EmbeddingsProcessor stores mcap_name as: {rosbag_name}_{mcap_id}.mcap
-
-    Args:
-        rosbag_name: Rosbag relative path like "rosbag2_2025_07_25-12_17_25"
-        mcap_filename: MCAP filename like "rosbag2_2025_07_25-12_17_25_0.mcap"
-
-    Returns:
-        Constructed mcap name for completion tracking
-    """
-    mcap_id = extract_mcap_id(mcap_filename)
-    return f"{rosbag_name}_{mcap_id}.mcap"
-
-
-def is_rosbag_complete_for_embeddings(
-    processor: EmbeddingsProcessor,
-    rosbag_name: str,
-    mcap_names: List[str]
-) -> bool:
-    """
-    Check if all models and MCAPs are complete for EmbeddingsProcessor.
-
-    First checks rosbag-level "status": "completed" for each model (fast path).
-    Only falls back to MCAP-level checks if rosbag status is not complete.
-
-    Args:
-        processor: The embeddings processor
-        rosbag_name: Name of the rosbag
-        mcap_names: List of MCAP names in this rosbag
-
-    Returns:
-        True if all models have all MCAPs complete, False otherwise
-    """
-    if not mcap_names:
-        return True
-
-    tracker = processor.completion_tracker
-
-    # Check all models
-    for preprocess_id, models in processor.models_by_preprocess.items():
-        for model_dir_id, _, _, _ in models:
-            # FAST PATH: Check rosbag-level completion status first
-            if tracker.is_model_rosbag_completed(model_dir_id, rosbag_name):
-                continue  # This model+rosbag is complete
-
-            # SLOW PATH: Check each MCAP individually (only if rosbag not marked complete)
-            for mcap_filename in mcap_names:
-                mcap_name = construct_embeddings_mcap_name(rosbag_name, mcap_filename)
-                if not tracker.is_model_mcap_completed(model_dir_id, rosbag_name, mcap_name):
-                    return False
-    return True
-
-
-def get_incomplete_models_for_rosbag(
-    processor: EmbeddingsProcessor,
-    rosbag_name: str,
-    mcap_names: List[str]
-) -> List[str]:
-    """
-    Get list of models that have incomplete MCAPs for a rosbag.
-
-    First checks rosbag-level "status": "completed" for each model (fast path).
-
-    Args:
-        processor: The embeddings processor
-        rosbag_name: Name of the rosbag
-        mcap_names: List of MCAP names in this rosbag
-
-    Returns:
-        List of model IDs that need processing
-    """
-    incomplete_models = []
-    tracker = processor.completion_tracker
-
-    for preprocess_id, models in processor.models_by_preprocess.items():
-        for model_dir_id, _, _, _ in models:
-            # FAST PATH: Check rosbag-level completion status first
-            if tracker.is_model_rosbag_completed(model_dir_id, rosbag_name):
-                continue  # This model+rosbag is complete
-
-            # SLOW PATH: Check each MCAP individually
-            model_complete = True
-            for mcap_filename in mcap_names:
-                mcap_name = construct_embeddings_mcap_name(rosbag_name, mcap_filename)
-                if not tracker.is_model_mcap_completed(model_dir_id, rosbag_name, mcap_name):
-                    model_complete = False
-                    break
-            if not model_complete:
-                incomplete_models.append(model_dir_id)
-
-    return incomplete_models
-
-
-def is_rosbag_complete_for_adjacent_similarities(
-    processor: AdjacentSimilaritiesPostprocessor,
-    rosbag_name: str,
-    embeddings_dir: Path,
-    embeddings_need_work: bool = False
-) -> bool:
-    """
-    Check if all models and topics are complete for AdjacentSimilaritiesPostprocessor.
-
-    Args:
-        processor: The adjacent similarities processor
-        rosbag_name: Name of the rosbag
-        embeddings_dir: Directory containing embeddings
-        embeddings_need_work: If True, embeddings are being generated so similarities will need work
-
-    Returns:
-        True if all models/topics are complete, False otherwise
-    """
-    # If embeddings need work, similarities will also need work afterward
-    if embeddings_need_work:
-        return False
-
-    tracker = processor.completion_tracker
-
-    # Fast path: rosbag-level completion
-    if tracker.is_rosbag_completed(rosbag_name):
-        return True
-
-    # Check each model directory
-    if not embeddings_dir.exists():
-        return True  # No embeddings, nothing to process
-
-    found_any_embeddings = False
-    for model_path in embeddings_dir.iterdir():
-        if not model_path.is_dir():
-            continue
-
-        model_name = model_path.name
-        rosbag_path = model_path / rosbag_name
-        manifest_path = rosbag_path / "manifest.parquet"
-
-        if not manifest_path.exists():
-            continue  # No embeddings for this model/rosbag
-
-        found_any_embeddings = True
-
-        # Read manifest to get topics
-        try:
-            import pandas as pd
-            manifest = pd.read_parquet(manifest_path)
-            topics = manifest["topic"].unique()
-
-            for topic in topics:
-                if not tracker.is_model_topic_completed(model_name, rosbag_name, topic):
-                    return False
-        except Exception:
-            return False
-
-    # If no embeddings found at all, nothing to process
-    if not found_any_embeddings:
-        return True
-
-    return True
 
 
 def main():
@@ -295,7 +81,8 @@ def main():
     
     # Step 2: Timestamp Lookup
     timestamp_alignment_processor = TimestampAlignmentProcessor(
-        output_dir=config.lookup_tables_dir
+        output_dir=config.lookup_tables_dir,
+        metadata_dir=config.metadata_dir,
     )
     
     # Step 3: Positional Lookup
@@ -322,9 +109,6 @@ def main():
 
     logger.success("All processors initialized")
 
-    #rosbag_processors = []
-    #   topics_extraction_processor
-    #]
     # Separate processors by type
     mcap_processors = [
         timestamp_alignment_processor,
@@ -376,22 +160,16 @@ def main():
         # ====================================================================
 
         # Check completion at rosbag level for each processor type
-        topics_complete = topics_extraction_processor.completion_tracker.is_rosbag_completed(rosbag_name)
-        summary_path = config.lookup_tables_dir / relative_path / "summary.json"
-        timestamp_complete = (
-            is_rosbag_complete_for_mcap_processor(timestamp_alignment_processor, rosbag_name, mcap_names)
-            and summary_path.exists()
-        )
-        positional_complete = positional_lookup_processor.completion_tracker.is_rosbag_completed(rosbag_name)
-        boundaries_complete = positional_lookup_processor.boundaries_tracker.is_rosbag_completed(rosbag_name)
-        previews_complete = image_topic_previews_processor.completion_tracker.is_rosbag_completed(rosbag_name)
-        embeddings_complete = is_rosbag_complete_for_embeddings(
-            embeddings_processor, rosbag_name, mcap_names
-        )
-        # Similarities needs work if embeddings needs work (will run after embeddings complete)
-        similarities_complete = is_rosbag_complete_for_adjacent_similarities(
-            adjacent_similarities_postprocessor, rosbag_name, config.embeddings_dir,
-            embeddings_need_work=not embeddings_complete
+        topics_complete      = topics_extraction_processor.is_rosbag_complete(rosbag_name, mcap_names)
+        timestamp_complete   = timestamp_alignment_processor.is_rosbag_complete(rosbag_name, mcap_names)
+        positional_complete  = positional_lookup_processor.is_rosbag_complete(rosbag_name, mcap_names)
+        boundaries_complete  = positional_lookup_processor.is_boundaries_complete(rosbag_name)
+        previews_complete    = image_topic_previews_processor.is_rosbag_complete(rosbag_name, mcap_names)
+        embeddings_complete  = embeddings_processor.is_rosbag_complete(rosbag_name, mcap_names)
+        # Similarities needs work when embeddings still need work (runs after embeddings)
+        similarities_complete = (
+            embeddings_complete and
+            adjacent_similarities_postprocessor.is_rosbag_complete(rosbag_name, mcap_names)
         )
 
         # Check if ALL processors are complete for this rosbag
@@ -427,9 +205,7 @@ def main():
         if not previews_complete:
             needs_work.append("previews")
         if not embeddings_complete:
-            incomplete_models = get_incomplete_models_for_rosbag(
-                embeddings_processor, rosbag_name, mcap_names
-            )
+            incomplete_models = embeddings_processor.get_incomplete_models(rosbag_name, mcap_names)
             if incomplete_models:
                 needs_work.append(f"embeddings({len(incomplete_models)} model(s))")
             else:
@@ -449,30 +225,26 @@ def main():
             # Load topics from existing file for timestamp alignment
             topics_file = config.topics_dir / relative_path.with_suffix('.json')
             if topics_file.exists():
-                import json
                 with open(topics_file, 'r') as f:
                     topics_data = json.load(f)
                 all_topics = list(topics_data.get("topics", {}).keys())
             else:
                 all_topics = []
 
-        # Determine which MCAP-level processors need to run for this rosbag
-        rosbag_needs_timestamps = not timestamp_complete
-        rosbag_needs_positional = not positional_complete
-        rosbag_needs_previews = not previews_complete
-        rosbag_needs_embeddings = not embeddings_complete
+        # Pass topic list to timestamp processor before MCAP loop
+        timestamp_alignment_processor.set_topics(all_topics)
 
         # Build list of processors that need MCAP iteration for this rosbag
         active_mcap_processors = []
         active_hybrid_processors = []
 
-        if rosbag_needs_timestamps:
+        if not timestamp_complete:
             active_mcap_processors.append(timestamp_alignment_processor)
-        if rosbag_needs_embeddings:
+        if not embeddings_complete:
             active_mcap_processors.append(embeddings_processor)
-        if rosbag_needs_positional:
+        if not positional_complete:
             active_hybrid_processors.append(positional_lookup_processor)
-        if rosbag_needs_previews:
+        if not previews_complete:
             active_hybrid_processors.append(image_topic_previews_processor)
 
         # Call process_rosbag_before_mcaps only for active hybrid processors
@@ -502,24 +274,7 @@ def main():
                 active_processors = []
 
                 for processor in active_mcap_processors + active_hybrid_processors:
-                    is_done = False
-
-                    if processor.name == "embeddings_processor":
-                        # EmbeddingsProcessor checks all models internally
-                        is_done = processor.is_mcap_completed(mcap_context)
-                    elif processor.name == "positional_lookup_processor":
-                        # Check MCAP-level completion
-                        is_done = processor.is_mcap_completed(mcap_context)
-                    elif processor.name == "timestamp_alignment_processor":
-                        is_done = processor.completion_tracker.is_mcap_completed(rosbag_name, mcap_name)
-                    elif processor.name == "image_topic_previews_processor":
-                        # Image previews are rosbag-level, but we still need to collect from MCAPs
-                        # Check if this MCAP is skippable (not in fencepost mapping)
-                        is_done = processor.is_mcap_skippable(mcap_context.get_mcap_id())
-                    else:
-                        is_done = processor.completion_tracker.is_mcap_completed(rosbag_name, mcap_name)
-
-                    if not is_done:
+                    if not processor.is_mcap_complete(mcap_context):
                         active_processors.append(processor)
 
                 # If no processors need to run, skip this MCAP entirely
@@ -593,17 +348,10 @@ def main():
                 # Process MCAP-level data after collection
                 for processor in active_processors:
                     if processor in active_mcap_processors:
-                        if processor == timestamp_alignment_processor:
-                            processor.process_mcap(mcap_context, all_topics)
-                        else:
-                            processor.process_mcap(mcap_context)
+                        processor.process_mcap(mcap_context)
                     elif isinstance(processor, HybridProcessor):
                         if hasattr(processor, 'process_mcap'):
                             processor.process_mcap(mcap_context)
-
-        # Write timestamp summary.json (if timestamps were processed or summary is missing)
-        if rosbag_needs_timestamps or not summary_path.exists():
-            timestamp_alignment_processor.finalize_rosbag(rosbag_context)
 
         # Call process_rosbag_after_mcaps only for active hybrid processors
         if active_hybrid_processors:
@@ -611,10 +359,16 @@ def main():
             for processor in active_hybrid_processors:
                 processor.process_rosbag_after_mcaps(rosbag_context)
 
-        # Ensure positional boundaries exist (generates from grid data, no MCAP re-reading)
-        if not boundaries_complete:
-            if positional_lookup_processor.ensure_boundaries(rosbag_name):
-                logger.info("  Generated positional boundaries from grid data")
+        # Post-loop hook: finalize summaries (timestamps), ensure boundaries, etc.
+        # Called after process_rosbag_after_mcaps so derived data (e.g. boundaries)
+        # can read freshly written grid data. Each processor is idempotent.
+        mcap_processors_all = [
+            topics_extraction_processor, timestamp_alignment_processor,
+            positional_lookup_processor, image_topic_previews_processor,
+            embeddings_processor,
+        ]
+        for processor in mcap_processors_all:
+            processor.on_rosbag_complete(rosbag_context)
 
         # Compute adjacent similarities for this rosbag (if needed)
         if not similarities_complete:
