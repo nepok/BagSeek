@@ -30,15 +30,17 @@ class TimestampAlignmentProcessor(McapProcessor):
     Operates at MCAP level - runs once per mcap file.
     """
     
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, metadata_dir: Path):
         """
         Initialize timestamp lookup step.
-        
+
         Args:
-            output_dir: Directory to write timestamp lookup files
+            output_dir: Directory to write per-rosbag timestamp lookup files (parquets)
+            metadata_dir: Directory for shared metadata files (summaries.json lives here)
         """
         super().__init__("timestamp_alignment_processor")
         self.output_dir = Path(output_dir)
+        self.metadata_dir = Path(metadata_dir)
         self.logger: PipelineLogger = get_logger()
         self.completion_tracker = CompletionTracker(self.output_dir, processor_name="timestamp_alignment_processor")
         # Internal state for collected timestamps
@@ -82,7 +84,43 @@ class TimestampAlignmentProcessor(McapProcessor):
     def get_output_path(self, context: McapProcessingContext) -> Path:
         """Get the expected output path for this context."""
         return self.output_dir / context.get_relative_path() / f"{context.get_mcap_id()}.parquet"
-    
+
+    def set_topics(self, all_topics: Optional[list[str]]) -> None:
+        """Set the expected topic list used during process_mcap for column ordering."""
+        self.all_topics = all_topics
+
+    def is_rosbag_complete(self, rosbag_name: str, mcap_names: list[str]) -> bool:
+        """Complete when all MCAPs have parquets AND summaries.json has an entry."""
+        if not super().is_rosbag_complete(rosbag_name, mcap_names):
+            return False
+        summaries_path = self.metadata_dir / "summaries.json"
+        if not summaries_path.exists():
+            return False
+        try:
+            import json as _json
+            with open(summaries_path) as f:
+                data = _json.load(f)
+            return rosbag_name in data.get("rosbags", {})
+        except Exception:
+            return False
+
+    def is_mcap_complete(self, context: McapProcessingContext) -> bool:
+        """Check MCAP-level completion via tracker."""
+        return self.completion_tracker.is_mcap_completed(
+            str(context.get_relative_path()), context.get_mcap_name()
+        )
+
+    def on_rosbag_complete(self, context) -> None:
+        """Write / refresh summaries.json after MCAP loop (idempotent).
+
+        Skipped if the rosbag is already recorded in summaries.json to avoid
+        redundant parquet reads and file writes on fully-complete rosbags.
+        """
+        rosbag_name = str(context.get_relative_path())
+        mcap_names = [f.name for f in context.mcap_files]
+        if not self.is_rosbag_complete(rosbag_name, mcap_names):
+            self.finalize_rosbag(context)
+
     # Processor method (called after MCAP iteration in main.py)
     def process_mcap(self, context: McapProcessingContext, all_topics: Optional[list[str]] = None) -> Dict:
         """
@@ -273,11 +311,11 @@ class TimestampAlignmentProcessor(McapProcessor):
 
             # Mark rosbag as complete for fast-path skipping on future runs
             rosbag_name = str(rosbag_context.get_relative_path())
-            summary_path = self.output_dir / rosbag_context.get_relative_path() / "summary.json"
+            global_path = self.metadata_dir / "summaries.json"
             self.completion_tracker.mark_completed(
                 rosbag_name=rosbag_name,
                 status="completed",
-                output_files=[summary_path],
+                output_files=[global_path],
             )
 
         # Reset for the next rosbag
@@ -330,7 +368,7 @@ class TimestampAlignmentProcessor(McapProcessor):
             self.logger.warning(f"Failed to read parquet metadata from {parquet_path}: {e}")
 
     def _write_summary(self, rosbag_context: RosbagProcessingContext) -> None:
-        """Write summary.json from accumulated mcap_summaries."""
+        """Extend global summaries.json with this rosbag's timestamp data."""
         sorted_summaries = sorted(self.mcap_summaries, key=lambda s: int(s["mcap_id"]))
 
         mcap_ranges = []
@@ -354,19 +392,34 @@ class TimestampAlignmentProcessor(McapProcessor):
                 global_last = last
             cumulative_index += summary["count"]
 
-        summary_data = {
+        rosbag_data = {
             "total_count": cumulative_index,
             "first_timestamp_ns": global_first,
             "last_timestamp_ns": global_last,
             "mcap_ranges": mcap_ranges,
         }
 
-        output_dir = self.output_dir / rosbag_context.get_relative_path()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        summary_path = output_dir / "summary.json"
+        rosbag_name = str(rosbag_context.get_relative_path())
+        global_path = self.metadata_dir / "summaries.json"
 
-        with open(summary_path, 'w') as f:
-            json.dump(summary_data, f, indent=2)
+        # Read-modify-write the shared global file
+        if global_path.exists():
+            try:
+                with open(global_path, 'r') as f:
+                    all_summaries = json.load(f)
+            except Exception:
+                all_summaries = {"rosbags": {}}
+        else:
+            all_summaries = {"rosbags": {}}
 
-        self.logger.success(f"Wrote timestamp summary to {summary_path}")
+        all_summaries["rosbags"][rosbag_name] = rosbag_data
+
+        # Atomic write: write to .tmp then rename to avoid partial reads
+        self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = global_path.with_suffix('.tmp')
+        with open(tmp_path, 'w') as f:
+            json.dump(all_summaries, f, indent=2)
+        tmp_path.rename(global_path)
+
+        self.logger.success(f"Updated global summaries.json with {rosbag_name}")
 
