@@ -1,127 +1,227 @@
-# 📦 BagSeek: Semantic Exploration of ROS Data
+# 📦 BagSeek: Filtering and Semantic Exploration of ROS Data
 
-**BagSeek** is an interactive tool for semantically exploring large-scale ROS 2 bag files. It allows users to search and filter image data using natural language queries powered by CLIP-based embeddings and FAISS indexing and export meaningful subsets of the data.
+**BagSeek** is an interactive tool for filtering and exploring large-scale ROS 2 bag files across three complementary views:
+
+- **MAP** — visualize GPS traces across all rosbags, filter by drawn polygon, and narrow down to relevant spatial regions before touching any data
+- **SEARCH** — filter and rank image frames using rosbag metadata, topic selection, time ranges and subsampling; semantic CLIP-based search with natural language adds a powerful semantic layer on top
+- **EXPLORE** — scrub through synchronized multi-panel sensor streams (images, point clouds, GPS, IMU) at any timestamp, guided by search heatmaps or spatial filter results
+
+All three views feed into each other and into a flexible **Export** pipeline, so the workflow from "I have 200 hours of rosbag data" to "here is the relevant slice" stays entirely local and privacy-preserving.
 
 ## 🧭 Key Features
 
-- Panel-based layout for synchronized visualization of image, pointcloud, positional, imu and metadata streams
-- Semantic image search via natural language prompts (CLIP + FAISS)
-- Model selection from multiple OpenCLIP variants (e.g. `ViT-B-16` trained by [*OpenAI*](https://openai.com/index/clip/), `ViT-H-14` trained with the [*LAION2B*](https://laion.ai/blog/laion-5b/) Dataset)
-- Export of filtered Rosbag segments based on timespans, topic, or data type
-- Color-coded layout configuration management
-- Offline-ready, privacy-preserving system
+**MAP**
+- Interactive Leaflet map showing positional traces and density heatmaps across all rosbags
+- Draw polygons to spatially filter rosbags; save and reuse polygon presets
+- Open matching MCAP segments directly in Explore or Export with a single click
+
+**SEARCH**
+- Filter by rosbag, topic, time range, and frame subsampling before any embedding lookup
+- Natural language queries matched against CLIP embeddings (e.g. *"cow on the field"*)
+- Switch between OpenCLIP variants (`ViT-B-16` / OpenAI, `ViT-H-14` / LAION2B, custom models); optional LLM-based prompt enhancement
+- Results ranked by similarity and visualized as a heatmap
+
+**EXPLORE**
+- Resizable, splittable panel layout for synchronized display of image, point cloud, GPS, IMU, and metadata streams (similar to Foxglove)
+- Timeline slider with search result heatmap or MAP polygon highlight strip
+- GPS panels overlay the full route heatmap of the rosbag alongside the current position
+- Save and load named canvas layouts
+
+**EXPORT**
+- Export rosbag segments filtered by time range, topic selection, MCAP range, or semantic search results
+- Topic presets for quickly reapplying common topic selections
+- Supports exporting rosbags in MCAP format or exporting raw data (.jpeg, .pc, .json, ...)
+
+**General**
+- All three views feed into Export and into each other via deep-links (e.g. MAP → Explore, Search → Explore)
+- Offline-ready and privacy-preserving — all inference runs locally, no data leaves the machine
 
 ## 📸 Example Use Case
 
-A user analyzing agricultural robotics data can:
+A researcher analyzing hundreds of hours of agricultural robotics data wants to find and extract footage of cows near a specific field boundary.
 
-1. Select a ROS 2 bag file from local storage.
-2. Configure a custom panel-layout for exploring multimodal topic data.
-3. Enter a query like "cow on the field" or "tree stump", retrieve matching frames and view their distribution across time.
-4. Export relevant data slices (e.g. images containing objects of interest).
+1. **MAP** — open the map, inspect GPS density heatmaps across all rosbags, and draw a polygon around the target area. BagSeek identifies the matching rosbags and MCAP segments immediately. Open the most relevant one directly in Explore.
+2. **EXPLORE** — configure a panel layout with the front camera, GPS map, and point cloud side by side. Scrub through the pre-filtered segment to get a feel for the data. The GPS panel shows the full route heatmap so spatial context is always visible.
+3. **SEARCH** — switch to Search, select the rosbag and image topic, apply a time range and subsampling rate to keep results manageable, then enter *"cow on the field"*. Browse ranked results as a image grid or jump directly to matches on the heatmapped timeline in Explore. Cross-check with adjacent-similarity scores to catch visually interesting frames the query might have missed.
+4. **EXPORT** — send the filtered segment — scoped to the relevant topics, time range, and search results — to Export. Choose between MCAP output or raw files (`.jpeg`, `.pcd`, `.json`, ...) and start exporting.
+
+What would have required manually scrubbing through hundreds of hours of recordings is reduced to a few targeted filter steps and a single natural language query.
 
 ## 🚀 Installation
 
 ### Prerequisites
 
-⚠️ **Disclaimer**: This install couldn't be tested properly before release, as it only works on linux.
+⚠️ **Linux only** — ROS 2 / MCAP tooling is Linux-native.
 
--	[Anaconda / Miniconda](https://www.anaconda.com/docs/getting-started/anaconda/install)
-- [Python 3.10+](https://www.python.org/downloads/)
-- [Node.js](https://nodejs.org/en/download) (v18+ recommended)
-- [ROS 2](https://docs.ros.org/en/humble/Installation.html) (tested with Humble)
-- (Optional) GPU with [CUDA](https://developer.nvidia.com/cuda-toolkit) for faster inference
+- [Docker](https://docs.docker.com/engine/install/) + [Docker Compose](https://docs.docker.com/compose/install/)
+- (Optional) NVIDIA GPU with [CUDA](https://developer.nvidia.com/cuda-toolkit) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for faster CLIP inference
 
-### Backend Setup (Flask + Python Environment)
+### Quick Start (Docker — recommended)
 
 ```bash
 # Clone the repo
 git clone https://github.com/nepok/BagSeek.git
-cd bagseek/flask-backend/api
+cd BagSeek
 
-# Create and activate Conda environment with all dependencies
-conda env create -f environment.yaml
-conda activate bagseek-gpu
+# Create and fill in your .env (see section below)
+cp .env.example .env
+# ... edit .env with your paths ...
 
-# Start the backend server
-flask run --debug
+# Start all services (backend :5000, frontend :3000)
+./start.sh
+
+# Or force a fresh image build:
+./start.sh --build
+
+# Tail logs after startup:
+./start.sh --logs
 ```
 
-### Frontend Setup (React + TypeScript)
+`start.sh` brings down any existing containers, starts them detached, and optionally streams logs. The frontend waits for the backend health check before starting.
 
+To remove GPU support (CPU-only), delete the `deploy.resources` block from `docker-compose.yml` before starting.
+
+### Local Development (without Docker)
+
+**Backend:**
 ```bash
-cd bagseek/react-frontend
+cd flask-backend/api
+pip install -r ../requirements-docker.txt
+
+# ROS 2 must be sourced for MCAP decoding
+source /opt/ros/humble/setup.bash
+
+# Start in debug mode for detailed logs
+flask run --debug   # http://localhost:5000
+
+# Or start normally
+flask run
+```
+
+**Frontend:**
+```bash
+cd react-frontend
 npm install
-npm start
+npm start           # http://localhost:3000
 ```
 
-### Project Structure
+The frontend proxies `/api/*` to `localhost:5000`.
+
+### Preprocessing
+
+Run the full 6-step pipeline to build all indexes from your rosbag files:
 
 ```bash
-bagseek/
-├── flask-backend/                # Python backend (Flask API, CLIP, indexing, etc.)
-│   └── api/                      # Contains api.py and route definitions
-│       ├── .flaskenv 
-│       └── api.py
-├── preprocessing/                # Standalone preprocessing scripts and master preprocessing script 
-│   ├── abstract/
-│   ├── core/
-│   ├── steps/
-│   ├── utils/
-│   ├── __init__.py
-│   ├── config.py
-│   └── main.py   
-├── react-frontend/               # React frontend (TypeScript, React)
-│   ├── node_modules/
-│   ├── public/
-│   └── src/                      # Frontend logic and UI components
-│       ├── components/
-│       ├── App.tsx
-│       ├── index.tsx
-│       └── ...
-├── .gitignore
-├── LICENSE.md
-├── README.md
-└── ...
+cd preprocessing
+python main.py
 ```
 
-## 🔗 Linking up your infrastructure
+Steps run in order:
+1. **TopicsExtraction** — extract topics and message types from all rosbags
+2. **TimestampAlignment** — build per-mcap timestamp lookup tables
+3. **PositionalLookup** — create spatial grid index and concave hulls from positional topics
+4. **ImageTopicPreviews** — extract preview images for the search UI
+5. **Embeddings** — generate CLIP embeddings (sharded Parquet, 100K rows/shard)
+6. **AdjacentSimilarities** — compute frame-to-frame similarity scores
 
-You have to create your own `.env` file and link up your own infrastructure using the following template. Note that you only have to insert the marked directories.
+The pipeline supports resumable processing via `CompletionTracker` — individual steps are skipped if already complete.
 
-```
-BASE= ---insert base dir for preprocessing here---
-ROSBAGS= ---insert rosbags dir here---
-PRESELECTED_ROSBAG= ---insert preselected rosbag name here---
+## 🔗 Configuration (.env)
 
-PRESELECTED_MODEL= ---insert preselected model name---
-OPEN_CLIP_MODELS= ---insert dir of open_clip models---
-OTHER_MODELS= ---insert dir of other models without the open_clip infrastructure---
+Create a `.env` file in the project root. All paths under `BASE` can use relative subpaths as shown.
 
+```env
+# --- Required ---
+BASE=/path/to/output/base          # Root directory for all preprocessed output
+ROSBAGS=/path/to/rosbags           # Directory containing ROS 2 bag folders
+
+PRESELECTED_ROSBAG_NAME=my_rosbag  # Default rosbag loaded on startup (folder name only)
+PRESELECTED_MODEL=my_model         # Default model loaded on startup (folder name only)
+
+OPEN_CLIP_MODELS=/path/to/openclip_cache   # OpenCLIP model weights cache
+OTHER_MODELS=/path/to/custom_models        # Custom model weights (non-OpenCLIP)
+
+# --- Output paths (relative to BASE) ---
 IMAGE_TOPIC_PREVIEWS=/frontend/image_topic_previews
 POSITIONAL_LOOKUP_TABLE=/frontend/positional_lookup_table/positional_lookup_table.json
 
-CANVASES_FILE=/public/canvases.json
-POLYGONS_DIR=/public/positional_polygons
-
+METADATA_DIR=/metadata
 LOOKUP_TABLES=/metadata/lookup_tables
 TOPICS=/metadata/topics
 
 ADJACENT_SIMILARITIES=/processed/adjacent_similarities
 EMBEDDINGS=/processed/embeddings
 
+CANVASES_FILE=/public/canvases.json
+POLYGONS_DIR=/public/positional_polygons
+TOPIC_PRESETS_FILE=/public/topic_presets.json
+
 EXPORT=/export
+EXPORT_RAW=/export_raw
+
+# --- Optional ---
+CORS_ORIGINS=http://localhost:3000  # Allowed CORS origins (comma-separated)
+APP_PASSWORD=                       # Set to enable password authentication (implemented, but not used)
 ```
 
-## 🧪 Evaluation Summary
+## 🗂️ Project Structure
 
-BagSeek was developed as part of a Bachelor's thesis on semantic image retrieval in agricultural robotics. Six pre-trained CLIP models were evaluated on real-world agricultural scenarios. The results are compared in the following summary plots to assess differences in retrieval performance.
+```
+bagseek/
+├── flask-backend/
+│   ├── api/
+│   │   ├── api.py                  # App factory, blueprint registration
+│   │   ├── state.py                # Shared server-side state
+│   │   ├── config.py               # Env-based configuration
+│   │   ├── routes/                 # Modular API blueprints
+│   │   │   ├── search.py           # Semantic search (CLIP + FAISS)
+│   │   │   ├── content.py          # Fetch topic content by timestamp
+│   │   │   ├── export.py           # Rosbag export
+│   │   │   └── ...
+│   │   └── utils/                  # Several helper functions
+│   │       ├── rosbag.py          
+│   │       ├── mcap.py        
+│   │       ├── clip.py  
+│   │       └── ... 
+│   ├── Dockerfile
+│   └── requirements-docker.txt
+├── preprocessing/
+│   ├── abstract/                   # Base processor classes
+│   ├── processors/                 # Six pipeline steps
+│   │   ├── TopicsExtractionProcessor.py
+│   │   ├── TimestampAlignmentProcessor.py
+│   │   ├── PositionalLookupProcessor.py
+│   │   ├── ImageTopicPreviewsProcessor.py
+│   │   ├── EmbeddingsProcessor.py
+│   │   └── AdjacentSimilaritiesPostprocessor.py
+│   ├── config.py
+│   └── main.py
+├── react-frontend/
+│   └── src/
+│       ├── components/
+│       │   ├── SplittableCanvas/   # Resizable panel manager
+│       │   ├── NodeContent/        # Topic content renderer (image, pointcloud, GPS, IMU)
+│       │   ├── GlobalSearch/       # CLIP search interface
+│       │   ├── TimestampPlayer/    # Timeline slider with heatmap and MCAP marks
+│       │   ├── HeatBar/            # Search heatmap / MCAP highlight strip
+│       │   ├── PositionalOverview/ # MAP view with Leaflet heatmaps and polygon tools
+│       │   ├── Export/             # Export dialog with preselection support
+│       │   ├── McapRangeFilter/    # MCAP range selector for Export and MAP
+│       │   ├── Header/             # Navigation and canvas management
+│       │   └── ...
+│       ├── App.tsx
+│       └── index.tsx
+├── docker-compose.yml
+├── start.sh                        # Convenience startup script
+├── .env                            # Your local configuration (not committed)
+└── README.md
+```
 
 ## ✨ Credits
 
-Developed by **Nepomuk Kindermann**.  
-Powered by [ROS](https://www.ros.org/), [OpenCLIP](https://github.com/mlfoundations/open_clip), [FAISS](https://github.com/facebookresearch/faiss), Flask, and React.  
-Developed with support from the **Smart Farming Lab** at the **University of Leipzig**.  
+Developed by **Nepomuk Kindermann** with help of several LLMs.
+Powered by [ROS 2](https://www.ros.org/), [OpenCLIP](https://github.com/mlfoundations/open_clip), [FAISS](https://github.com/facebookresearch/faiss), [Flask](https://flask.palletsprojects.com/), and [React](https://react.dev/).
+Developed with support from the **Smart Farming Lab** at the **University of Leipzig**.
 
 ## 📄 License
 
