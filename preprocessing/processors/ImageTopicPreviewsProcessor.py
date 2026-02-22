@@ -134,14 +134,18 @@ class ImageTopicPreviewsProcessor(HybridProcessor):
     def is_mcap_skippable(self, mcap_id: str) -> bool:
         """
         Check if an MCAP can be skipped (doesn't contain any fencepost parts).
-        
+
         Args:
             mcap_id: MCAP ID string
-        
+
         Returns:
             True if MCAP can be skipped, False if it needs processing
         """
         return mcap_id not in self.fencepost_mapping
+
+    def is_mcap_complete(self, context) -> bool:
+        """Uniform interface — MCAP is complete if it's not in the fencepost mapping."""
+        return self.is_mcap_skippable(context.get_mcap_id())
     
     def has_fencepost_parts(self) -> bool:
         """
