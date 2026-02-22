@@ -1317,3 +1317,39 @@ class EmbeddingsProcessor(McapProcessor):
         # Instead, completion should be checked by examining the manifest content
         # (checking if mcap_identifier exists in the manifest) inside process_mcap.
         return None
+
+    def is_rosbag_complete(self, rosbag_name: str, mcap_names: list) -> bool:
+        """Check if all models × MCAPs are complete for this rosbag."""
+        if not mcap_names:
+            return True
+        tracker = self.completion_tracker
+        for preprocess_id, models in self.models_by_preprocess.items():
+            for model_dir_id, _, _, _ in models:
+                if tracker.is_model_rosbag_completed(model_dir_id, rosbag_name):
+                    continue
+                for mcap_filename in mcap_names:
+                    mcap_id = mcap_filename.replace('.mcap', '').split('_')[-1]
+                    mcap_name = f"{rosbag_name}_{mcap_id}.mcap"
+                    if not tracker.is_model_mcap_completed(model_dir_id, rosbag_name, mcap_name):
+                        return False
+        return True
+
+    def is_mcap_complete(self, context: McapProcessingContext) -> bool:
+        """Uniform interface — delegates to is_mcap_completed."""
+        return self.is_mcap_completed(context)
+
+    def get_incomplete_models(self, rosbag_name: str, mcap_names: list) -> list:
+        """Return list of model IDs that still have incomplete MCAPs for this rosbag."""
+        incomplete = []
+        tracker = self.completion_tracker
+        for preprocess_id, models in self.models_by_preprocess.items():
+            for model_dir_id, _, _, _ in models:
+                if tracker.is_model_rosbag_completed(model_dir_id, rosbag_name):
+                    continue
+                for mcap_filename in mcap_names:
+                    mcap_id = mcap_filename.replace('.mcap', '').split('_')[-1]
+                    mcap_name = f"{rosbag_name}_{mcap_id}.mcap"
+                    if not tracker.is_model_mcap_completed(model_dir_id, rosbag_name, mcap_name):
+                        incomplete.append(model_dir_id)
+                        break
+        return incomplete
