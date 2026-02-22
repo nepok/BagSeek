@@ -70,6 +70,7 @@ class Config:
         self.canvases_file_path = Path(os.getenv("BASE") + os.getenv("CANVASES_FILE"))
         
         # Metadata output paths
+        self.metadata_dir = Path(os.getenv("BASE") + os.getenv("METADATA_DIR"))
         self.lookup_tables_dir = Path(os.getenv("BASE") + os.getenv("LOOKUP_TABLES"))
         self.topics_dir = Path(os.getenv("BASE") + os.getenv("TOPICS"))
         
