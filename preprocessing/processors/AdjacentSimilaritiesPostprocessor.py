@@ -36,7 +36,45 @@ class AdjacentSimilaritiesPostprocessor(PostProcessor):
         self.output_dir = Path(output_dir)
         self.logger: PipelineLogger = get_logger()
         self.completion_tracker = CompletionTracker(self.output_dir, processor_name="adjacent_similarities_postprocessor")
-    
+
+    def is_rosbag_complete(self, rosbag_name: str, mcap_names: list) -> bool:
+        """
+        Check if all model/topic combinations are complete for this rosbag.
+
+        Does NOT account for the embeddings dependency — main.py short-circuits
+        to False when embeddings still need work, before calling this method.
+        """
+        tracker = self.completion_tracker
+
+        # Fast path
+        if tracker.is_rosbag_completed(rosbag_name):
+            return True
+
+        # No embeddings directory → nothing to process
+        if not self.embeddings_dir.exists():
+            return True
+
+        found_any = False
+        for model_path in self.embeddings_dir.iterdir():
+            if not model_path.is_dir():
+                continue
+            manifest_path = model_path / rosbag_name / "manifest.parquet"
+            if not manifest_path.exists():
+                continue
+            found_any = True
+            try:
+                manifest = pd.read_parquet(manifest_path)
+                for topic in manifest["topic"].unique():
+                    if not tracker.is_model_topic_completed(model_path.name, rosbag_name, topic):
+                        return False
+            except Exception:
+                return False
+
+        # All model/topic combinations confirmed complete via manifest.
+        # Write the rosbag-level fast-path entry so future calls skip the manifest scan.
+        tracker.mark_completed(rosbag_name=rosbag_name, status="completed")
+        return True  # no embeddings found → nothing to do
+
     def _load_embeddings_from_shards_for_topic(
         self, manifest_path: Path, shards_dir: Path, topic: str
     ) -> Tuple[np.ndarray, pd.DataFrame]:
