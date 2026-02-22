@@ -22,6 +22,7 @@ interface TimestampPlayerProps {
   searchMarks: { value: number; rank?: number }[];
   setSearchMarks: React.Dispatch<React.SetStateAction<{ value: number; rank?: number }[]>>;
   mcapBoundaries?: number[];
+  mcapHighlightMask?: boolean[];
 }
 
 const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
@@ -36,6 +37,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     searchMarks,
     setSearchMarks,
     mcapBoundaries = [],
+    mcapHighlightMask,
   } = props;
   
   const formatDate = (timestampNs: string): string => {
@@ -336,6 +338,9 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
               timestampCount={timestampCount}
               searchMarks={searchMarks}
               mcapBoundaries={mcapBoundaries}
+              mcapHighlightMask={mcapHighlightMask}
+              firstTimestampNs={firstTimestampNs}
+              lastTimestampNs={lastTimestampNs}
               sliderValue={sliderValue}
               bins={1000} // optional
               windowSize={50} // optional

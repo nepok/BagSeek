@@ -6,6 +6,7 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css"; // Ensure Leaflet CSS is loaded
+import 'leaflet.heat';
 
 interface NodeContentProps {
   nodeTopic: string | null; 
@@ -31,9 +32,13 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     linear_acceleration: { x: number; y: number; z: number };
   } | null>(null); // orientation, angular velocity, and acceleration from IMU
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [positionIsZero, setPositionIsZero] = useState<boolean>(false);
+
+  const [heatmapPoints, setHeatmapPoints] = useState<{ lat: number; lon: number; count: number }[]>([]);
 
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
   const mapContainerRef = useRef<HTMLDivElement | null>(null); // reference to the div container holding the map
+  const heatLayerRef = useRef<L.Layer | null>(null); // reference to the leaflet.heat layer
   
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
@@ -61,6 +66,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       setPosition(null);
       setImuData(null);
       setRealTimestamp(null);
+      setPositionIsZero(false);
 
       // Handle different response types
       if (data.timestamp) {
@@ -83,11 +89,12 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       }
       // Handle GPS position response
       else if (data.type === 'position' && data.position) {
-        setPosition({
-          latitude: data.position.latitude,
-          longitude: data.position.longitude,
-          altitude: data.position.altitude || 0
-        });
+        const { latitude, longitude, altitude } = data.position;
+        if (latitude === 0 && longitude === 0 && (altitude === 0 || altitude == null)) {
+          setPositionIsZero(true);
+        } else {
+          setPosition({ latitude, longitude, altitude: altitude || 0 });
+        }
       }
       // Handle IMU response
       else if (data.type === 'imu' && data.imu) {
@@ -142,11 +149,47 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     }
   }, [position]);
 
+  // Fetch rosbag heatmap data when a GPS topic is selected
+  useEffect(() => {
+    const isGps = nodeTopicType === "sensor_msgs/msg/NavSatFix" || nodeTopicType === "novatel_oem7_msgs/msg/BESTPOS";
+    if (!isGps || !selectedRosbag) { setHeatmapPoints([]); return; }
+    fetch(`/api/positions/rosbags/${encodeURIComponent(selectedRosbag)}`)
+      .then(r => r.json())
+      .then(data => setHeatmapPoints(Array.isArray(data.points) ? data.points : []))
+      .catch(() => setHeatmapPoints([]));
+  }, [nodeTopicType, selectedRosbag]);
+
+  // Remove existing heat layer and add a fresh one from heatmapPoints
+  const applyHeatmap = (map: L.Map) => {
+    if (heatLayerRef.current) { map.removeLayer(heatLayerRef.current); heatLayerRef.current = null; }
+    if (heatmapPoints.length === 0) return;
+    const heatLayerFactory = (L as typeof L & { heatLayer?: (latlngs: [number, number, number?][], options?: Record<string, unknown>) => L.Layer }).heatLayer;
+    if (!heatLayerFactory) return;
+    const maxCount = Math.max(...heatmapPoints.map(p => p.count || 0));
+    const data = heatmapPoints.map(p => [p.lat, p.lon, maxCount ? Math.max(p.count / maxCount, 0.05) : 0.1] as [number, number, number]);
+    const layer = heatLayerFactory(data, {
+      minOpacity: 0.2, maxZoom: 18, radius: 30, blur: 30,
+      gradient: { 0.2: 'blue', 0.4: 'lime', 0.6: 'orange', 1: 'red' },
+    });
+    layer.addTo(map);
+    heatLayerRef.current = layer;
+    setTimeout(() => {
+      map.getContainer().querySelectorAll('canvas.leaflet-heatmap-layer')
+        .forEach(c => { (c as HTMLElement).style.pointerEvents = 'none'; });
+    }, 0);
+  };
+
+  // Re-apply heatmap when data arrives (map may already be initialized)
+  useEffect(() => {
+    if (mapRef.current) applyHeatmap(mapRef.current);
+  }, [heatmapPoints]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     // Clear the map if switching away from GPS
     if ((nodeTopicType !== "sensor_msgs/msg/NavSatFix" && nodeTopicType !== "novatel_oem7_msgs/msg/BESTPOS") && mapRef.current) {
       mapRef.current.remove(); // remove old map if topic is not GPS
       mapRef.current = null;
+      heatLayerRef.current = null;
     }
 
     // Initialize or update the map if GPS topic is selected
@@ -161,6 +204,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
           maxZoom: 19,
           attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         }).addTo(mapRef.current!);
+        applyHeatmap(mapRef.current!);
       }
 
       // Update the view to the new position but preserve current zoom level
@@ -330,8 +374,13 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     // Always keep the map container in the DOM so mapRef stays attached across timestamp changes.
     // The spinner is overlaid on top instead of replacing the content.
     renderedContent = (
-      <div className="gps-container">
+      <div className="gps-container" style={{ position: 'relative' }}>
         <div ref={mapContainerRef} className="map-container"></div>
+        {positionIsZero && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <p style={{ color: 'white', fontSize: '0.8rem' }}>No positional data found.</p>
+          </div>
+        )}
       </div>
     );
   } else if (isLoading) {
