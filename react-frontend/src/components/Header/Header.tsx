@@ -6,12 +6,12 @@ import IosShareIcon from '@mui/icons-material/IosShare';
 import ViewQuiltRoundedIcon from '@mui/icons-material/ViewQuiltRounded';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
-import LogoutIcon from '@mui/icons-material/Logout';
+// import LogoutIcon from '@mui/icons-material/Logout';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { extractRosbagName } from '../../utils/rosbag';
 import { searchFilterCache } from '../GlobalSearch/searchFilterCache';
 import { useExportPreselection } from '../Export/ExportPreselectionContext';
-import { useAuth } from '../AuthContext/AuthContext';
+// import { useAuth } from '../AuthContext/AuthContext';
 
 import MapIcon from '@mui/icons-material/Map';
 import SearchIcon from '@mui/icons-material/Search';
@@ -108,7 +108,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
   const location = useLocation();
   const navigate = useNavigate();
   const { openExportWithPreselection } = useExportPreselection();
-  const { logout, authDisabled } = useAuth();
+  // const { logout, authDisabled } = useAuth();
   const viewMode: 'explore' | 'search' | 'positional' = 
     location.pathname.startsWith('/search') ? 'search' : 
     location.pathname.startsWith('/positional-overview') ? 'positional' : 
@@ -283,32 +283,7 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
               MAP
             </Button>
           </Tooltip>
-          <Tooltip title="Search and filter content in rosbags" arrow>
-            <Button
-              variant="text"
-              onClick={() => {
-                // Save current explore query so we can restore it later
-                if (location.pathname.startsWith('/explore')) {
-                  try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
-                }
-                navigate('/search');
-              }}
-              sx={{
-                color: 'white',
-                textTransform: 'none',
-                fontWeight: viewMode === 'search' ? 700 : 400,
-                opacity: viewMode === 'search' ? 1 : 0.7,
-                '&:hover': {
-                  opacity: 1,
-                  backgroundColor: 'transparent',
-                },
-              }}
-            >
-              <SearchIcon sx={{ fontSize: 18, mr: 0.5 }} />
-              SEARCH
-            </Button>
-          </Tooltip>
-          <Tooltip title="Visualise rosbag sensor topics in resizable panels" arrow>
+          <Tooltip title="Visualize rosbag sensor topics in resizable panels" arrow>
             <Button
               variant="text"
               onClick={() => {
@@ -337,6 +312,31 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             >
               <ExploreIcon sx={{ fontSize: 18, mr: 0.5 }} />
               EXPLORE
+            </Button>
+          </Tooltip>
+          <Tooltip title="Search and filter content in rosbags" arrow>
+            <Button
+              variant="text"
+              onClick={() => {
+                // Save current explore query so we can restore it later
+                if (location.pathname.startsWith('/explore')) {
+                  try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
+                }
+                navigate('/search');
+              }}
+              sx={{
+                color: 'white',
+                textTransform: 'none',
+                fontWeight: viewMode === 'search' ? 700 : 400,
+                opacity: viewMode === 'search' ? 1 : 0.7,
+                '&:hover': {
+                  opacity: 1,
+                  backgroundColor: 'transparent',
+                },
+              }}
+            >
+              <SearchIcon sx={{ fontSize: 18, mr: 0.5 }} />
+              SEARCH
             </Button>
           </Tooltip>
         </Box>
@@ -579,13 +579,13 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
         <Divider orientation="vertical" sx={{margin: '8px'}} flexItem />
 
         {/* Logout button - only shown when auth is enabled */}
-        {!authDisabled && (
+        {/* {!authDisabled && (
           <Tooltip title="Logout" arrow>
             <IconButton className="header-icon" onClick={logout}>
               <LogoutIcon />
             </IconButton>
           </Tooltip>
-        )}
+        )} */}
       </Box>
     </Box>
   );

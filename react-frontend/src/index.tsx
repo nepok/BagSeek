@@ -7,7 +7,7 @@ import { ErrorProvider } from './components/ErrorContext/ErrorContext';
 import { ThemeProvider } from '@mui/material/styles';
 import darkTheme from './theme';
 import { BrowserRouter } from 'react-router-dom';
-import { AuthProvider } from './components/AuthContext/AuthContext';
+// import { AuthProvider } from './components/AuthContext/AuthContext';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -16,11 +16,11 @@ root.render(
   <React.StrictMode>
     <BrowserRouter>
       <ThemeProvider theme={darkTheme}>
-        <AuthProvider>
+        {/* <AuthProvider> */}
           <ErrorProvider>
             <App />
           </ErrorProvider>
-        </AuthProvider>
+        {/* </AuthProvider> */}
       </ThemeProvider>
     </BrowserRouter>
   </React.StrictMode>

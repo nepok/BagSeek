@@ -15,9 +15,9 @@ import PositionalOverview from './components/PositionalOverview/PositionalOvervi
 import TractorLoader from './components/TractorLoader/TractorLoader';
 import { sortTopicsObject } from './utils/topics';
 import { extractRosbagName } from './utils/rosbag';
-import Login from './components/Login/Login';
-import PrivateRoute from './components/AuthContext/PrivateRoute';
-import { useAuth } from './components/AuthContext/AuthContext';
+// import Login from './components/Login/Login';
+// import PrivateRoute from './components/AuthContext/PrivateRoute';
+// import { useAuth } from './components/AuthContext/AuthContext';
 
 function TractorDebugPage() {
   const [progress, setProgress] = useState(0);
@@ -57,7 +57,7 @@ interface NodeMetadata {
 function App() {
 
   const { setError } = useError(); // Hook to set global error messages for user feedback
-  const { isAuthenticated, authDisabled } = useAuth();
+  // const { isAuthenticated, authDisabled } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -80,6 +80,7 @@ function App() {
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
   const [canvasList, setCanvasList] = useState<{ [key: string]: { root: Node, metadata: { [id: number]: NodeMetadata } } }>({});  // Collection of saved canvases, keyed by canvas name, each with root and metadata
   const [searchMarks, setSearchMarks] = useState<{ value: number; rank?: number }[]>([]);  // Marks used for search heatmap in timestamp player (from search -> explore navigation)
+  const [mcapHighlightMask, setMcapHighlightMask] = useState<boolean[]>([]);  // Per-MCAP boolean mask: true = inside polygon (from MAP -> explore navigation)
 
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
@@ -156,6 +157,7 @@ function App() {
       setMcapBoundaries(
         (data.mcapRanges ?? []).map((r: { startIndex: number }) => r.startIndex)
       );
+      setMcapHighlightMask([]);
     } catch (error) {
       setError('Error fetching available timestamps');
       console.error('Error fetching available timestamps:', error);
@@ -238,10 +240,10 @@ function App() {
 
   // Effect to load all saved canvases once authenticated
   useEffect(() => {
-    if (isAuthenticated || authDisabled) {
+    // if (isAuthenticated || authDisabled) {
       refreshCanvasList();
-    }
-  }, [refreshCanvasList, isAuthenticated, authDisabled]);
+    // }
+  }, [refreshCanvasList]);
 
   // Handler for when user changes the timestamp slider (receives index)
   const handleSliderChange = async (index: number) => {
@@ -408,6 +410,7 @@ function App() {
 
     // 2) Load marks from sessionStorage when navigating from search (arrow icon) to seed the heatmap
     if (rosbagParam && canvasParam) {
+      setMcapHighlightMask([]);
       try {
         const canvas = decodeCanvas(canvasParam);
         if (canvas?.metadata) {
@@ -453,10 +456,9 @@ function App() {
         pendingMcapHighlightRef.current = ids;
         // Apply immediately if mcapBoundaries are already populated (same rosbag, no re-fetch)
         if (mcapBoundaries.length > 0) {
-          const marks = ids
-            .map((id) => { const idx = mcapBoundaries[Number(id)]; return idx != null ? { value: idx } : null; })
-            .filter((m): m is { value: number } => m !== null);
-          if (marks.length > 0) { setSearchMarks(marks); pendingMcapHighlightRef.current = null; }
+          const highlightSet = new Set(ids.map(String));
+          const mask = mcapBoundaries.map((_, i) => highlightSet.has(String(i)));
+          if (mask.some(Boolean)) { setMcapHighlightMask(mask); pendingMcapHighlightRef.current = null; }
         }
       } catch { /* ignore */ }
     }
@@ -554,14 +556,13 @@ function App() {
       }
     }
 
-    // Convert highlighted MCAP ids to timestamp-index marks for the slider
+    // Convert highlighted MCAP ids to a boolean mask for the polygon strip
     if (pendingMcapHighlightRef.current !== null) {
       const ids = pendingMcapHighlightRef.current;
       pendingMcapHighlightRef.current = null;
-      const marks = ids
-        .map((id) => { const idx = mcapBoundaries[Number(id)]; return idx != null ? { value: idx } : null; })
-        .filter((m): m is { value: number } => m !== null);
-      if (marks.length > 0) setSearchMarks(marks);
+      const highlightSet = new Set(ids.map(String));
+      const mask = mcapBoundaries.map((_, i) => highlightSet.has(String(i)));
+      if (mask.some(Boolean)) setMcapHighlightMask(mask);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mcapBoundaries]);
@@ -569,9 +570,9 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      {/* <Route path="/login" element={<Login />} /> */}
       <Route path="/*" element={
-        <PrivateRoute>
+        // <PrivateRoute>
     <ExportPreselectionProvider onOpenExport={() => setIsExportDialogVisible(true)}>
     <>
       {/* File input dialog for uploading rosbag files and fetching initial data */}
@@ -637,6 +638,7 @@ function App() {
                     searchMarks={searchMarks}
                     setSearchMarks={setSearchMarks}
                     mcapBoundaries={mcapBoundaries}
+                    mcapHighlightMask={mcapHighlightMask}
                   />
                 </>
               }
@@ -655,7 +657,7 @@ function App() {
       </div>
     </>
     </ExportPreselectionProvider>
-        </PrivateRoute>
+        // </PrivateRoute>
       } />
     </Routes>
   );
