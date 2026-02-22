@@ -9,7 +9,7 @@ These processors:
 """
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 from ..core import RosbagProcessingContext, McapProcessingContext
 
 
@@ -165,15 +165,68 @@ class HybridProcessor(ABC):
     def get_output_path(self, context: RosbagProcessingContext) -> Optional[Path]:
         """
         Get the expected output path for a given context.
-        
+
         Override this method in processors to return the path where
         output would be written for the given context.
         This is used by the completion tracker to check completion status.
-        
+
         Args:
             context: RosbagProcessingContext
-        
+
         Returns:
             Path to expected output file, or None if not applicable
         """
         return None
+
+    def is_rosbag_complete(self, rosbag_name: str, mcap_names: List[str]) -> bool:
+        """
+        Check if this processor has fully completed for a given rosbag.
+
+        Default: fast-path rosbag-level check first, then per-MCAP fallback.
+        Override for processors with custom completion semantics.
+
+        Args:
+            rosbag_name: Rosbag relative path string
+            mcap_names: List of MCAP filenames to check individually on slow path
+
+        Returns:
+            True if all MCAPs are complete for this processor
+        """
+        if not mcap_names:
+            return True
+        tracker = getattr(self, 'completion_tracker', None)
+        if tracker is None:
+            return False
+        if tracker.is_rosbag_completed(rosbag_name):
+            return True
+        return all(tracker.is_mcap_completed(rosbag_name, mcap) for mcap in mcap_names)
+
+    def is_mcap_complete(self, context: McapProcessingContext) -> bool:
+        """
+        Check if this processor has completed for a specific MCAP.
+
+        Default delegates to the MCAP-level completion tracker entry.
+        Override for processors with custom MCAP completion logic.
+
+        Args:
+            context: McapProcessingContext for the MCAP to check
+
+        Returns:
+            True if this MCAP is marked complete for this processor
+        """
+        tracker = getattr(self, 'completion_tracker', None)
+        if tracker is None:
+            return False
+        rosbag_name = str(context.get_relative_path())
+        return tracker.is_mcap_completed(rosbag_name, context.get_mcap_name())
+
+    def on_rosbag_complete(self, context: RosbagProcessingContext) -> None:
+        """
+        Hook called at the end of each rosbag's processing loop.
+
+        No-op by default. Override to perform idempotent post-loop work.
+
+        Args:
+            context: RosbagProcessingContext
+        """
+        pass
