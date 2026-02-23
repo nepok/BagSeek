@@ -1,7 +1,7 @@
 // React component for interacting with and controlling timestamp-based playback, search, and model filtering
 import React, { useEffect, useState, useRef } from 'react';
 import './TimestampPlayer.css'; // Import the CSS file
-import { Box, FormControl, IconButton, InputLabel, MenuItem, Select, Slider, SelectChangeEvent, Tooltip, Typography } from '@mui/material';
+import { Box, FormControl, IconButton, InputLabel, LinearProgress, MenuItem, Select, Slider, SelectChangeEvent, Tooltip, Typography } from '@mui/material';
 import HelpPopover from '../HelpPopover/HelpPopover';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from "@mui/icons-material/Pause";
@@ -24,6 +24,7 @@ interface TimestampPlayerProps {
   mcapBoundaries?: number[];
   mcapIdentifiers?: string[];
   mcapHighlightMask?: boolean[];
+  isTimestampLoading?: boolean;
 }
 
 const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
@@ -40,6 +41,7 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
     mcapBoundaries = [],
     mcapIdentifiers = [],
     mcapHighlightMask,
+    isTimestampLoading = false,
   } = props;
   
   const formatDate = (timestampNs: string): string => {
@@ -306,87 +308,106 @@ const TimestampPlayer: React.FC<TimestampPlayerProps> = (props) => {
         </IconButton>
       </Tooltip>
 
-      {/* Duration display */}
-      <Tooltip title="Click to toggle elapsed / remaining time" arrow>
+      {/* Duration display — hidden while loading */}
+      {!isTimestampLoading && (
+        <Tooltip title="Click to toggle elapsed / remaining time" arrow>
+          <Typography
+            variant="body2"
+            onClick={() => setShowRemaining(prev => !prev)}
+            sx={{
+              fontSize: '0.8rem',
+              whiteSpace: 'nowrap',
+              cursor: 'pointer',
+              userSelect: 'none',
+              fontFamily: 'monospace',
+              flexShrink: 0,
+            }}
+          >
+            {getDurationDisplay()}
+          </Typography>
+        </Tooltip>
+      )}
+
+      {/* Timestamp slider — replaced by LinearProgress while loading */}
+      {isTimestampLoading ? (
+        <LinearProgress
+          sx={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            marginRight: '12px',
+            marginLeft: '10px',
+            height: 4,
+            borderRadius: 2,
+            alignSelf: 'center',
+          }}
+        />
+      ) : (
+        <Slider
+          size="small"
+          min={0}
+          max={Math.max(0, timestampCount - 1)}
+          step={1}
+          value={sliderValue}
+          onChange={handleSliderChange}
+          aria-label="Timestamp"
+          components={{
+            Track: (props) => (
+              <CustomTrack
+                {...props}
+                timestampCount={timestampCount}
+                searchMarks={searchMarks}
+                mcapBoundaries={mcapBoundaries}
+                mcapIdentifiers={mcapIdentifiers}
+                mcapHighlightMask={mcapHighlightMask}
+                firstTimestampNs={firstTimestampNs}
+                lastTimestampNs={lastTimestampNs}
+                sliderValue={sliderValue}
+                bins={1000}
+                windowSize={50}
+              />
+            ),
+          }}
+          sx={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            marginRight: '12px',
+            marginLeft: '10px',
+          }}
+        />
+      )}
+
+      {/* Display the selected timestamp — hidden while loading */}
+      {!isTimestampLoading && (
         <Typography
           variant="body2"
-          onClick={() => setShowRemaining(prev => !prev)}
-          sx={{
-            fontSize: '0.8rem',
-            whiteSpace: 'nowrap',
-            cursor: 'pointer',
-            userSelect: 'none',
-            fontFamily: 'monospace',
-            flexShrink: 0,
-          }}
+          sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', minWidth: 140 }}
         >
-          {getDurationDisplay()}
+          {timestampUnit === 'ROS'
+            ? (selectedTimestamp ?? '')
+            : (selectedTimestamp ? formatDate(selectedTimestamp) : '')}
         </Typography>
-      </Tooltip>
+      )}
 
-      {/* Timestamp slider */}
-      <Slider
-        size="small"
-        min={0}
-        max={Math.max(0, timestampCount - 1)}
-        step={1}
-        value={sliderValue}
-        onChange={handleSliderChange}
-        aria-label="Timestamp"
-        components={{
-          Track: (props) => (
-            <CustomTrack
-              {...props}
-              timestampCount={timestampCount}
-              searchMarks={searchMarks}
-              mcapBoundaries={mcapBoundaries}
-              mcapIdentifiers={mcapIdentifiers}
-              mcapHighlightMask={mcapHighlightMask}
-              firstTimestampNs={firstTimestampNs}
-              lastTimestampNs={lastTimestampNs}
-              sliderValue={sliderValue}
-              bins={1000} // optional
-              windowSize={50} // optional
-            />
-          ),
-        }}
-        sx={{
-          flex: '1 1 auto',
-          minWidth: 0,
-          marginRight: '12px',
-          marginLeft: '10px',
-        }}
-        //marks={searchMarks}
-      />
-
-      {/* Display the selected timestamp */}
-      <Typography
-        variant="body2"
-        sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', minWidth: 140 }}
-      >
-        {timestampUnit === 'ROS'
-          ? (selectedTimestamp ?? '')
-          : (selectedTimestamp ? formatDate(selectedTimestamp) : '')}
-      </Typography>
-
-      {/* Select for Timestamp Unit */}
-      <Tooltip title="Timestamp format: ROS nanoseconds or Time of Day" arrow disableHoverListener={tsSelectOpen}>
-        <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
-        <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
-        <Select
-          labelId="timestamp-unit-select-label"
-          id="timestamp-unit-select"
-          value={timestampUnit}
-          onChange={handleTimestampUnitChange}
-          onOpen={() => setTsSelectOpen(true)}
-          onClose={() => setTsSelectOpen(false)}
-          sx={{ fontSize: '0.8rem' }}
-        >
-          <MenuItem value="ROS" sx={{ fontSize: '0.8rem' }}>ROS</MenuItem>
-          <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
-        </Select>
-      </FormControl>
-      </Tooltip>
+      {/* Select for Timestamp Unit — hidden while loading */}
+      {!isTimestampLoading && (
+        <Tooltip title="Timestamp format: ROS nanoseconds or Time of Day" arrow disableHoverListener={tsSelectOpen}>
+          <FormControl sx={{ m: 1, minWidth: 80 }} size="small">
+            <InputLabel id="timestamp-unit-select-label" sx={{ fontSize: '0.8rem' }}></InputLabel>
+            <Select
+              labelId="timestamp-unit-select-label"
+              id="timestamp-unit-select"
+              value={timestampUnit}
+              onChange={handleTimestampUnitChange}
+              onOpen={() => setTsSelectOpen(true)}
+              onClose={() => setTsSelectOpen(false)}
+              sx={{ fontSize: '0.8rem' }}
+            >
+              <MenuItem value="ROS" sx={{ fontSize: '0.8rem' }}>ROS</MenuItem>
+              <MenuItem value="TOD" sx={{ fontSize: '0.8rem' }}>TOD</MenuItem>
+            </Select>
+          </FormControl>
+        </Tooltip>
+      )}
 
       <HelpPopover
         title="Timeline"

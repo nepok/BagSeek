@@ -90,6 +90,8 @@ function App() {
   const pendingRosbagParamRef = useRef<string | null>(null);
   const isUpdatingTimestampRef = useRef<boolean>(false); // Track if we're updating timestamp from user action
   const switchingToRosbagRef = useRef<string | null>(null); // Track rosbag currently being switched to (sync guard against double-switch)
+  const [isTimestampLoading, setIsTimestampLoading] = useState(false); // True during rosbag-switch until first set-reference-timestamp completes
+  const rosbagSwitchPendingRef = useRef(false); // True from rosbag switch start until handleSliderChange settles
 
   // Helpers to encode/decode canvas JSON into query param
   const encodeCanvas = (canvas: { root: Node; metadata: { [id: number]: NodeMetadata } }) => {
@@ -157,6 +159,7 @@ function App() {
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch timestamp summary');
       }
+      setSelectedTimestamp(null); // clear stale value so it never mismatches new firstTimestampNs/lastTimestampNs
       setTimestampCount(data.count ?? 0);
       setFirstTimestampNs(data.firstTimestampNs ?? null);
       setLastTimestampNs(data.lastTimestampNs ?? null);
@@ -269,6 +272,11 @@ function App() {
       setError('Error sending reference timestamp');
       console.error('Error sending reference timestamp:', error);
     } finally {
+      // Only clear the loading indicator if this slider change was triggered by a rosbag switch
+      if (rosbagSwitchPendingRef.current) {
+        rosbagSwitchPendingRef.current = false;
+        setIsTimestampLoading(false);
+      }
       setTimeout(() => {
         isUpdatingTimestampRef.current = false;
       }, 100);
@@ -341,6 +349,8 @@ function App() {
       // Set rosbag BEFORE fetching timestamps so when timestampCount changes and
       // triggers handleSliderChange(0), selectedRosbag is already the new value.
       setSelectedRosbag(getRosbagName(path) ?? null);
+      rosbagSwitchPendingRef.current = true;
+      setIsTimestampLoading(true);
       await Promise.all([
         fetchAvailableTopics(path),
         fetchAvailableTimestampsAndDensity(path),
@@ -392,6 +402,8 @@ function App() {
           });
           // Set rosbag BEFORE fetching timestamps — same reason as handleRosbagSelect.
           setSelectedRosbag(getRosbagName(match) ?? null);
+          rosbagSwitchPendingRef.current = true;
+          setIsTimestampLoading(true);
           await Promise.all([
             fetchAvailableTopics(match),
             fetchAvailableTimestampsAndDensity(match),
@@ -643,6 +655,7 @@ function App() {
                     mcapBoundaries={mcapBoundaries}
                     mcapIdentifiers={mcapIdentifiers}
                     mcapHighlightMask={mcapHighlightMask}
+                    isTimestampLoading={isTimestampLoading}
                   />
                 </>
               }
