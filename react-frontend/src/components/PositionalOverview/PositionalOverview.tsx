@@ -10,7 +10,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
 import './PositionalOverview.css';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { extractRosbagName } from '../../utils/rosbag';
 import { inflatePathsD, PathsD, PathD, JoinType, EndType } from 'clipper2-ts';
@@ -814,7 +814,7 @@ const PositionalOverview: React.FC = () => {
           isRestoringRef.current = true;
           setIsRestoringPolygons(true);
           setPolygons(parsed);
-          prevPolygonCountRef.current = parsed.length;
+          prevPolygonCountRef.current = parsed.filter((p: Polygon) => p.isClosed).length;
           // If there's an active (non-closed) polygon, set it as active
           const activePolygon = parsed.find((p: Polygon) => !p.isClosed);
           if (activePolygon) {
@@ -2494,12 +2494,24 @@ const PositionalOverview: React.FC = () => {
     }
   }, [polygons]);
 
+  // Stable key that only changes when closed polygon content changes.
+  // Used as a dependency instead of `polygons` so overlap effects don't
+  // re-fire while the user is still drawing an open polygon.
+  const closedPolygonsKey = useMemo(
+    () =>
+      polygons
+        .filter((p) => p.isClosed)
+        .map((p) => `${p.id}:${p.points.map((pt) => `${pt.lat},${pt.lon}`).join(';')}`)
+        .join('|'),
+    [polygons],
+  );
+
   // Check overlap when polygons change
   useEffect(() => {
     const closedPolygons = polygons.filter((p) => p.isClosed);
-    const currentPolygonCount = polygons.length;
-    const polygonDeleted = currentPolygonCount < prevPolygonCountRef.current;
-    prevPolygonCountRef.current = currentPolygonCount;
+    const currentClosedCount = closedPolygons.length;
+    const polygonDeleted = currentClosedCount < prevPolygonCountRef.current;
+    prevPolygonCountRef.current = currentClosedCount;
     
     if (closedPolygons.length === 0) {
       // Clear overlap status if no closed polygons
@@ -2582,7 +2594,7 @@ const PositionalOverview: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [polygons, rosbags, offsetDistance, rosbagBoundaries]);
+  }, [closedPolygonsKey, rosbags, offsetDistance, rosbagBoundaries]);
 
   // MCAP overlap: which MCAPs are inside polygons (for MCAP slider background when showMcaps)
   useEffect(() => {
@@ -2599,7 +2611,7 @@ const PositionalOverview: React.FC = () => {
       if (!cancelled) setMcapOverlapIds(ids);
     });
     return () => { cancelled = true; };
-  }, [polygons, rosbags, selectedIndex, availableMcaps, showMcaps, offsetDistance]);
+  }, [closedPolygonsKey, rosbags, selectedIndex, availableMcaps, showMcaps, offsetDistance]);
 
   // Persist highlighted MCAP IDs to Export (MAP live selection - highlighted MCAPs in slider)
   useEffect(() => {
@@ -2641,7 +2653,7 @@ const PositionalOverview: React.FC = () => {
       if (!cancelled) setAllOverlappingMcaps(Object.fromEntries(entries));
     });
     return () => { cancelled = true; };
-  }, [rosbagOverlapStatus, polygons, rosbags, offsetDistance]);
+  }, [rosbagOverlapStatus, closedPolygonsKey, rosbags, offsetDistance]);
 
   // Persist all-overlapping MCAP context to sessionStorage for Export buttons
   useEffect(() => {
