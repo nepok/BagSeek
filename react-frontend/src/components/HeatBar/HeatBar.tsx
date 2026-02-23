@@ -7,6 +7,7 @@ interface HeatBarProps {
   timestampCount: number;
   searchMarks: { value: number; rank?: number }[];
   mcapBoundaries?: number[];
+  mcapIdentifiers?: string[];
   mcapHighlightMask?: boolean[];
   firstTimestampNs?: string | null;
   lastTimestampNs?: string | null;
@@ -57,6 +58,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
   timestampCount,
   searchMarks,
   mcapBoundaries = [],
+  mcapIdentifiers = [],
   mcapHighlightMask,
   firstTimestampNs,
   lastTimestampNs,
@@ -189,8 +191,16 @@ export const HeatBar: React.FC<HeatBarProps> = ({
     };
   });
 
-  // Reduce label/line density when many boundaries: >40 → every 2nd, >80 → every 3rd, etc.
-  const labelStep = Math.max(1, Math.ceil(mcapBoundaries.length / 40));
+  // Decide which MCAP ticks get a text label: same algorithm as MAP slider but with doubled
+  // maxIdLabels since the HeatBar has more horizontal space available.
+  const maxIdLabels = 54;
+  let idLabelStep = 1;
+  if (segments.length > maxIdLabels) {
+    idLabelStep = 2;
+    while (Math.ceil(segments.length / idLabelStep) > maxIdLabels) idLabelStep++;
+  }
+  const idLabelSet = new Set<number>();
+  for (let i = 0; i < segments.length; i += idLabelStep) idLabelSet.add(i);
 
   // Compute time-of-day tick marks using linear interpolation across the full duration
   const todTicks = useMemo(() => {
@@ -218,7 +228,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
       }
 
       // Choose label interval targeting ~12 labels
-      const maxTodLabels = 12;
+      const maxTodLabels = 54;
       const niceLabelIntervals = [10, 20, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];
       let todLabelInterval = niceLabelIntervals[niceLabelIntervals.length - 1];
       for (const interval of niceLabelIntervals) {
@@ -266,7 +276,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
                   width: `${(seg.endFrac - seg.startFrac) * 100}%`,
                   height: '100%',
                   backgroundColor: mcapHighlightMask[seg.index]
-                    ? primaryRgba(0.25)
+                    ? primaryRgba(0.8)
                     : 'rgba(30, 30, 30, 0.4)',
                 }}
               />
@@ -332,40 +342,45 @@ export const HeatBar: React.FC<HeatBarProps> = ({
           }}
         />
       )}
-      {/* MCAP ID marks above track: text + tick column at boundary, labeled subset only (skip index 0 = left edge) */}
+      {/* MCAP ID marks above track: small tick for all, big tick + text for labeled subset */}
       {segments
-        .filter((seg) => seg.index > 0 && (seg.index % labelStep === 0 || seg.index === activeMcapIndex))
-        .map((seg) => (
-          <div
-            key={`mcap-label-${seg.index}`}
-            style={{
-              position: 'absolute',
-              bottom: '100%',
-              left: `${seg.startFrac * 100}%`,
-              transform: 'translateX(-50%)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              pointerEvents: 'none',
-            }}
-          >
-            <span style={{
-              fontSize: 9,
-              color: seg.isActive ? '#90caf9' : 'rgba(255,255,255,0.5)',
-              fontWeight: seg.isActive ? 600 : 400,
-              whiteSpace: 'nowrap',
-              lineHeight: 1,
-              marginBottom: 1,
-            }}>
-              {seg.index}
-            </span>
-            <div style={{
-              width: 1,
-              height: 5,
-              backgroundColor: seg.isActive ? '#90caf9' : 'rgba(255,255,255,0.3)',
-            }} />
-          </div>
-        ))}
+        .filter((seg) => seg.index > 0)
+        .map((seg) => {
+          const isLabeled = idLabelSet.has(seg.index) || seg.isActive;
+          return (
+            <div
+              key={`mcap-label-${seg.index}`}
+              style={{
+                position: 'absolute',
+                bottom: '100%',
+                left: `${seg.startFrac * 100}%`,
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                pointerEvents: 'none',
+              }}
+            >
+              {isLabeled && (
+                <span style={{
+                  fontSize: 9,
+                  color: seg.isActive ? '#90caf9' : 'rgba(255,255,255,0.5)',
+                  fontWeight: seg.isActive ? 600 : 400,
+                  whiteSpace: 'nowrap',
+                  lineHeight: 1,
+                  marginBottom: 1,
+                }}>
+                  {mcapIdentifiers[seg.index] ?? seg.index}
+                </span>
+              )}
+              <div style={{
+                width: 1,
+                height: isLabeled ? 5 : 3,
+                backgroundColor: seg.isActive ? '#90caf9' : (isLabeled ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'),
+              }} />
+            </div>
+          );
+        })}
       {/* TOD marks below track: minute-based ticks with adaptive labels, linearly interpolated */}
       {todTicks.length > 0 && todTicks.map((tick, i) => {
         const d = new Date(tick.sec * 1000);
