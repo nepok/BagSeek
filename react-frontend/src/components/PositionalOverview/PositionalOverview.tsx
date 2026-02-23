@@ -671,6 +671,7 @@ const PositionalOverview: React.FC = () => {
   } | null>(null);
   const [rosbagOverlapStatus, setRosbagOverlapStatus] = useState<Map<string, boolean>>(new Map());
   const [mcapOverlapIds, setMcapOverlapIds] = useState<Set<string> | null>(null);
+  const [allOverlappingMcaps, setAllOverlappingMcaps] = useState<Record<string, string[]>>({});
   const [checkingOverlap, setCheckingOverlap] = useState<boolean>(false);
   const [polygonFiles, setPolygonFiles] = useState<string[]>([]);
   const [selectedPolygonFile, setSelectedPolygonFile] = useState<string>('');
@@ -2622,6 +2623,37 @@ const PositionalOverview: React.FC = () => {
     } catch {}
   }, [polygons, rosbags, selectedIndex, mcapOverlapIds]);
 
+  // Compute MCAP overlaps for ALL overlapping rosbags so Export can offer "All Overlapping" preset
+  useEffect(() => {
+    const closedPolygons = polygons.filter((p) => p.isClosed);
+    const overlappingRosbags = rosbags.filter((r) => rosbagOverlapStatus.get(r.name) === true);
+    if (closedPolygons.length === 0 || overlappingRosbags.length === 0) {
+      setAllOverlappingMcaps({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      overlappingRosbags.map(async (r) => {
+        const ids = await getMcapsInsidePolygons(r.name, closedPolygons, offsetDistance);
+        return [r.name, Array.from(ids)] as [string, string[]];
+      })
+    ).then((entries) => {
+      if (!cancelled) setAllOverlappingMcaps(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [rosbagOverlapStatus, polygons, rosbags, offsetDistance]);
+
+  // Persist all-overlapping MCAP context to sessionStorage for Export buttons
+  useEffect(() => {
+    try {
+      if (Object.keys(allOverlappingMcaps).length > 0) {
+        sessionStorage.setItem('__BagSeekMapAllOverlappingMcaps', JSON.stringify(allOverlappingMcaps));
+      } else {
+        sessionStorage.removeItem('__BagSeekMapAllOverlappingMcaps');
+      }
+    } catch {}
+  }, [allOverlappingMcaps]);
+
   const fetchAllPoints = useCallback(async () => {
     if (loadingAllPoints || allPointsLoaded) {
       return;
@@ -2865,7 +2897,7 @@ const PositionalOverview: React.FC = () => {
                           height: '100%',
                           backgroundColor: (theme) =>
                             overlaps
-                              ? `${theme.palette.primary.main}40`
+                              ? `${theme.palette.primary.main}CC`
                               : 'rgba(30, 30, 30, 0.4)',
                           borderRadius: index === 0 ? '2px 0 0 2px' : index === N - 1 ? '0 2px 2px 0' : '0',
                         }}
@@ -3079,8 +3111,10 @@ const PositionalOverview: React.FC = () => {
                 pointerEvents: 'auto', // Enable pointer events for this container
               }}
             >
-              {/* Background indicator for non-overlapping rosbags */}
-              {rosbags.length > 0 && (
+              {/* Background indicator for non-overlapping rosbags / loading state */}
+              {checkingOverlap ? (
+                <LinearProgress sx={{ position: 'absolute', left: '32px', right: '32px', borderRadius: 1, pointerEvents: 'none', zIndex: 0 }} />
+              ) : rosbags.length > 0 && (
                 <Box
                   sx={{
                     position: 'absolute',
@@ -3105,7 +3139,7 @@ const PositionalOverview: React.FC = () => {
                           height: '100%',
                           backgroundColor: (theme) =>
                             overlaps
-                              ? `${theme.palette.primary.main}40`
+                              ? `${theme.palette.primary.main}CC`
                               : 'rgba(30, 30, 30, 0.4)',
                           borderRadius: index === 0 ? '2px 0 0 2px' : index === N - 1 ? '0 2px 2px 0' : '0',
                         }}
@@ -3117,9 +3151,19 @@ const PositionalOverview: React.FC = () => {
               <Slider
                 value={Math.min(selectedIndex, Math.max(rosbags.length - 1, 0))}
                 onChange={(_, value) => {
-                  if (typeof value === 'number') {
-                    setSelectedIndex(value);
+                  if (typeof value !== 'number') return;
+                  if (rosbagOverlapStatus.size > 0) {
+                    const overlapping = rosbags
+                      .map((r, i) => rosbagOverlapStatus.get(r.name) === true ? i : -1)
+                      .filter(i => i >= 0);
+                    if (overlapping.length > 0) {
+                      setSelectedIndex(overlapping.reduce((a, b) =>
+                        Math.abs(a - value) < Math.abs(b - value) ? a : b
+                      ));
+                      return;
+                    }
                   }
+                  setSelectedIndex(value);
                 }}
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -3670,8 +3714,11 @@ const PositionalOverview: React.FC = () => {
                       mcapOverlapIds && mcapOverlapIds.size > 0
                         ? Array.from(mcapOverlapIds)
                         : [mcapId];
-                    sessionStorage.setItem('__BagSeekMapMcapHighlight', JSON.stringify(highlightIds));
-                    navigate(`/explore?rosbag=${encodeURIComponent(selectedRosbag.name)}&mcap=${encodeURIComponent(mcapId)}`);
+                    const params = new URLSearchParams();
+                    params.set('rosbag', selectedRosbag.name);
+                    params.set('mcap', mcapId);
+                    if (highlightIds.length > 0) params.set('highlight', highlightIds.join(','));
+                    navigate(`/explore?${params.toString()}`);
                   }}
                   sx={{ fontSize: '8pt', py: 0.25, px: 1, flex: 1, borderRadius: 1 }}
                 >
