@@ -7,6 +7,7 @@ interface CustomTrackProps {
   timestampCount: number;
   searchMarks: { value: number; rank?: number }[];
   mcapBoundaries?: number[];
+  mcapIdentifiers?: string[];
   mcapHighlightMask?: boolean[];
   firstTimestampNs?: string | null;
   lastTimestampNs?: string | null;
