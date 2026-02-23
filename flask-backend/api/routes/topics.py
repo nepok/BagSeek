@@ -94,14 +94,20 @@ def get_topics_for_rosbag():
 def get_available_rosbag_topics():
     """Returns unified topics dict: { topic_name: message_type }
 
+    Query params:
+        rosbag (optional): relative rosbag path; falls back to selected rosbag if omitted.
+
     Response: { topics: { "/camera/image": "sensor_msgs/msg/Image", ... } }
     """
     try:
-        selected_rosbag = get_selected_rosbag()
-        if selected_rosbag is None:
-            return jsonify({'topics': {}}), 200
-
-        rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
+        rosbag_param = request.args.get('rosbag')
+        if rosbag_param:
+            rosbag_name = extract_rosbag_name_from_path(str(ROSBAGS / rosbag_param))
+        else:
+            selected_rosbag = get_selected_rosbag()
+            if selected_rosbag is None:
+                return jsonify({'topics': {}}), 200
+            rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
