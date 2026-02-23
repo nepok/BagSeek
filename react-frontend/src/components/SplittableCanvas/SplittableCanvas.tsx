@@ -55,17 +55,6 @@ const SplittableCanvas: React.FC<SplittableCanvasProps> = ({ availableTopics, ma
     );
   }, [mappedTimestamps]);
 
-  // Reset all nodeTopic entries when rosbag changes
-  useEffect(() => {
-    setNodeMetadata((prev) => {
-      const updatedMetadata = { ...prev };
-      Object.keys(updatedMetadata).forEach((key) => {
-        updatedMetadata[parseInt(key)].nodeTopic = null;
-      });
-      return updatedMetadata;
-    });
-  }, [selectedRosbag]);
-
   // Sync internal state with props
   useEffect(() => {
     if (!currentRoot || !currentMetadata) return;
