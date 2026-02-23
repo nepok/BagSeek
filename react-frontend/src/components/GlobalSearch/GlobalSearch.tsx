@@ -154,6 +154,7 @@ type SearchResultItem = {
   mcap_identifier?: string;
   shard_id?: string;
   row_in_shard?: number;
+  reference_timestamp_index?: number | null;
 };
 
 function ResultImageCard({
@@ -371,10 +372,9 @@ const GlobalSearch: React.FC = () => {
     const [pipelineCounts, setPipelineCounts] = useState<PipelineCounts | null>(null);
     const [countsLoading, setCountsLoading] = useState(false);
     const [viewMode, setViewMode] = useState<'images' | 'rosbags'>(() => getFilter('viewMode', applyToSearch));
-    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string }[]>(() => resultsCache.searchResults);
+    const [searchResults, setSearchResults] = useState<{ rank: number, rosbag: string, mcap_identifier: string, embedding_path: string, similarityScore: number, topic: string, timestamp: string, minuteOfDay: string, model: string, reference_timestamp_index?: number | null }[]>(() => resultsCache.searchResults);
     const [marksPerTopic, setMarksPerTopic] = useState<{ [model: string]: { [rosbag: string]: { [topic: string]: { marks: { value: number; rank?: number }[] } } } }>(() => resultsCache.marksPerTopic as any);
     const [searchStatus, setSearchStatus] = useState<{progress: number, status: string, message: string}>(() => resultsCache.searchStatus);
-
     const searchIconRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -1082,7 +1082,7 @@ const GlobalSearch: React.FC = () => {
         }
     };
 
-    const openExplorePage = (result: { rosbag: string; topic: string; timestamp: string }) => {
+    const openExplorePage = (result: { rosbag: string; topic: string; timestamp: string; reference_timestamp_index?: number | null }) => {
         if (!result || !result.rosbag || !result.topic || !result.timestamp) return;
         // Cache current tab before navigating
         try { sessionStorage.setItem('lastSearchTab', viewMode); } catch {}
@@ -1097,7 +1097,10 @@ const GlobalSearch: React.FC = () => {
         // Navigate to explore with parsed params
         const params = new URLSearchParams();
         params.set('rosbag', result.rosbag);
-        params.set('ts', String(result.timestamp));
+        // ts param must be a timestamp index; fall back to nanosecond timestamp only if index is unavailable
+        if (result.reference_timestamp_index != null) {
+          params.set('ts', String(result.reference_timestamp_index));
+        }
         params.set('canvas', encodedCanvas);
         navigate(`/explore?${params.toString()}`);
     }
@@ -1389,6 +1392,43 @@ const GlobalSearch: React.FC = () => {
                                     })}
                                 </Box>
                             </Collapse>
+                            {/* Collapsed summary: show selected rosbags with MCAP ranges */}
+                            {!expandedRosbags && rosbags.length > 0 && (
+                                <Box sx={{ py: 0.5, px: 1 }}>
+                                    {availableRosbags.filter((name) => rosbags.includes(name)).map((name) => (
+                                        <Box key={name} sx={{ mb: 0.5 }}>
+                                            <ListItemText
+                                                primary={
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0, fontSize: '0.75rem', px: 0.5 }}>
+                                                        <Box component="span" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: 'rgba(255,255,255,0.87)' }}>{name}</Box>
+                                                        {(() => {
+                                                            const filter = mcapFilters[name];
+                                                            const mcapCount = filter?.ranges?.length ?? 0;
+                                                            if (mcapCount === 0) return null;
+                                                            const firstTime = formatNsToTime(filter!.ranges[0]?.firstTimestampNs);
+                                                            const lastTime = mcapCount > 1 ? formatNsToTime(filter!.ranges[mcapCount - 1]?.lastTimestampNs) : null;
+                                                            const timeRange = mcapCount === 1 ? firstTime : lastTime ? `${firstTime}–${lastTime}` : null;
+                                                            return (
+                                                                <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
+                                                                    <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme: any) => `${theme.palette.secondary.main}59`, color: 'secondary.main' }}>
+                                                                        {mcapCount} MCAP{mcapCount !== 1 ? 's' : ''}
+                                                                    </Box>
+                                                                    {timeRange && (
+                                                                        <Box component="span" sx={{ px: 1, py: 0.25, borderRadius: '50px', fontSize: '0.65rem', backgroundColor: (theme: any) => `${theme.palette.warning.main}59`, color: 'warning.main' }}>
+                                                                            {timeRange}
+                                                                        </Box>
+                                                                    )}
+                                                                </Box>
+                                                            );
+                                                        })()}
+                                                    </Box>
+                                                }
+                                            />
+                                            <McapRangeFilterItem rosbag={name} mcapFilters={mcapFilters} onMcapFiltersChange={setMcapFilters} isLoading={loadingMcapRosbags.has(name)} />
+                                        </Box>
+                                    ))}
+                                </Box>
+                            )}
                         </Box>
 
                         {/* Topics - collapsible */}
