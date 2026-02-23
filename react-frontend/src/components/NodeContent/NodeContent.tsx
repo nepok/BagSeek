@@ -39,6 +39,7 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
   const mapRef = useRef<L.Map | null>(null); // reference to the Leaflet map instance
   const mapContainerRef = useRef<HTMLDivElement | null>(null); // reference to the div container holding the map
   const heatLayerRef = useRef<L.Layer | null>(null); // reference to the leaflet.heat layer
+  const cameraLogRef = useRef<(() => void) | null>(null); // holds a function to log current camera/scene state
   
   // Fetch data from API for selected topic/timestamp
   const fetchData = async () => {
@@ -136,12 +137,22 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
     }
   };
 
-  // Trigger fetch when topic or timestamp changes
+  // Clear stale content immediately when the rosbag changes
+  useEffect(() => {
+    setText(null);
+    setImageUrl(null);
+    setPointCloud(null);
+    setPosition(null);
+    setImuData(null);
+    setRealTimestamp(null);
+  }, [selectedRosbag]);
+
+  // Trigger fetch when topic, timestamp, or rosbag changes
   useEffect(() => {
     if (nodeTopic && nodeTopicType && mappedTimestamp && mcapIdentifier) {
       fetchData();
     }
-  }, [nodeTopic, nodeTopicType, mappedTimestamp, mcapIdentifier]);
+  }, [nodeTopic, nodeTopicType, mappedTimestamp, mcapIdentifier, selectedRosbag]);
 
   useEffect(() => {
     if (position) {
@@ -301,6 +312,34 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
 
     return null; // No need to render anything here
   };
+
+  // Captures live camera/scene/controls state and registers a log callback accessible from outside the Canvas
+  const CameraCapture: React.FC<{ logRef: React.MutableRefObject<(() => void) | null> }> = ({ logRef }) => {
+    const { camera, scene, controls } = useThree();
+    useEffect(() => {
+      logRef.current = () => {
+        const pos = camera.position.toArray();
+        const rot = [camera.rotation.x, camera.rotation.y, camera.rotation.z];
+        const quat = camera.quaternion.toArray();
+        const fov = (camera as THREE.PerspectiveCamera).fov;
+        const sceneRot = [scene.rotation.x, scene.rotation.y, scene.rotation.z];
+        const target = (controls as any)?.target?.toArray?.() ?? null;
+        console.group('=== Camera Debug State ===');
+        console.log('camera.position:', pos);
+        console.log('camera.rotation (Euler x,y,z):', rot);
+        console.log('camera.quaternion (x,y,z,w):', quat);
+        console.log('camera.fov:', fov);
+        console.log('camera.near:', camera.near);
+        console.log('camera.far:', camera.far);
+        console.log('camera.zoom:', camera.zoom);
+        console.log('scene.rotation (x,y,z):', sceneRot);
+        console.log('OrbitControls.target:', target);
+        console.groupEnd();
+      };
+    });
+    return null;
+  };
+
   // Render IMU visualization with orientation and vector arrows
   const ImuVisualizer: React.FC<{ imu: NonNullable<typeof imuData> }> = ({ imu }) => {
     const groupRef = useRef<THREE.Group>(null);
@@ -400,11 +439,19 @@ const NodeContent: React.FC<NodeContentProps> = ({ nodeTopic, nodeTopicType, sel
       </div>
     ); // image rendering block
   } else if (pointCloud) {
+    const pcCameraPosition: [number, number, number] =
+      nodeTopic?.includes('ouster') ? [0, -4.9, -4.1]   :
+      nodeTopic?.includes('zed')    ? [0.1, 1.1, 2.7]   :
+      nodeTopic?.includes('bf')     ? [-0.5, -2.4, -0.6] :
+      [5, 0, -4];
+    const pcCameraTarget: [number, number, number] =
+      nodeTopic?.includes('bf') ? [-2.0, -0.9, -0.25] : [0, 0, 0];
     renderedContent = (
-      <div className="canvas-container">
-        <Canvas camera={{ position: [5, 0, -4], fov: 75 }}>
+      <div className="canvas-container" style={{ position: 'relative' }} key={nodeTopic}>
+        <Canvas camera={{ position: pcCameraPosition, fov: 75 }}>
           <RotateScene />
-          <OrbitControls />
+          <OrbitControls makeDefault target={pcCameraTarget} />
+          <CameraCapture logRef={cameraLogRef} />
           <pointLight position={[10, 10, 10]} />
           <PointCloud pointCloud={pointCloud} />
         </Canvas>
