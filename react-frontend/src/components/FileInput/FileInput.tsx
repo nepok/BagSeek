@@ -6,9 +6,9 @@ import { useError } from '../ErrorContext/ErrorContext';
 interface FileInputProps {
   isVisible: boolean; // Controls visibility of the dialog
   onClose: () => void; // Callback to close the dialog
-  onAvailableTopicsUpdate: () => void; // Callback for refreshing topics (unified: topicName -> messageType)
-  onAvailableTimestampsUpdate?: () => void | Promise<void>; // Callback for refreshing timestamps and MCAP boundaries
-  onSelectedRosbagUpdate: () => void; // Callback for refreshing selected rosbag state
+  onAvailableTopicsUpdate: (path: string) => void; // Callback for refreshing topics (unified: topicName -> messageType)
+  onAvailableTimestampsUpdate?: (path: string) => void | Promise<void>; // Callback for refreshing timestamps and MCAP boundaries
+  onSelectedRosbagUpdate: (path: string) => void; // Callback for refreshing selected rosbag state
 }
 
 const generateColor = (selectedRosbag: string) => {
@@ -105,9 +105,9 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       .then((response) => response.json())
       .then((data) => {
         // Trigger callbacks to refresh topics, timestamps, and selected rosbag state
-        onAvailableTopicsUpdate();
-        onAvailableTimestampsUpdate?.();
-        onSelectedRosbagUpdate();
+        onAvailableTopicsUpdate(path);
+        onAvailableTimestampsUpdate?.(path);
+        onSelectedRosbagUpdate(path);
       })
       .catch((error) => {
         console.error('Error setting file path:', error) // Log errors on setting file path

@@ -10,72 +10,9 @@ import pandas as pd
 from .config import PRESELECTED_MODEL
 
 # Locks for thread-safe access to mutable state
-_aligned_data_lock = Lock()
-_selected_rosbag_lock = Lock()
 _reference_timestamp_lock = Lock()
 
-# Runtime state - no rosbag selected initially
-_SELECTED_ROSBAG = None
 SELECTED_MODEL = PRESELECTED_MODEL
-
-# ALIGNED_DATA: DataFrame mapping reference timestamps to per-topic timestamps for alignment
-# Initialize lazily to avoid circular import issues
-_ALIGNED_DATA: pd.DataFrame | None = None
-
-
-def get_aligned_data() -> pd.DataFrame | None:
-    """Get or initialize ALIGNED_DATA (thread-safe). Triggers lazy load if needed.
-
-    The NAS/disk I/O happens OUTSIDE the lock so that set_aligned_data(None) is never
-    blocked by a long-running Parquet read from another thread.
-    """
-    global _ALIGNED_DATA
-    with _aligned_data_lock:
-        if _ALIGNED_DATA is not None:
-            return _ALIGNED_DATA
-        if _SELECTED_ROSBAG is None:
-            return None
-        # Snapshot the rosbag path before releasing the lock
-        rosbag_snapshot = str(_SELECTED_ROSBAG)
-
-    # Load data WITHOUT holding the lock so other threads (e.g. set_aligned_data)
-    # are not blocked during potentially slow NAS reads.
-    from .utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
-    rosbag_name = extract_rosbag_name_from_path(rosbag_snapshot)
-    loaded = load_lookup_tables_for_rosbag(rosbag_name)
-
-    # Re-acquire lock to store result only if nothing else has updated _ALIGNED_DATA
-    # in the meantime (e.g. a concurrent set_aligned_data(None) for a rosbag switch).
-    with _aligned_data_lock:
-        if _ALIGNED_DATA is None:
-            _ALIGNED_DATA = loaded
-        return _ALIGNED_DATA
-
-
-def get_aligned_data_if_loaded() -> pd.DataFrame | None:
-    """Return cached ALIGNED_DATA without triggering lazy load."""
-    with _aligned_data_lock:
-        return _ALIGNED_DATA
-
-
-def set_aligned_data(data: pd.DataFrame) -> None:
-    """Set ALIGNED_DATA (thread-safe)."""
-    global _ALIGNED_DATA
-    with _aligned_data_lock:
-        _ALIGNED_DATA = data
-
-
-def get_selected_rosbag():
-    """Thread-safe getter for SELECTED_ROSBAG."""
-    with _selected_rosbag_lock:
-        return _SELECTED_ROSBAG
-
-
-def set_selected_rosbag(path_value) -> None:
-    """Set selected rosbag (thread-safe)."""
-    global _SELECTED_ROSBAG
-    with _selected_rosbag_lock:
-        _SELECTED_ROSBAG = path_value
 
 
 # Progress tracking (use update_*_progress functions for thread-safe writes)

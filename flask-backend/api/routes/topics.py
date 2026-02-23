@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 import pandas as pd
 import pyarrow.parquet as pq
 from ..config import TOPICS, ADJACENT_SIMILARITIES, ROSBAGS, LOOKUP_TABLES, SUMMARIES_INDEX
-from ..state import get_selected_rosbag, get_aligned_data
 from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
 
 topics_bp = Blueprint('topics', __name__)
@@ -101,13 +100,9 @@ def get_available_rosbag_topics():
     """
     try:
         rosbag_param = request.args.get('rosbag')
-        if rosbag_param:
-            rosbag_name = extract_rosbag_name_from_path(str(ROSBAGS / rosbag_param))
-        else:
-            selected_rosbag = get_selected_rosbag()
-            if selected_rosbag is None:
-                return jsonify({'topics': {}}), 200
-            rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
+        if not rosbag_param:
+            return jsonify({'topics': {}}), 200
+        rosbag_name = extract_rosbag_name_from_path(str(ROSBAGS / rosbag_param))
         topics_json_path = os.path.join(TOPICS, f"{rosbag_name}.json")
 
         if not os.path.exists(topics_json_path):
@@ -250,14 +245,10 @@ def get_timestamp_summary():
     try:
         relative_rosbag_path = request.args.get('rosbag')
 
-        if relative_rosbag_path:
-            full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
-            rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
-        else:
-            selected_rosbag = get_selected_rosbag()
-            if selected_rosbag is None:
-                return jsonify(empty_response), 200
-            rosbag_name = extract_rosbag_name_from_path(str(selected_rosbag))
+        if not relative_rosbag_path:
+            return jsonify(empty_response), 200
+        full_rosbag_path = str(ROSBAGS / relative_rosbag_path)
+        rosbag_name = extract_rosbag_name_from_path(full_rosbag_path)
 
         logging.warning("\t\t[MCAP-DEBUG] get-timestamp-summary: relative_rosbag_path=%s, rosbag_name=%s", relative_rosbag_path, rosbag_name)
         lookup_dir = Path(LOOKUP_TABLES) / rosbag_name

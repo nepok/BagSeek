@@ -7,9 +7,9 @@ from flask import Blueprint, jsonify, request
 from mcap.reader import SeekingReader
 from mcap_ros2.decoder import DecoderFactory
 from ..config import ROSBAGS
-from ..state import get_aligned_data, get_selected_rosbag
 from .. import state
 from ..utils.mcap import format_message_response
+from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
 
 content_bp = Blueprint('content', __name__)
 
@@ -30,12 +30,16 @@ def set_reference_timestamp():
     try:
         data = request.get_json()
         index = data.get('index')
+        rosbag_param = data.get('rosbag')
 
         if index is None:
             return jsonify({"error": "Missing index"}), 400
+        if not rosbag_param:
+            return jsonify({"error": "Missing rosbag"}), 400
 
         index = int(index)
-        aligned_data = get_aligned_data()
+        rosbag_name = extract_rosbag_name_from_path(rosbag_param)
+        aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
 
         if index < 0 or index >= len(aligned_data):
             return jsonify({"error": "Index out of range"}), 404
@@ -83,30 +87,13 @@ def get_content_mcap():
     timestamp = request.args.get('timestamp', type=int)
     
     # Validate required parameters
-    if not topic or not mcap_identifier or timestamp is None:
-        return jsonify({'error': 'Missing required parameters: topic, mcap_identifier, and timestamp are required'}), 400
+    if not rosbag or not topic or not mcap_identifier or timestamp is None:
+        return jsonify({'error': 'Missing required parameters: rosbag, topic, mcap_identifier, and timestamp are required'}), 400
 
     # Security: Validate mcap_identifier to prevent path traversal
     if not SAFE_IDENTIFIER_PATTERN.match(mcap_identifier):
         return jsonify({'error': 'Invalid mcap_identifier format'}), 400
-    
-    # Handle missing rosbag - use SELECTED_ROSBAG as fallback
-    if not rosbag:
-        current_selected_rosbag = get_selected_rosbag()
-        if not current_selected_rosbag:
-            return jsonify({'error': 'No rosbag provided and no rosbag selected in backend'}), 400
-        # Get relative path from selected rosbag
-        selected_rosbag_str = str(current_selected_rosbag)
-        selected_rosbag_path = Path(selected_rosbag_str)
-        
-        if selected_rosbag_path.is_absolute():
-            try:
-                rosbag = str(selected_rosbag_path.relative_to(ROSBAGS))
-            except ValueError:
-                rosbag = selected_rosbag_path.name
-        else:
-            rosbag = selected_rosbag_str
-    
+
     # Security: Validate rosbag to prevent directory traversal
     if not _is_safe_path(rosbag):
         return jsonify({'error': 'Invalid rosbag path'}), 400

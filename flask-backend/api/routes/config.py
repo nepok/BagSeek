@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from flask import Blueprint, jsonify, request
 from ..config import EMBEDDINGS, ROSBAGS, FILE_PATH_CACHE_TTL_SECONDS, VALID_ROSBAGS_INDEX
-from ..state import get_selected_rosbag, SELECTED_MODEL, set_aligned_data, set_selected_rosbag, SEARCHED_ROSBAGS, _matching_rosbag_cache, _file_path_cache_lock, _lookup_table_cache, _positional_lookup_cache
+from ..state import SELECTED_MODEL, SEARCHED_ROSBAGS, _matching_rosbag_cache, _file_path_cache_lock, _lookup_table_cache, _positional_lookup_cache
 from ..utils.rosbag import extract_rosbag_name_from_path
 
 config_bp = Blueprint('config', __name__)
@@ -49,23 +49,17 @@ def post_file_paths():
         if not path_value or not _is_safe_path(path_value):
             return jsonify({"error": "Invalid path"}), 400
 
-        # Update state
-        set_selected_rosbag(path_value)
-
-        # Clear cached aligned data so it reloads for the new rosbag
-        set_aligned_data(None)
-
         SEARCHED_ROSBAGS.clear()
-        SEARCHED_ROSBAGS.append(path_value)  # Reset searched rosbags to the selected one
-        logging.warning(SEARCHED_ROSBAGS)
+        SEARCHED_ROSBAGS.append(path_value)
 
-        # Pre-warm aligned data in background so the first set-reference-timestamp call
-        # is fast (otherwise it would trigger a slow NAS read on-demand).
-        def _prewarm_aligned_data():
-            from ..state import get_aligned_data
-            get_aligned_data()
+        # Pre-warm lookup table cache in background so the first set-reference-timestamp
+        # call is fast (otherwise it would trigger a slow NAS read on-demand).
+        def _prewarm_lookup_tables():
+            from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
+            rosbag_name = extract_rosbag_name_from_path(path_value)
+            load_lookup_tables_for_rosbag(rosbag_name)
 
-        threading.Thread(target=_prewarm_aligned_data, daemon=True).start()
+        threading.Thread(target=_prewarm_lookup_tables, daemon=True).start()
 
         return jsonify({"message": f"File path updated successfully to {path_value}."}), 200
 
@@ -253,27 +247,9 @@ def clear_cache():
         _positional_lookup_cache["data"] = None
         _positional_lookup_cache["mtime"] = None
         
-        # Clear aligned data to force reload
-        set_aligned_data(None)
-        
         return jsonify({"message": "All caches cleared successfully"}), 200
     except Exception as e:
         logging.error(f"Error clearing cache: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
-@config_bp.route('/api/get-selected-rosbag', methods=['GET'])
-def get_selected_rosbag_route():
-    """
-    Return the currently selected Rosbag file name, or null if none selected.
-    """
-    try:
-        selected_rosbag = get_selected_rosbag()
-        if selected_rosbag is None:
-            return jsonify({"selectedRosbag": None}), 200
-
-        selectedRosbag = extract_rosbag_name_from_path(str(selected_rosbag))
-        return jsonify({"selectedRosbag": selectedRosbag}), 200
-    except Exception as e:
-        # Handle any errors that occur (e.g., directory not found, permission issues)
-        return jsonify({"error": str(e)}), 500

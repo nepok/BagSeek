@@ -173,20 +173,6 @@ function App() {
     }
   };
 
-  // Fetch the currently selected rosbag identifier from backend
-  const fetchSelectedRosbag = async () => {
-    try {
-      const response = await fetch('/api/get-selected-rosbag');
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch selected rosbag');
-      }
-      setSelectedRosbag(data.selectedRosbag);
-    } catch (error) {
-      setError('Error fetching selected rosbag');
-      console.error('Error fetching selected rosbag:', error);
-    }
-  };
 
   // Update current canvas root node and metadata when user changes the canvas
   const handleCanvasChange = (root: Node, metadata: { [id: number]: NodeMetadata }) => {
@@ -269,7 +255,7 @@ function App() {
       const response = await fetch('/api/set-reference-timestamp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index }),
+        body: JSON.stringify({ index, rosbag: selectedRosbag }),
       });
 
       const data = await response.json();
@@ -352,10 +338,12 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
       });
+      // Set rosbag BEFORE fetching timestamps so when timestampCount changes and
+      // triggers handleSliderChange(0), selectedRosbag is already the new value.
+      setSelectedRosbag(getRosbagName(path) ?? null);
       await Promise.all([
         fetchAvailableTopics(path),
         fetchAvailableTimestampsAndDensity(path),
-        fetchSelectedRosbag(),
       ]);
     } catch (e) {
       setError('Error selecting rosbag');
@@ -402,11 +390,11 @@ function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: match }),
           });
-          // Refresh dependent data, passing the matched path explicitly
+          // Set rosbag BEFORE fetching timestamps — same reason as handleRosbagSelect.
+          setSelectedRosbag(getRosbagName(match) ?? null);
           await Promise.all([
             fetchAvailableTopics(match),
             fetchAvailableTimestampsAndDensity(match),
-            fetchSelectedRosbag(),
           ]);
         }
       } catch (e) {
@@ -595,7 +583,7 @@ function App() {
         onClose={() => setIsFileInputVisible(false)}
         onAvailableTopicsUpdate={fetchAvailableTopics}
         onAvailableTimestampsUpdate={fetchAvailableTimestampsAndDensity}
-        onSelectedRosbagUpdate={fetchSelectedRosbag}
+        onSelectedRosbagUpdate={(path) => setSelectedRosbag(getRosbagName(path) ?? null)}
       />
       {/* Export dialog to export data based on timestamps, topics, and search marks */}
       <Export

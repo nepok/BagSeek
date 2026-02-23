@@ -13,7 +13,7 @@ from mcap.writer import Writer, CompressionType, IndexType
 from mcap_ros2.decoder import DecoderFactory
 import numpy as np
 from ..config import ROSBAGS, EXPORT, EXPORT_RAW
-from ..state import get_selected_rosbag, get_aligned_data, EXPORT_PROGRESS
+from ..state import EXPORT_PROGRESS
 from ..utils.rosbag import extract_rosbag_name_from_path, load_lookup_tables_for_rosbag
 from ..utils.mcap import normalize_topic
 
@@ -134,19 +134,15 @@ def _run_single_export(data: dict):
         EXPORT_PROGRESS["message"] = f"Invalid number format: {e}"
         return (jsonify({"error": f"Invalid number format: {e}"}), 400)
 
-    if source_rosbag:
-        rosbag_name = extract_rosbag_name_from_path(source_rosbag)
-        aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
-        selected_rosbag_str = str(source_rosbag)
-    else:
-        sel_rosbag = get_selected_rosbag()
-        if sel_rosbag is None:
-            EXPORT_PROGRESS["status"] = "error"
-            EXPORT_PROGRESS["progress"] = -1
-            EXPORT_PROGRESS["message"] = "No rosbag selected"
-            return (jsonify({"error": "No rosbag selected"}), 400)
-        selected_rosbag_str = str(sel_rosbag)
-        aligned_data = get_aligned_data()
+    if not source_rosbag:
+        EXPORT_PROGRESS["status"] = "error"
+        EXPORT_PROGRESS["progress"] = -1
+        EXPORT_PROGRESS["message"] = "No rosbag provided"
+        return (jsonify({"error": "Missing source_rosbag"}), 400)
+
+    rosbag_name = extract_rosbag_name_from_path(source_rosbag)
+    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
+    selected_rosbag_str = str(source_rosbag)
 
     if aligned_data is None or aligned_data.empty:
         EXPORT_PROGRESS["status"] = "error"
@@ -735,19 +731,15 @@ def _run_single_raw_export(data: dict):
         EXPORT_PROGRESS["message"] = f"Invalid number format: {e}"
         return (jsonify({"error": f"Invalid number format: {e}"}), 400)
 
-    if source_rosbag:
-        rosbag_name = extract_rosbag_name_from_path(source_rosbag)
-        aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
-        selected_rosbag_str = str(source_rosbag)
-    else:
-        sel_rosbag = get_selected_rosbag()
-        if sel_rosbag is None:
-            EXPORT_PROGRESS["status"] = "error"
-            EXPORT_PROGRESS["progress"] = -1
-            EXPORT_PROGRESS["message"] = "No rosbag selected"
-            return (jsonify({"error": "No rosbag selected"}), 400)
-        selected_rosbag_str = str(sel_rosbag)
-        aligned_data = get_aligned_data()
+    if not source_rosbag:
+        EXPORT_PROGRESS["status"] = "error"
+        EXPORT_PROGRESS["progress"] = -1
+        EXPORT_PROGRESS["message"] = "No rosbag provided"
+        return (jsonify({"error": "Missing source_rosbag"}), 400)
+
+    rosbag_name = extract_rosbag_name_from_path(source_rosbag)
+    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
+    selected_rosbag_str = str(source_rosbag)
 
     if aligned_data is None or aligned_data.empty:
         EXPORT_PROGRESS["status"] = "error"
