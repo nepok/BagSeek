@@ -26,14 +26,14 @@ function TractorDebugPage() {
       <TractorLoader progress={progress} />
       <Box sx={{ width: 'calc(100% - 100px)', px: '50px' }}>
         <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.5)', mb: 1 }}>
-          Progress: {Math.round(progress)}%
+          Progress: {Math.round(progress * 100)}%
         </Typography>
         <Slider
           value={progress}
-          onChange={(_, v) => setProgress(v as number)}
+          onChange={(_, v) => { setProgress(v as number); }}
           min={0}
-          max={100}
-          step={1}
+          max={1}
+          step={0.01}
           valueLabelDisplay="auto"
         />
       </Box>
@@ -75,6 +75,7 @@ function App() {
   const [isFileInputVisible, setIsFileInputVisible] = useState(false);  // Controls visibility of the file input dialog component
   const [isExportDialogVisible, setIsExportDialogVisible] = useState(false);  // Controls visibility of the export dialog component
   const [mcapBoundaries, setMcapBoundaries] = useState<number[]>([]);  // Start indices of each MCAP file within available timestamps
+  const [mcapIdentifiers, setMcapIdentifiers] = useState<string[]>([]);  // Actual MCAP identifiers parallel to mcapBoundaries (e.g. "48","49",... for multipart rosbags)
 
   const [currentRoot, setCurrentRoot] = useState<Node | null>(null);  // Root node of the current canvas layout representing the splits and content
   const [currentMetadata, setCurrentMetadata] = useState<{ [id: number]: NodeMetadata }>({});  // Metadata associated with nodes in the current canvas, keyed by node id
@@ -85,7 +86,6 @@ function App() {
   // Refs to apply URL-provided state once data is ready
   const pendingTsRef = useRef<number | null>(null);
   const pendingMcapRef = useRef<number | null>(null); // MCAP id to jump to (resolved via mcapBoundaries)
-  const pendingMcapHighlightRef = useRef<string[] | null>(null); // MCAP ids to show as marks (from positional overview)
   const pendingCanvasRef = useRef<{ root: Node; metadata: { [id: number]: NodeMetadata } } | null>(null);
   const pendingRosbagParamRef = useRef<string | null>(null);
   const isUpdatingTimestampRef = useRef<boolean>(false); // Track if we're updating timestamp from user action
@@ -127,9 +127,12 @@ function App() {
   };
 
   // Fetch unified topics (topicName -> messageType) from backend API
-  const fetchAvailableTopics = async () => {
+  const fetchAvailableTopics = async (rosbag?: string) => {
     try {
-      const response = await fetch('/api/get-available-topics');
+      const url = rosbag
+        ? `/api/get-available-topics?rosbag=${encodeURIComponent(rosbag)}`
+        : '/api/get-available-topics';
+      const response = await fetch(url);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch topics');
@@ -144,9 +147,12 @@ function App() {
   };
 
   // Fetch timestamp metadata and MCAP boundaries from backend (single endpoint)
-  const fetchAvailableTimestampsAndDensity = async () => {
+  const fetchAvailableTimestampsAndDensity = async (rosbag?: string) => {
     try {
-      const response = await fetch('/api/get-timestamp-summary');
+      const url = rosbag
+        ? `/api/get-timestamp-summary?rosbag=${encodeURIComponent(rosbag)}`
+        : '/api/get-timestamp-summary';
+      const response = await fetch(url);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch timestamp summary');
@@ -156,6 +162,9 @@ function App() {
       setLastTimestampNs(data.lastTimestampNs ?? null);
       setMcapBoundaries(
         (data.mcapRanges ?? []).map((r: { startIndex: number }) => r.startIndex)
+      );
+      setMcapIdentifiers(
+        (data.mcapRanges ?? []).map((r: { mcapIdentifier: string }) => String(r.mcapIdentifier))
       );
       setMcapHighlightMask([]);
     } catch (error) {
@@ -344,8 +353,8 @@ function App() {
         body: JSON.stringify({ path }),
       });
       await Promise.all([
-        fetchAvailableTopics(),
-        fetchAvailableTimestampsAndDensity(),
+        fetchAvailableTopics(path),
+        fetchAvailableTimestampsAndDensity(path),
         fetchSelectedRosbag(),
       ]);
     } catch (e) {
@@ -374,6 +383,7 @@ function App() {
     const tsParam = searchParams.get('ts');
     const mcapParam = searchParams.get('mcap');
     const canvasParam = searchParams.get('canvas');
+    const highlightParam = searchParams.get('highlight');
 
     // 1) Ensure selected rosbag matches URL
     const ensureRosbag = async () => {
@@ -392,10 +402,10 @@ function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: match }),
           });
-          // Refresh dependent data
+          // Refresh dependent data, passing the matched path explicitly
           await Promise.all([
-            fetchAvailableTopics(),
-            fetchAvailableTimestampsAndDensity(),
+            fetchAvailableTopics(match),
+            fetchAvailableTimestampsAndDensity(match),
             fetchSelectedRosbag(),
           ]);
         }
@@ -443,24 +453,8 @@ function App() {
       } catch (e) {
         setSearchMarks([]);
       }
-    } else if (!sessionStorage.getItem('__BagSeekMapMcapHighlight')) {
+    } else {
       setSearchMarks([]);
-    }
-
-    // Load MCAP highlight marks written by positional-overview "Open in Explore"
-    const mcapHighlightRaw = sessionStorage.getItem('__BagSeekMapMcapHighlight');
-    if (mcapHighlightRaw) {
-      sessionStorage.removeItem('__BagSeekMapMcapHighlight');
-      try {
-        const ids: string[] = JSON.parse(mcapHighlightRaw);
-        pendingMcapHighlightRef.current = ids;
-        // Apply immediately if mcapBoundaries are already populated (same rosbag, no re-fetch)
-        if (mcapBoundaries.length > 0) {
-          const highlightSet = new Set(ids.map(String));
-          const mask = mcapBoundaries.map((_, i) => highlightSet.has(String(i)));
-          if (mask.some(Boolean)) { setMcapHighlightMask(mask); pendingMcapHighlightRef.current = null; }
-        }
-      } catch { /* ignore */ }
     }
 
     // 3) Stash ts index to apply when data is ready
@@ -471,7 +465,21 @@ function App() {
     // Stash mcap id (from positional-overview "Open in Explore") — resolved to a ts index once mcapBoundaries load
     if (mcapParam) {
       const mcapId = Number(mcapParam);
-      if (!Number.isNaN(mcapId)) pendingMcapRef.current = mcapId;
+      if (!Number.isNaN(mcapId)) {
+        pendingMcapRef.current = mcapId;
+        // If same rosbag and boundaries are already loaded, resolve immediately (mcapBoundaries effect won't fire)
+        if (mcapBoundaries.length > 0 && (!rosbagParam || getRosbagName(selectedRosbag) === rosbagParam)) {
+          const mcapIdx = mcapIdentifiers.findIndex(id => id === String(mcapId));
+          const tsIndex = mcapIdx >= 0 ? mcapBoundaries[mcapIdx] : (mcapBoundaries[mcapId] ?? mcapBoundaries[0]);
+          pendingMcapRef.current = null;
+          updateSearchParams({ mcap: null });
+          if (timestampCount > 0) {
+            handleSliderChange(Math.max(0, Math.min(tsIndex, timestampCount - 1)));
+          } else {
+            pendingTsRef.current = tsIndex;
+          }
+        }
+      }
     }
     if (canvasParam) {
       const parsed = decodeCanvas(canvasParam);
@@ -541,9 +549,11 @@ function App() {
   useEffect(() => {
     if (mcapBoundaries.length === 0) return;
 
-    // Jump to the selected MCAP's first timestamp
+    // Jump to the selected MCAP's first timestamp — look up by actual identifier
     if (pendingMcapRef.current !== null) {
-      const tsIndex = mcapBoundaries[pendingMcapRef.current] ?? mcapBoundaries[0];
+      const identifierStr = String(pendingMcapRef.current);
+      const mcapIdx = mcapIdentifiers.findIndex(id => id === identifierStr);
+      const tsIndex = mcapIdx >= 0 ? mcapBoundaries[mcapIdx] : (mcapBoundaries[pendingMcapRef.current] ?? mcapBoundaries[0]);
       pendingMcapRef.current = null;
       pendingTsRef.current = tsIndex;
       // Remove mcap from URL immediately so the ts URL update doesn't re-trigger
@@ -556,16 +566,20 @@ function App() {
       }
     }
 
-    // Convert highlighted MCAP ids to a boolean mask for the polygon strip
-    if (pendingMcapHighlightRef.current !== null) {
-      const ids = pendingMcapHighlightRef.current;
-      pendingMcapHighlightRef.current = null;
-      const highlightSet = new Set(ids.map(String));
-      const mask = mcapBoundaries.map((_, i) => highlightSet.has(String(i)));
-      if (mask.some(Boolean)) setMcapHighlightMask(mask);
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mcapBoundaries]);
+
+  // Apply MCAP highlight mask from URL ?highlight=48,49,50 param (actual MCAP identifiers from MAP)
+  const highlightParam = searchParams.get('highlight');
+  useEffect(() => {
+    if (!highlightParam || mcapBoundaries.length === 0 || mcapIdentifiers.length === 0) {
+      if (!highlightParam) setMcapHighlightMask([]);
+      return;
+    }
+    const ids = new Set(highlightParam.split(',').map(s => s.trim()));
+    const mask = mcapIdentifiers.map(id => ids.has(id));
+    if (mask.some(Boolean)) setMcapHighlightMask(mask);
+  }, [highlightParam, mcapBoundaries, mcapIdentifiers]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   return (
@@ -591,6 +605,7 @@ function App() {
         onClose={() => setIsExportDialogVisible(false)}
         selectedRosbag={selectedRosbag}
         preSelectedRosbag={selectedRosbag}
+        openedFromMap={location.pathname.startsWith('/positional-overview')}
       />
       {/* Main application container with header, canvas, and timestamp player */}
       <div className="App" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -638,6 +653,7 @@ function App() {
                     searchMarks={searchMarks}
                     setSearchMarks={setSearchMarks}
                     mcapBoundaries={mcapBoundaries}
+                    mcapIdentifiers={mcapIdentifiers}
                     mcapHighlightMask={mcapHighlightMask}
                   />
                 </>
