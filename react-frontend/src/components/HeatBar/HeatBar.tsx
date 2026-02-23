@@ -212,10 +212,14 @@ export const HeatBar: React.FC<HeatBarProps> = ({
       if (durationMs <= 0) return [];
 
       const durationSec = durationMs / 1000;
+      const maxTodLabels = 54;
+
+      // Pick the finest tick interval whose total count stays within budget:
+      // 10s → 20s → 30s → 60s (sub-minute ticks shown when there is room)
       let baseTickSec = 60;
-      if (durationSec < 180) baseTickSec = 30;
-      if (durationSec < 90) baseTickSec = 20;
-      if (durationSec < 60) baseTickSec = 10;
+      if (Math.floor(durationSec / 10) <= maxTodLabels) baseTickSec = 10;
+      else if (Math.floor(durationSec / 20) <= maxTodLabels) baseTickSec = 20;
+      else if (Math.floor(durationSec / 30) <= maxTodLabels) baseTickSec = 30;
 
       const startSec = firstMs / 1000;
       const endSec = lastMs / 1000;
@@ -227,8 +231,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
         if (frac >= 0 && frac <= 1) allTicks.push({ sec: t, frac });
       }
 
-      // Choose label interval targeting ~12 labels
-      const maxTodLabels = 54;
+      // Choose label interval: smallest nice interval ≥ baseTickSec with ≤ maxTodLabels labels
       const niceLabelIntervals = [10, 20, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];
       let todLabelInterval = niceLabelIntervals[niceLabelIntervals.length - 1];
       for (const interval of niceLabelIntervals) {
@@ -353,6 +356,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
               style={{
                 position: 'absolute',
                 bottom: '100%',
+                marginBottom: 2,
                 left: `${seg.startFrac * 100}%`,
                 transform: 'translateX(-50%)',
                 display: 'flex',
@@ -376,7 +380,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
               <div style={{
                 width: 1,
                 height: isLabeled ? 5 : 3,
-                backgroundColor: seg.isActive ? '#90caf9' : (isLabeled ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'),
+                backgroundColor: seg.isActive ? '#90caf9' : (isLabeled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)'),
               }} />
             </div>
           );
@@ -387,15 +391,14 @@ export const HeatBar: React.FC<HeatBarProps> = ({
         const hh = d.getHours().toString().padStart(2, '0');
         const mm = d.getMinutes().toString().padStart(2, '0');
         const ss = d.getSeconds().toString().padStart(2, '0');
-        const label = tick.isLabeled
-          ? (d.getSeconds() === 0 ? `${hh}:${mm}` : `${hh}:${mm}:${ss}`)
-          : null;
+        const isMinuteTick = d.getSeconds() === 0;
+        const label = (tick.isLabeled && isMinuteTick) ? `${hh}:${mm}` : null;
         return (
           <div
             key={`tod-${i}`}
             style={{
               position: 'absolute',
-              top: 8,
+              top: 4,
               left: `${tick.frac * 100}%`,
               transform: 'translateX(-50%)',
               display: 'flex',
@@ -407,8 +410,10 @@ export const HeatBar: React.FC<HeatBarProps> = ({
           >
             <div style={{
               width: 1,
-              height: tick.isLabeled ? 5 : 3,
-              backgroundColor: tick.isLabeled ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)',
+              height: isMinuteTick ? (tick.isLabeled ? 5 : 3) : 2,
+              backgroundColor: isMinuteTick
+                ? (tick.isLabeled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)')
+                : 'rgba(255,255,255,0.25)',
             }} />
             {label && (
               <span style={{
