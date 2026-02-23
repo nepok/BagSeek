@@ -33,6 +33,8 @@ interface ExportProps {
   selectedRosbag?: string | null;
   /** Pre-selected rosbag path when opening from different contexts (Explore, Search, MAP) */
   preSelectedRosbag?: string | null;
+  /** True when Export is opened while the user is on the MAP view */
+  openedFromMap?: boolean;
 }
 
 const DRAWER_WIDTH = 560;
@@ -45,6 +47,7 @@ const Export: React.FC<ExportProps> = ({
   onClose,
   selectedRosbag: selectedRosbagProp,
   preSelectedRosbag,
+  openedFromMap = false,
 }) => {
   const { exportPreselection, clearPreselection } = useExportPreselection();
 
@@ -79,6 +82,14 @@ const Export: React.FC<ExportProps> = ({
   const [savingTopicPreset, setSavingTopicPreset] = useState(false);
   const [deletingTopicPreset, setDeletingTopicPreset] = useState<string | null>(null);
   const [loadingTopicPresets, setLoadingTopicPresets] = useState(false);
+
+  // MAP overlap context: set when polygon is drawn in MAP view and overlapping rosbags are known
+  const [mapOverlapContext, setMapOverlapContext] = useState<{
+    single: Record<string, string[]> | null;
+    all: Record<string, string[]> | null;
+  } | null>(null);
+  // Prevents loadPendingMcapIds from auto-running after applyAllOverlapping sets selectedRosbagPaths
+  const skipAutoLoadPendingRef = useRef(false);
 
   const handleClose = () => {
     clearPreselection();
@@ -186,6 +197,48 @@ const Export: React.FC<ExportProps> = ({
       })
       .catch((err) => console.error('Failed to fetch rosbags:', err));
   }, [isVisible, preSelectPath, exportPreselection?.rosbagPath]);
+
+  // Read MAP overlap context from sessionStorage whenever Export opens
+  useEffect(() => {
+    if (!isVisible) { setMapOverlapContext(null); return; }
+    try {
+      const allRaw = sessionStorage.getItem('__BagSeekMapAllOverlappingMcaps');
+      const singleRaw = sessionStorage.getItem('__BagSeekMapMcapFilter');
+      const all = allRaw ? JSON.parse(allRaw) as Record<string, string[]> : null;
+      const single = singleRaw ? JSON.parse(singleRaw) as Record<string, string[]> : null;
+      setMapOverlapContext(all && Object.keys(all).length > 0 ? { single, all } : null);
+    } catch { setMapOverlapContext(null); }
+  }, [isVisible]);
+
+  // Apply only the currently selected MAP rosbag with its MCAP filter
+  const applyCurrentRosbagOnly = React.useCallback(() => {
+    if (!mapOverlapContext?.single) return;
+    const singleKey = Object.keys(mapOverlapContext.single)[0];
+    if (!singleKey) return;
+    const norm = extractRosbagName(singleKey);
+    const match = availableRosbags.find((p) => extractRosbagName(p) === norm || p === singleKey);
+    if (match) setSelectedRosbagPaths([match]);
+    // loadPendingMcapIds auto-runs via its useEffect and picks up __BagSeekMapMcapFilter
+  }, [mapOverlapContext, availableRosbags]);
+
+  // Apply all overlapping rosbags with their respective MCAP filters
+  const applyAllOverlapping = React.useCallback(() => {
+    if (!mapOverlapContext?.all) return;
+    const pendingByPath: Record<string, string[]> = {};
+    const matchedPaths: string[] = [];
+    for (const [name, ids] of Object.entries(mapOverlapContext.all)) {
+      const norm = extractRosbagName(name);
+      const match = availableRosbags.find((p) => extractRosbagName(p) === norm || p === name);
+      if (match && ids.length > 0) {
+        matchedPaths.push(match);
+        pendingByPath[match] = ids;
+      }
+    }
+    if (matchedPaths.length === 0) return;
+    skipAutoLoadPendingRef.current = true;
+    setSelectedRosbagPaths(matchedPaths);
+    setPendingMcapIds(pendingByPath);
+  }, [mapOverlapContext, availableRosbags]);
 
   // When selected rosbags change, fetch topics and timestamp summary for each
   const fetchedRosbags = useRef<Set<string>>(new Set());
@@ -332,6 +385,7 @@ const Export: React.FC<ExportProps> = ({
   }, [selectedRosbagPaths, exportPreselection]);
 
   useEffect(() => {
+    if (skipAutoLoadPendingRef.current) { skipAutoLoadPendingRef.current = false; return; }
     loadPendingMcapIds();
   }, [loadPendingMcapIds]);
 
@@ -1118,6 +1172,31 @@ const Export: React.FC<ExportProps> = ({
             <CloseIcon sx={{ fontSize: 22 }} />
           </IconButton>
         </Box>
+
+        {/* MAP overlap quick-apply buttons — only shown when opened from MAP view with polygon context */}
+        {openedFromMap && mapOverlapContext && (
+          <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', gap: 1, flexShrink: 0 }}>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.4)', alignSelf: 'center', mr: 0.5 }}>
+              From MAP:
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={applyCurrentRosbagOnly}
+              sx={{ fontSize: '0.7rem', py: 0.25, px: 1.25, textTransform: 'none', borderColor: 'rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.7)', '&:hover': { borderColor: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.05)' } }}
+            >
+              Current Rosbag
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={applyAllOverlapping}
+              sx={{ fontSize: '0.7rem', py: 0.25, px: 1.25, textTransform: 'none', borderColor: 'rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.7)', '&:hover': { borderColor: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.05)' } }}
+            >
+              All Overlapping
+            </Button>
+          </Box>
+        )}
 
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <Box sx={{ overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0, minWidth: 0, py: 1.5, px: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
