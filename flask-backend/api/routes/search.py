@@ -708,6 +708,7 @@ def search():
                         'row_in_shard': m["row_in_shard"],
                         'model': model_name,
                         '_mark_indices': [],
+                        'reference_timestamp_index': None,
                     }
                     model_results.append(result_entry)
 
@@ -718,6 +719,7 @@ def search():
                         if i <= 3:  # Log first few results for debugging
                             logging.info("[SEARCH-MARKS] result #%d: has_ref_ts_idx=True, ref_ts_idx=%s (type=%s)", i, ref_ts_idx, type(ref_ts_idx).__name__)
                         if ref_ts_idx is not None:
+                            result_entry['reference_timestamp_index'] = int(ref_ts_idx)
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).add(ref_ts_idx)
                             result_entry['_mark_indices'].append(ref_ts_idx)
@@ -1299,12 +1301,14 @@ def search_by_image():
                         'row_in_shard': m["row_in_shard"],
                         'model': model_name,
                         '_mark_indices': [],
+                        'reference_timestamp_index': None,
                     }
                     model_results.append(result_entry)
 
                     if has_reference_timestamp_index:
                         ref_ts_idx = m.get("reference_timestamp_index")
                         if ref_ts_idx is not None:
+                            result_entry['reference_timestamp_index'] = int(ref_ts_idx)
                             key = (model_name, rosbag_name, m["topic"])
                             marks.setdefault(key, set()).add(ref_ts_idx)
                             result_entry['_mark_indices'].append(ref_ts_idx)
