@@ -266,6 +266,9 @@ const Header: React.FC<HeaderProps> = ({ setIsFileInputVisible, setIsExportDialo
             <Button
               variant="text"
               onClick={() => {
+                if (location.pathname.startsWith('/explore')) {
+                  try { sessionStorage.setItem('lastExploreSearch', location.search || ''); } catch {}
+                }
                 navigate('/positional-overview');
               }}
               sx={{
