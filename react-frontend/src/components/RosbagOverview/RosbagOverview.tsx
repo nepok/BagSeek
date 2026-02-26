@@ -555,6 +555,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                             rosbagPath: rosbag,
                                                                             topic,
                                                                             mcapIds: [startId, endId],
+                                                                            searchMarks: marksPerTopic[model]?.[rosbagName]?.[topic]?.marks ?? [],
                                                                         });
                                                                     }}
                                                                     onHover={(fraction, e) => {
