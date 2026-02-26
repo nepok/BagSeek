@@ -68,7 +68,7 @@ def login():
         'auth_token',
         value=token,
         httponly=True,
-        secure=False,
+        secure=False,  # App is served over plain HTTP; set to True if deploying behind HTTPS
         samesite='Lax',
         max_age=JWT_EXPIRY_SECONDS,
         path='/',
