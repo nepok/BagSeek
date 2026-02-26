@@ -25,7 +25,11 @@ def get_text_embedding(text, model, tokenizer, device):
 
 
 # ---------------------------------------------------------------------------
-# Minimal CLIP implementation for custom checkpoints (AgriCLIP, epoch32, etc.)
+# Minimal ViT/CLIP implementation for loading custom checkpoints (e.g. AgriCLIP).
+# Architecture follows "An Image is Worth 16x16 Words" (Dosovitskiy et al., 2020)
+# and the original CLIP repository (https://github.com/openai/CLIP).
+# Only used when OTHER_MODELS points to a custom .pt checkpoint that was not
+# trained with open_clip and therefore cannot be loaded via open_clip.create_model().
 # ---------------------------------------------------------------------------
 
 class LayerNorm(nn.LayerNorm):
