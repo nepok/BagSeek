@@ -442,12 +442,14 @@ const GlobalSearch: React.FC = () => {
         return sortTopics(Array.from(topicSet), topicTypes);
     }, [availableImageTopics, topicTypes]);
 
-    // Auto-select all topics when they first become available
+    // Auto-select all topics when they first become available (skip if a cached selection exists)
     const initialTopicsSelected = useRef(false);
     useEffect(() => {
         if (!initialTopicsSelected.current && allTopics.length > 0) {
             initialTopicsSelected.current = true;
-            setSelectedTopics(allTopics);
+            if (searchFilterCache.selectedTopics.length === 0) {
+                setSelectedTopics(allTopics);
+            }
         }
     }, [allTopics]);
 
