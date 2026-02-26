@@ -43,7 +43,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
       setInfo('Loading file paths...', true);
       // Fetch available rosbag file paths from backend API when dialog becomes visible
       fetch('/api/get-file-paths')
-        .then((response) => response.json())
+        .then((response) => { if (!response.ok) throw new Error(response.statusText); return response.json(); })
         .then((data) => {
           setFilePaths(data.paths) // Update state with fetched file paths
           clearNotification();
@@ -63,7 +63,7 @@ const FileInput: React.FC<FileInputProps> = ({ isVisible, onClose, onAvailableTo
     setIsRefreshing(true);
     setInfo('Refreshing file paths...', true);
     fetch('/api/refresh-file-paths', { method: 'POST' })
-      .then((response) => response.json())
+      .then((response) => { if (!response.ok) throw new Error(response.statusText); return response.json(); })
       .then((data) => {
         setFilePaths(data.paths);
         clearNotification();

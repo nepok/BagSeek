@@ -496,12 +496,12 @@ const GlobalSearch: React.FC = () => {
 
     useEffect(() => {
         fetch('/api/get-models')
-            .then(res => res.json())
+            .then(res => { if (!res.ok) throw new Error(res.statusText); return res.json(); })
             .then(data => setAvailableModels(data.models || []))
             .catch(err => console.error('Failed to fetch models:', err));
 
         fetch('/api/get-file-paths')
-            .then(res => res.json())
+            .then(res => { if (!res.ok) throw new Error(res.statusText); return res.json(); })
             .then(data => setAvailableRosbags(data.paths || []))
             .catch(err => console.error('Failed to fetch rosbags:', err));
     }, []);
@@ -525,7 +525,7 @@ const GlobalSearch: React.FC = () => {
         console.log(`[GlobalSearch] Positional filter mismatch: positional=${positionalCount}, available=${availableCount} - refreshing file paths`);
         setIsRefreshingFilePaths(true);
         fetch('/api/refresh-file-paths', { method: 'POST' })
-            .then((res) => res.json())
+            .then((res) => { if (!res.ok) throw new Error(res.statusText); return res.json(); })
             .then((data) => {
                 if (data.paths) {
                     setAvailableRosbags(data.paths);
