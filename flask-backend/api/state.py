@@ -103,13 +103,13 @@ def set_mapped_timestamps(timestamps: dict) -> None:
         _mapped_timestamps = timestamps
 
 
-# Backward-compatible module-level access (prefer thread-safe functions)
-current_reference_timestamp = _current_reference_timestamp
-mapped_timestamps = _mapped_timestamps
-
 # Caches
 _lookup_table_cache: dict[str, tuple[pd.DataFrame, float]] = {}
 _matching_rosbag_cache = {"paths": [], "timestamp": 0.0}
-_file_path_cache_lock = Lock()
 _positional_lookup_cache: dict[str, dict[str, dict[str, int]]] = {"data": None, "mtime": None}  # type: ignore[assignment]
 _positional_boundaries_cache: dict = {"data": None, "mtime": None}
+
+# Locks for cache dictionaries (separate from _reference_timestamp_lock to avoid contention)
+_file_path_cache_lock = Lock()
+_lookup_table_cache_lock = Lock()
+_positional_cache_lock = Lock()
