@@ -233,7 +233,9 @@ def setup_logging(level: int = logging.INFO, log_file: Optional[str] = None):
         level: Logging level
         log_file: Optional log file path
     """
-    # TODO: Implement global logging setup
-    # This can be called at the start of main.py to configure logging
-    pass
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+    logging.basicConfig(level=level, handlers=handlers,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
