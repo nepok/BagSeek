@@ -154,7 +154,6 @@ class PipelineLogger:
             message: Success message
             indent: Optional indent level (in spaces). If None, uses current indent level.
         """
-        # TODO: Add green checkmark or special formatting
         self.info(f"✓ {message}", indent=indent)
     
     def progress(self, current: int, total: int, item_name: str = "item", indent: Optional[int] = 0):
