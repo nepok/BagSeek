@@ -6,8 +6,10 @@ import pandas as pd
 from ..config import LOOKUP_TABLES, POSITIONAL_LOOKUP_TABLE, POSITIONAL_BOUNDARIES
 from ..state import (
     _lookup_table_cache,
+    _lookup_table_cache_lock,
     _positional_lookup_cache,
     _positional_boundaries_cache,
+    _positional_cache_lock,
 )
 
 
@@ -72,12 +74,13 @@ def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> p
         return pd.DataFrame()
     data_files = parquet_files
 
-    # Check cache
-    if use_cache and rosbag_name in _lookup_table_cache:
-        cached_df, cached_mtime = _lookup_table_cache[rosbag_name]
-        latest_mtime = max(f.stat().st_mtime for f in data_files)
-        if latest_mtime <= cached_mtime:
-            return cached_df
+    # Check cache (lock only the dict access, not the file I/O below)
+    with _lookup_table_cache_lock:
+        if use_cache and rosbag_name in _lookup_table_cache:
+            cached_df, cached_mtime = _lookup_table_cache[rosbag_name]
+            latest_mtime = max(f.stat().st_mtime for f in data_files)
+            if latest_mtime <= cached_mtime:
+                return cached_df
 
     all_dfs = []
     latest_mtime = 0.0
@@ -113,7 +116,8 @@ def load_lookup_tables_for_rosbag(rosbag_name: str, use_cache: bool = True) -> p
 
     # Cache the result
     if use_cache:
-        _lookup_table_cache[rosbag_name] = (result_df, latest_mtime)
+        with _lookup_table_cache_lock:
+            _lookup_table_cache[rosbag_name] = (result_df, latest_mtime)
 
     return result_df
 
@@ -135,13 +139,13 @@ def _load_positional_lookup() -> dict[str, dict[str, dict[str, int | dict[str, i
         raise FileNotFoundError(f"Positional lookup file not found at {POSITIONAL_LOOKUP_TABLE}")
 
     stat = POSITIONAL_LOOKUP_TABLE.stat()
-    cached_mtime = _positional_lookup_cache.get("mtime")
-    if _positional_lookup_cache.get("data") is None or cached_mtime != stat.st_mtime:
-        with POSITIONAL_LOOKUP_TABLE.open("r", encoding="utf-8") as fp:
-            _positional_lookup_cache["data"] = json.load(fp)
-        _positional_lookup_cache["mtime"] = stat.st_mtime
-
-    return _positional_lookup_cache["data"]  # type: ignore[return-value]
+    with _positional_cache_lock:
+        cached_mtime = _positional_lookup_cache.get("mtime")
+        if _positional_lookup_cache.get("data") is None or cached_mtime != stat.st_mtime:
+            with POSITIONAL_LOOKUP_TABLE.open("r", encoding="utf-8") as fp:
+                _positional_lookup_cache["data"] = json.load(fp)
+            _positional_lookup_cache["mtime"] = stat.st_mtime
+        return _positional_lookup_cache["data"]  # type: ignore[return-value]
 
 
 def _load_positional_boundaries() -> dict:
@@ -159,10 +163,10 @@ def _load_positional_boundaries() -> dict:
         raise FileNotFoundError(f"Positional boundaries file not found at {POSITIONAL_BOUNDARIES}")
 
     stat = POSITIONAL_BOUNDARIES.stat()
-    cached_mtime = _positional_boundaries_cache.get("mtime")
-    if _positional_boundaries_cache.get("data") is None or cached_mtime != stat.st_mtime:
-        with POSITIONAL_BOUNDARIES.open("r", encoding="utf-8") as fp:
-            _positional_boundaries_cache["data"] = json.load(fp)
-        _positional_boundaries_cache["mtime"] = stat.st_mtime
-
-    return _positional_boundaries_cache["data"]  # type: ignore[return-value]
+    with _positional_cache_lock:
+        cached_mtime = _positional_boundaries_cache.get("mtime")
+        if _positional_boundaries_cache.get("data") is None or cached_mtime != stat.st_mtime:
+            with POSITIONAL_BOUNDARIES.open("r", encoding="utf-8") as fp:
+                _positional_boundaries_cache["data"] = json.load(fp)
+            _positional_boundaries_cache["mtime"] = stat.st_mtime
+        return _positional_boundaries_cache["data"]  # type: ignore[return-value]

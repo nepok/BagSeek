@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from flask import Blueprint, jsonify, request
 from ..config import EMBEDDINGS, ROSBAGS, FILE_PATH_CACHE_TTL_SECONDS, VALID_ROSBAGS_INDEX
-from ..state import SELECTED_MODEL, SEARCHED_ROSBAGS, _matching_rosbag_cache, _file_path_cache_lock, _lookup_table_cache, _positional_lookup_cache
+from ..state import SELECTED_MODEL, SEARCHED_ROSBAGS, _matching_rosbag_cache, _file_path_cache_lock, _lookup_table_cache, _lookup_table_cache_lock, _positional_lookup_cache, _positional_cache_lock
 from ..utils.rosbag import extract_rosbag_name_from_path
 
 config_bp = Blueprint('config', __name__)
@@ -236,16 +236,18 @@ def clear_cache():
     """
     try:
         # Clear lookup table cache
-        _lookup_table_cache.clear()
-        
+        with _lookup_table_cache_lock:
+            _lookup_table_cache.clear()
+
         # Clear file path cache
         with _file_path_cache_lock:
             _matching_rosbag_cache["paths"] = []
             _matching_rosbag_cache["timestamp"] = 0.0
-        
+
         # Clear positional lookup cache
-        _positional_lookup_cache["data"] = None
-        _positional_lookup_cache["mtime"] = None
+        with _positional_cache_lock:
+            _positional_lookup_cache["data"] = None
+            _positional_lookup_cache["mtime"] = None
         
         return jsonify({"message": "All caches cleared successfully"}), 200
     except Exception as e:
