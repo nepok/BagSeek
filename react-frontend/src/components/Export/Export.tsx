@@ -327,13 +327,19 @@ const Export: React.FC<ExportProps> = ({
   }, [selectedRosbagPaths, mcapFilters]);
 
   const handleExportNameChange = (customPart: string) => {
-    setUserCustomExportPart(customPart.replace(/\//g, '_'));
+    setUserCustomExportPart(customPart.replace(/[^a-zA-Z0-9_\-]/g, '_'));
   };
   const handleExportPartChange = (index: number, value: string) => {
-    const sanitized = value.replace(/\//g, '_');
-    setUserCustomExportParts((prev) =>
-      useSameCustomText ? prev.map(() => sanitized) : prev.map((v, i) => (i === index ? sanitized : v))
-    );
+    const sanitized = value.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    setUserCustomExportParts((prev) => {
+      if (useSameCustomText) {
+        const rbIdx = rosbagGroupBoundaries.reduce((acc, b, j) => (b <= index ? j : acc), 0);
+        const localStart = rosbagGroupBoundaries[rbIdx] ?? 0;
+        const localEnd = rosbagGroupBoundaries[rbIdx + 1] ?? prev.length;
+        return prev.map((v, i) => (i >= localStart && i < localEnd ? sanitized : v));
+      }
+      return prev.map((v, i) => (i === index ? sanitized : v));
+    });
   };
 
   // Load pending MCAP IDs: Export section preselection first, then MAP, then Apply-to-Search
@@ -648,18 +654,22 @@ const Export: React.FC<ExportProps> = ({
       return [parts.join('_')];
     }
     return partsData.map((pd, i) => {
+      const rbIdx = rosbagGroupBoundaries.reduce((acc, b, j) => (b <= i ? j : acc), 0);
+      const localStart = rosbagGroupBoundaries[rbIdx] ?? 0;
+      const localEnd = rosbagGroupBoundaries[rbIdx + 1] ?? partsData.length;
+      const localCount = localEnd - localStart;
       const rosbagName = extractRosbagName(pd.rosbagPath).replace(/\//g, '_');
       const p: string[] = [];
       if (includeRosbagName && rosbagName) p.push(rosbagName);
       if (includeMcapRange && pd.mcapRangeSuffix) p.push(pd.mcapRangeSuffix.replace(/^_/, ''));
       const custom = useSameCustomText
-        ? (userCustomExportParts[0] ?? '').trim()
+        ? (userCustomExportParts[localStart] ?? '').trim()
         : (userCustomExportParts[i] ?? '').trim();
       if (custom) p.push(custom);
-      if (includePartNumber) p.push(`export_Part_${i + 1}`);
+      if (includePartNumber && localCount > 1) p.push(`export_Part_${i - localStart + 1}`);
       return p.join('_');
     });
-  }, [selectedRosbagPaths, includeRosbagName, includeMcapRange, includePartNumber, useSameCustomText, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix, isSingleRosbagSingleWindow]);
+  }, [selectedRosbagPaths, includeRosbagName, includeMcapRange, includePartNumber, useSameCustomText, userCustomExportPart, userCustomExportParts, partCount, partsData, mcapRangeSuffix, isSingleRosbagSingleWindow, rosbagGroupBoundaries]);
 
   const builtExportName = builtExportNames[0] ?? '';
 
@@ -1594,7 +1604,7 @@ const Export: React.FC<ExportProps> = ({
             </Box>
 
             {/* Export name – checkboxes + custom text input(s); multi-part when multiple MCAP ranges or rosbags */}
-            <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, width: DRAWER_WIDTH - 48, maxWidth: '100%', overflow: 'hidden', flexShrink: 0 }}>
+            <Box sx={{ border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, overflow: 'hidden', flexShrink: 0 }}>
               <Box sx={{ px: 1.5, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.87)', fontSize: '0.875rem' }}>
                   Export name
@@ -1731,6 +1741,11 @@ const Export: React.FC<ExportProps> = ({
                       const hasError = duplicateNameIndices.has(i);
                       const isNewRosbagGroup = rosbagGroupBoundaries.includes(i) && i > 0;
                       const isGroupStart = rosbagGroupBoundaries.includes(i);
+                      const rbIdx = rosbagGroupBoundaries.reduce((acc, b, j) => (b <= i ? j : acc), 0);
+                      const localStart = rosbagGroupBoundaries[rbIdx] ?? 0;
+                      const localEnd = rosbagGroupBoundaries[rbIdx + 1] ?? partsData.length;
+                      const localCount = localEnd - localStart;
+                      const localPartIndex = i - localStart + 1;
                       return (
                       <React.Fragment key={i}>
                         {isNewRosbagGroup && (
@@ -1818,7 +1833,7 @@ const Export: React.FC<ExportProps> = ({
                             }}
                           />
                         </Box>
-                        {includePartNumber && (
+                        {includePartNumber && localCount > 1 && (
                           <Box
                             sx={{
                               px: 1,
@@ -1830,7 +1845,7 @@ const Export: React.FC<ExportProps> = ({
                               flexShrink: 0,
                             }}
                           >
-                            export_Part_{i + 1}
+                            export_Part_{localPartIndex}
                           </Box>
                         )}
                         </Box>
