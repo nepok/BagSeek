@@ -36,13 +36,6 @@ class Config:
         adjacent_similarities_dir: Directory for similarity analysis results (BASE + ADJACENT_SIMILARITIES)
         embeddings_dir: Directory for embedding data (BASE + EMBEDDINGS)
         
-        # Extracted Data
-        images_dir: Directory for extracted images (BASE + IMAGES)
-        odom_dir: Directory for extracted odometry data (BASE + ODOM)
-        pointclouds_dir: Directory for extracted point clouds (BASE + POINTCLOUDS)
-        positions_dir: Directory for extracted position data (BASE + POSITIONS)
-        videos_dir: Directory for extracted videos (BASE + VIDEOS)
-        
         # Export
         export_dir: Directory for exported data (BASE + EXPORT)
         
@@ -174,13 +167,6 @@ class Config:
             f"  # Processed Output\n"
             f"  adjacent_similarities_dir={self.adjacent_similarities_dir},\n"
             f"  embeddings_dir={self.embeddings_dir},\n"
-            f"\n"
-            f"  # Extracted Data\n"
-            f"  images_dir={self.images_dir},\n"
-            f"  odom_dir={self.odom_dir},\n"
-            f"  pointclouds_dir={self.pointclouds_dir},\n"
-            f"  positions_dir={self.positions_dir},\n"
-            f"  videos_dir={self.videos_dir},\n"
             f"\n"
             f"  # Processing Configuration\n"
             f"  positional_grid_resolution={self.positional_grid_resolution},\n"
