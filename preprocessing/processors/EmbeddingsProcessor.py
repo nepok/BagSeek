@@ -789,21 +789,21 @@ class EmbeddingsProcessor(McapProcessor):
             self._ts_to_ref_cache[rosbag_name] = ts_to_ref
             return ts_to_ref
 
-        # Load all CSV files
-        csv_files = sorted(lookup_dir.glob("*.csv"), key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf'))
-        if not csv_files:
-            self.logger.warning(f"No lookup table CSVs found in {lookup_dir}")
+        # Load all Parquet files (lookup tables are stored as Parquet)
+        parquet_files = sorted(lookup_dir.glob("*.parquet"), key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf'))
+        if not parquet_files:
+            self.logger.warning(f"No lookup table Parquet files found in {lookup_dir}")
             self._ts_to_ref_cache[rosbag_name] = ts_to_ref
             return ts_to_ref
 
-        self.logger.info(f"Loading {len(csv_files)} lookup table CSV(s) for {rosbag_name}")
+        self.logger.info(f"Loading {len(parquet_files)} lookup table Parquet file(s) for {rosbag_name}")
 
-        # Track global row index across all CSV files
+        # Track global row index across all Parquet files
         global_row_index = 0
 
-        for csv_path in csv_files:
+        for parquet_path in parquet_files:
             try:
-                df = pd.read_csv(csv_path, dtype=str)
+                df = pd.read_parquet(parquet_path)
                 if df.empty or 'Reference Timestamp' not in df.columns:
                     continue
 
@@ -830,7 +830,7 @@ class EmbeddingsProcessor(McapProcessor):
                 global_row_index += len(df)
 
             except Exception as e:
-                self.logger.warning(f"Failed to load lookup table {csv_path}: {e}")
+                self.logger.warning(f"Failed to load lookup table {parquet_path}: {e}")
                 continue
 
         self.logger.info(f"Built timestamp mapping with {len(ts_to_ref):,} entries")
