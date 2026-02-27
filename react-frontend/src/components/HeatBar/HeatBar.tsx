@@ -25,6 +25,8 @@ interface HeatBarProps {
   onExportSection?: (selection: HeatBarSelection) => void;
   /** Minimum selection width as fraction (0–1). Default 0.02 (2%). Smaller drags are ignored. */
   minSelectionWidth?: number;
+  /** When provided, normalize density by this global max instead of the bar's local max. */
+  globalMax?: number;
 }
 
 const DEFAULT_MIN_SELECTION_WIDTH = 0.02;
@@ -72,6 +74,7 @@ export const HeatBar: React.FC<HeatBarProps> = ({
   selection: controlledSelection,
   onExportSection,
   minSelectionWidth = DEFAULT_MIN_SELECTION_WIDTH,
+  globalMax,
 }) => {
   const theme = useTheme();
   const primaryMain = theme.palette.primary.main;
@@ -162,14 +165,15 @@ export const HeatBar: React.FC<HeatBarProps> = ({
       counts[i] = score;
     }
 
-    let max = 1;
+    let localMax = 0;
     for (let j = 0; j < counts.length; j++) {
-      if (counts[j] > max) max = counts[j];
+      if (counts[j] > localMax) localMax = counts[j];
     }
-    const normalizedCounts = counts.map((c) => c / (max || 1));
+    const norm = Math.max(1, globalMax ?? 0, localMax);
+    const normalizedCounts = counts.map((c) => c / norm);
 
     return normalizedCounts;
-  }, [searchMarks, timestampCount, bins, windowSize]);
+  }, [searchMarks, timestampCount, bins, windowSize, globalMax]);
 
   // Determine which MCAP segment the slider is currently in
   let activeMcapIndex = 0;
