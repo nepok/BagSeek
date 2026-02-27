@@ -872,8 +872,8 @@ const GlobalSearch: React.FC = () => {
             // Clear UI before starting a new search
             setSearchResults([]);
             setMarksPerTopic({});
-            setConfirmedModels(models);
-            setConfirmedRosbags(rosbags);
+            setConfirmedModels(effectiveModelsPre);
+            setConfirmedRosbags(effectiveRosbagsPre);
             setSearchDone(false);
             setDisplayedResultsCount(initial_render_limit); // Reset displayed results count
             setSearchStatus({ progress: 0, status: 'running', message: 'Starting search...' });
@@ -956,8 +956,8 @@ const GlobalSearch: React.FC = () => {
                 setSearchResults(data.results || []);
                 setMarksPerTopic(data.marksPerTopic || {});
                 setSearchDone(true);
-                setConfirmedModels(models);
-                setConfirmedRosbags(rosbags);
+                setConfirmedModels(effectiveModels);
+                setConfirmedRosbags(effectiveRosbags);
             } catch (error) {
                 if (error instanceof DOMException && error.name === 'AbortError') return; // Cancelled, not an error
                 console.error('Search failed', error);
@@ -1013,8 +1013,8 @@ const GlobalSearch: React.FC = () => {
 
         setSearchResults([]);
         setMarksPerTopic({});
-        setConfirmedModels(models);
-        setConfirmedRosbags(rosbags);
+        setConfirmedModels(effectiveModelsPre);
+        setConfirmedRosbags(effectiveRosbagsPre);
         setSearchDone(false);
         setDisplayedResultsCount(initial_render_limit);
         setSearchStatus({ progress: 0, status: 'running', message: 'Searching by image...' });
@@ -1076,6 +1076,8 @@ const GlobalSearch: React.FC = () => {
             setSearchResults(data.results || []);
             setMarksPerTopic(data.marksPerTopic || {});
             setSearchDone(true);
+            setConfirmedModels(effectiveModels);
+            setConfirmedRosbags(effectiveRosbags);
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') return;
             console.error('Search by image failed', error);

@@ -1,5 +1,5 @@
 import Typography from '@mui/material/Typography/Typography';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { HeatBar } from '../HeatBar/HeatBar';
 import { HeatBarTimelineOverview, type McapRangeOverview } from '../HeatBar/HeatBarTimelineOverview';
@@ -52,6 +52,38 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
     const [expandedTopics, setExpandedTopics] = useState<{ [key: string]: boolean }>({});
     const [expandedRosbags, setExpandedRosbags] = useState<{ [key: string]: boolean }>({});
     const [expandedModels, setExpandedModels] = useState<{ [key: string]: boolean }>({});
+
+    // Compute global max density score across all bars so every HeatBar uses the same scale.
+    // The max of a sum of tent functions is always at one of the tent centers, so we only need
+    // to evaluate the score at each mark's own position — O(marks²) per bar, not O(bins × marks).
+    const globalHeatMax = useMemo(() => {
+        const BINS = 1000;
+        const WINDOW = 50;
+        let globalMax = 1;
+        for (const model of Object.keys(marksPerTopic)) {
+            for (const rosbag of Object.keys(marksPerTopic[model])) {
+                const total = timestampLengths[rosbag] || 0;
+                if (!total) continue;
+                for (const topic of Object.keys(marksPerTopic[model][rosbag])) {
+                    const marks = marksPerTopic[model][rosbag][topic].marks;
+                    if (marks.length === 0) continue;
+                    const pts = marks.map(m => ({
+                        pos: m.value / total,
+                        w: m.rank != null ? 1.0 - 0.80 * Math.min(m.rank - 1, 99) / 99 : 1.0,
+                    }));
+                    for (const candidate of pts) {
+                        let score = 0;
+                        for (const smp of pts) {
+                            const dist = Math.abs(smp.pos - candidate.pos);
+                            if (dist < WINDOW / BINS) score += smp.w * (1 - dist * BINS / WINDOW);
+                        }
+                        if (score > globalMax) globalMax = score;
+                    }
+                }
+            }
+        }
+        return globalMax;
+    }, [marksPerTopic, timestampLengths]);
 
     useEffect(() => {
         const sortedData: { [model: string]: { [rosbag: string]: string[] } } = {};
@@ -537,6 +569,7 @@ const RosbagOverview: React.FC<RosbagOverviewProps> = ({ rosbags, models, marksP
                                                                     searchMarks={marksPerTopic[model]?.[rosbagName]?.[topic]?.marks || []}
                                                                     bins={1000}
                                                                     windowSize={50}
+                                                                    globalMax={globalHeatMax}
                                                                     height={20}
                                                                     onExportSection={(sel) => {
                                                                         if (!ranges || ranges.length === 0 || totalCount === 0) return;
