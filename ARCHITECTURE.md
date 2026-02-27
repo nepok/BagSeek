@@ -166,7 +166,10 @@ Step 6  AdjacentSimilaritiesPostprocessor  (runs after embeddings per rosbag)
 ```
 
 #### Step 1 — Topics Extraction (`TopicsExtractionProcessor`)
-Calls `ros2 bag info` on each rosbag to discover all topic names and message types.
+Discovers all topic names and message types for each rosbag. Primarily parses the
+`metadata.yaml` file bundled with each bag; falls back to calling `ros2 bag info` if
+metadata.yaml is absent or yields no topics (note: the fallback cannot recover topic
+types, only names).
 Output: `topics/<rosbag_name>.json`
 
 #### Step 2 — Timestamp Alignment (`TimestampAlignmentProcessor`)
@@ -242,11 +245,11 @@ flask run    # port 5000
 
 ### Search Flow (`/api/search`)
 
-1. Receives `query` (text), `models` (comma-separated), `rosbags` (comma-separated), optional `timeRange`
+1. Receives `query` (text), `models` (comma-separated), `rosbags` (comma-separated), `timeRange` — all required
 2. Encodes the query text with the CLIP text encoder → 512-dim float vector
 3. For each (model, rosbag) combination:
    - Loads all embedding shards from `embeddings/<model>/<rosbag>/` into memory
-   - Builds a FAISS flat-HNSW index (almost exact search, a little bit of approximation for speedup)
+   - Builds a FAISS `IndexHNSWFlat` index (approximate nearest-neighbour search; trades exact recall for speed)
    - Queries top-K nearest neighbours
    - Joins results with the manifest to recover topic, timestamp, and MCAP id
 4. Streams incremental JSON results back to the frontend as they complete

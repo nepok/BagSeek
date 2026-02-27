@@ -10,7 +10,7 @@ BagSeek is a semantic exploration tool for large-scale ROS 2 bag files. It enabl
 
 ## Tech Stack
 
-- **Frontend**: React 18 + TypeScript, Material-UI, Three.js (3D), Leaflet (maps)
+- **Frontend**: React 18 + TypeScript, Material-UI, Three.js (3D), Leaflet (maps), Socket.io client
 - **Backend**: Python Flask, OpenCLIP, FAISS, PyTorch
 - **Data**: ROS 2 bags (Folder with several MCAP files and one metadata.yaml), Parquet (embeddings)
 - **Preprocessing**: 6-step pipeline with abstract processor classes
@@ -65,7 +65,7 @@ Processor base classes:
 - `PostProcessor` - Final aggregation across all rosbags
 
 ### Key Files
-- `flask-backend/api/api.py` - Main API (20+ endpoints for search, content, export)
+- `flask-backend/api/api.py` - Flask app entry point (44+ routes across 9 blueprint files)
 - `react-frontend/src/App.tsx` - Main UI with routing
 - `preprocessing/main.py` - Pipeline orchestrator
 - `preprocessing/config.py` - Configuration via .env
@@ -76,12 +76,19 @@ Processor base classes:
 - **GlobalSearch** - CLIP query interface
 - **TimestampPlayer** - Timeline navigation
 - **PositionalOverview** - Leaflet map with heatmaps
+- **Export** - Time range + topic selection for MCAP export
+- **HeatBar** - Timeline similarity/density visualization
+- **Header** - Rosbag/model selector, canvas management
+- **Login** - JWT auth gate (shown when APP_PASSWORD is set)
 
 ### Backend Endpoints (key ones)
-- `GET /api/search` - Semantic search with CLIP + FAISS
+- `GET /api/search` - Semantic search with CLIP + FAISS (streaming results)
+- `GET /api/search-by-image` - Image-based similarity search
 - `GET /api/content-mcap` - Fetch content by timestamp/topic
 - `POST /api/export-rosbag` - Export data subset
 - `GET /api/get-available-topics` - Topics in current rosbag
+- `GET /api/cancel-search` - Cancel in-progress search
+- `POST /api/login` / `POST /api/logout` - Optional JWT auth
 
 ## Configuration
 
@@ -105,8 +112,9 @@ Remaining paths are relative to BASE (see README.md for full template).
 
 ## Notes
 
-- Linux only (ROS 2 Humble dependency)
+- Linux only in Docker (installs `ros-humble-*` system packages for ROS message deserialization); the Python stack (`mcap`, `mcap-ros2-support`) is cross-platform via pip, but removing the Docker ROS dependency requires a pip-only message deserialization path
 - GPU optional but recommended for CLIP inference
 - Frontend proxies API calls to localhost:5000
 - Embeddings stored as sharded Parquet (100K rows per shard)
 - CompletionTracker enables resumable preprocessing
+- Auth is optional: set `APP_PASSWORD` in `.env` to enable JWT cookie auth (1-hour expiry)
