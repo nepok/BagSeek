@@ -15,7 +15,6 @@ from flask import Blueprint, jsonify, request
 import open_clip
 from ..config import EMBEDDINGS, LOOKUP_TABLES, OPEN_CLIP_MODELS, MAX_K, GEMMA_AVAILABLE, gemma_tokenizer, gemma_model
 from ..state import SEARCH_PROGRESS, start_new_search, is_search_cancelled, cancel_current_search
-from ..utils.rosbag import load_lookup_tables_for_rosbag
 from ..utils.clip import get_text_embedding, load_agriclip, resolve_custom_checkpoint, tokenize_texts
 
 search_bp = Blueprint('search', __name__)
@@ -373,7 +372,7 @@ def search():
                     continue
 
                 # ---- Manifest schema check
-                needed_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp"]
+                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp_index"]
                 try:
                     import pyarrow.parquet as pq
                     available_cols = set(pq.read_schema(manifest_path).names)
@@ -383,8 +382,6 @@ def search():
                     available_cols = set(head_df.columns)
                     logging.debug("[SEARCH] Manifest columns (fallback): %s", sorted(available_cols))
 
-                # reference_timestamp and reference_timestamp_index are optional (for backwards compatibility)
-                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier"]
                 missing = [c for c in required_cols if c not in available_cols]
                 if missing:
                     msg = f"[SEARCH] Manifest missing columns {missing}; present={sorted(available_cols)}"
@@ -392,13 +389,7 @@ def search():
                     SEARCH_PROGRESS["message"] = msg
                     continue
 
-                has_reference_timestamp = "reference_timestamp" in available_cols
-                has_reference_timestamp_index = "reference_timestamp_index" in available_cols
-                cols_to_read = required_cols.copy()
-                if has_reference_timestamp:
-                    cols_to_read.append("reference_timestamp")
-                if has_reference_timestamp_index:
-                    cols_to_read.append("reference_timestamp_index")
+                cols_to_read = required_cols
 
                 # ---- Read needed columns
                 t_manifest_start = time.perf_counter()
@@ -457,26 +448,6 @@ def search():
                     logging.debug("[SEARCH] SKIP: No rows after subsample for %s/%s", model_name, rosbag_name)
                     continue
 
-                # ---- Load aligned CSV for marks (only if manifest lacks reference_timestamp_index)
-                aligned_data = pd.DataFrame()  # Default empty
-                if not has_reference_timestamp_index:
-                    SEARCH_PROGRESS["message"] = (
-                        f"Loading lookup tables (legacy mode)...\n\n"
-                        f"Model: {model_name}\n"
-                        f"Rosbag: {rosbag_name}"
-                    )
-                    t_lookup_start = time.perf_counter()
-                    lookup_dir = (LOOKUP_TABLES / rosbag_name) if LOOKUP_TABLES else None
-                    logging.debug("[SEARCH] LOOKUP_TABLES dir for %s: %s (exists=%s)", rosbag_name, lookup_dir, lookup_dir.exists() if lookup_dir else False)
-                    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
-                    t_lookup_end = time.perf_counter()
-                    logging.info("[SEARCH-DEBUG] Lookup tables load took %.3fs, shape=%s",
-                                t_lookup_end - t_lookup_start,
-                                aligned_data.shape if not aligned_data.empty else "empty")
-                    if aligned_data.empty:
-                        logging.debug("[SEARCH] WARN: no lookup tables found for %s (marks will be empty)", rosbag_name)
-                else:
-                    logging.info("[SEARCH-DEBUG] Manifest has reference_timestamp_index, skipping lookup tables load")
 
                 # ---- Gather vectors by shard
                 t_rosbag_start = time.perf_counter()
@@ -527,14 +498,8 @@ def search():
                             "shard_id": shard_id,
                             "row_in_shard": int(r.row_in_shard),
                         }
-                        # Add reference_timestamp if available
-                        if has_reference_timestamp and hasattr(r, 'reference_timestamp'):
-                            ref_ts = r.reference_timestamp
-                            meta_entry["reference_timestamp"] = str(ref_ts) if pd.notna(ref_ts) else None
-                        # Add reference_timestamp_index if available
-                        if has_reference_timestamp_index and hasattr(r, 'reference_timestamp_index'):
-                            ref_ts_idx = r.reference_timestamp_index
-                            meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
+                        ref_ts_idx = r.reference_timestamp_index
+                        meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
                         meta_map[int(r.row_in_shard)] = meta_entry
 
                     arr = np.load(shard_path, mmap_mode="r")  # expect float32 shards
@@ -649,41 +614,6 @@ def search():
                 # ---- Build API-like results
                 t_results_start = time.perf_counter()
 
-                # Build ref_ts_to_indices for marks (only needed for legacy mode without reference_timestamp_index)
-                ref_ts_to_indices: dict[str, list[int]] = {}
-                value_to_ref_ts: dict[str, set[str]] = {}
-
-                if has_reference_timestamp_index:
-                    # FAST PATH: reference_timestamp_index is in manifest, no index building needed
-                    logging.info("[SEARCH-DEBUG] Using reference_timestamp_index from manifest (fast path)")
-                elif not aligned_data.empty and 'Reference Timestamp' in aligned_data.columns:
-                    # LEGACY PATH: Build indices from lookup tables (slow)
-                    t_index_start = time.perf_counter()
-                    SEARCH_PROGRESS["message"] = (
-                        f"Building marks index (legacy)...\n\n"
-                        f"Model: {model_name}\n"
-                        f"Rosbag: {rosbag_name}\n"
-                        f"Aligned data: {len(aligned_data):,} rows × {len(aligned_data.columns)} cols"
-                    )
-
-                    # Build ref_ts_to_indices using pandas groupby
-                    ref_ts_col = aligned_data['Reference Timestamp'].astype(str)
-                    for ref_ts, group in aligned_data.groupby(ref_ts_col, sort=False):
-                        ref_ts_to_indices[ref_ts] = group.index.tolist()
-
-                    # Build value_to_ref_ts using pandas stack + groupby
-                    stacked = aligned_data.astype(str).stack()
-                    idx_to_ref = ref_ts_col.to_dict()
-                    stacked_with_ref = pd.DataFrame({
-                        'value': stacked.values,
-                        'ref_ts': [idx_to_ref[idx[0]] for idx in stacked.index]
-                    })
-                    for val, group in stacked_with_ref.groupby('value', sort=False):
-                        value_to_ref_ts[val] = set(group['ref_ts'].unique())
-
-                    t_index_end = time.perf_counter()
-                    logging.info("[SEARCH-DEBUG] Legacy marks index build: %.3fs (%d value mappings, %d ref_ts groups)",
-                                t_index_end - t_index_start, len(value_to_ref_ts), len(ref_ts_to_indices))
 
                 model_results: list[dict] = []
                 for i, (dist, idx) in enumerate(zip(D[0], I[0]), start=1):
@@ -712,33 +642,17 @@ def search():
                     }
                     model_results.append(result_entry)
 
-                    # Marks matching
-                    if has_reference_timestamp_index:
-                        # FAST: Use reference_timestamp_index directly from manifest
-                        ref_ts_idx = m.get("reference_timestamp_index")
-                        if i <= 3:  # Log first few results for debugging
-                            logging.info("[SEARCH-MARKS] result #%d: has_ref_ts_idx=True, ref_ts_idx=%s (type=%s)", i, ref_ts_idx, type(ref_ts_idx).__name__)
-                        if ref_ts_idx is not None:
-                            result_entry['reference_timestamp_index'] = int(ref_ts_idx)
-                            key = (model_name, rosbag_name, m["topic"])
-                            marks.setdefault(key, set()).add(ref_ts_idx)
-                            result_entry['_mark_indices'].append(ref_ts_idx)
-                    elif ts_str in value_to_ref_ts:
-                        # LEGACY: O(1) lookup from pre-built index
-                        matching_ref_timestamps = value_to_ref_ts[ts_str]
-                        match_indices: list[int] = []
-                        for ref_ts in matching_ref_timestamps:
-                            if ref_ts in ref_ts_to_indices:
-                                match_indices.extend(ref_ts_to_indices[ref_ts])
-                        if match_indices:
-                            key = (model_name, rosbag_name, m["topic"])
-                            marks.setdefault(key, set()).update(match_indices)
-                            result_entry['_mark_indices'].extend(match_indices)
+                    ref_ts_idx = m.get("reference_timestamp_index")
+                    if ref_ts_idx is not None:
+                        result_entry['reference_timestamp_index'] = int(ref_ts_idx)
+                        key = (model_name, rosbag_name, m["topic"])
+                        marks.setdefault(key, set()).add(ref_ts_idx)
+                        result_entry['_mark_indices'].append(ref_ts_idx)
 
                 all_results.extend(model_results)
                 marks_count = sum(len(v) for v in marks.values())
-                logging.info("[SEARCH-MARKS] After %s/%s: marks keys=%d, total mark indices=%d, has_ref_ts_idx=%s",
-                            model_name, rosbag_name, len(marks), marks_count, has_reference_timestamp_index)
+                logging.info("[SEARCH-MARKS] After %s/%s: marks keys=%d, total mark indices=%d",
+                            model_name, rosbag_name, len(marks), marks_count)
 
                 t_results_end = time.perf_counter()
                 logging.info("[SEARCH-DEBUG] Results building took %.3fs for %d results", t_results_end - t_results_start, len(model_results))
@@ -1080,7 +994,7 @@ def search_by_image():
                     logging.debug("[SEARCH-BY-IMAGE] SKIP: Missing manifest or shards for %s/%s", model_name, rosbag_name)
                     continue
 
-                needed_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp"]
+                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier", "reference_timestamp_index"]
                 try:
                     import pyarrow.parquet as pq
                     available_cols = set(pq.read_schema(manifest_path).names)
@@ -1089,19 +1003,12 @@ def search_by_image():
                     head_df = pd.read_parquet(manifest_path)
                     available_cols = set(head_df.columns)
 
-                required_cols = ["topic", "minute_of_day", "shard_id", "row_in_shard", "timestamp_ns", "mcap_identifier"]
                 missing = [c for c in required_cols if c not in available_cols]
                 if missing:
                     logging.debug("[SEARCH-BY-IMAGE] Manifest missing columns %s", missing)
                     continue
 
-                has_reference_timestamp = "reference_timestamp" in available_cols
-                has_reference_timestamp_index = "reference_timestamp_index" in available_cols
-                cols_to_read = required_cols.copy()
-                if has_reference_timestamp:
-                    cols_to_read.append("reference_timestamp")
-                if has_reference_timestamp_index:
-                    cols_to_read.append("reference_timestamp_index")
+                cols_to_read = required_cols
 
                 mf = pd.read_parquet(manifest_path, columns=cols_to_read)
 
@@ -1138,13 +1045,6 @@ def search_by_image():
 
                 if mf_sel.empty:
                     continue
-
-                aligned_data = pd.DataFrame()
-                if not has_reference_timestamp_index:
-                    lookup_dir = (LOOKUP_TABLES / rosbag_name) if LOOKUP_TABLES else None
-                    aligned_data = load_lookup_tables_for_rosbag(rosbag_name)
-                else:
-                    pass
 
                 t_rosbag_start = time.perf_counter()
                 chunks: list[np.ndarray] = []
@@ -1184,12 +1084,8 @@ def search_by_image():
                             "shard_id": shard_id,
                             "row_in_shard": int(r.row_in_shard),
                         }
-                        if has_reference_timestamp and hasattr(r, 'reference_timestamp'):
-                            ref_ts = r.reference_timestamp
-                            meta_entry["reference_timestamp"] = str(ref_ts) if pd.notna(ref_ts) else None
-                        if has_reference_timestamp_index and hasattr(r, 'reference_timestamp_index'):
-                            ref_ts_idx = r.reference_timestamp_index
-                            meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
+                        ref_ts_idx = r.reference_timestamp_index
+                        meta_entry["reference_timestamp_index"] = int(ref_ts_idx) if pd.notna(ref_ts_idx) else None
                         meta_map[int(r.row_in_shard)] = meta_entry
 
                     arr = np.load(shard_path, mmap_mode="r")
@@ -1261,24 +1157,6 @@ def search_by_image():
                 if D.size == 0 or I.size == 0:
                     continue
 
-                ref_ts_to_indices: dict[str, list[int]] = {}
-                value_to_ref_ts: dict[str, set[str]] = {}
-
-                if has_reference_timestamp_index:
-                    pass
-                elif not aligned_data.empty and 'Reference Timestamp' in aligned_data.columns:
-                    ref_ts_col = aligned_data['Reference Timestamp'].astype(str)
-                    for ref_ts, group in aligned_data.groupby(ref_ts_col, sort=False):
-                        ref_ts_to_indices[ref_ts] = group.index.tolist()
-                    stacked = aligned_data.astype(str).stack()
-                    idx_to_ref = ref_ts_col.to_dict()
-                    stacked_with_ref = pd.DataFrame({
-                        'value': stacked.values,
-                        'ref_ts': [idx_to_ref[idx[0]] for idx in stacked.index]
-                    })
-                    for val, group in stacked_with_ref.groupby('value', sort=False):
-                        value_to_ref_ts[val] = set(group['ref_ts'].unique())
-
                 model_results: list[dict] = []
                 for i, (dist, idx) in enumerate(zip(D[0], I[0]), start=1):
                     if idx < 0 or idx >= len(meta_for_row):
@@ -1305,23 +1183,12 @@ def search_by_image():
                     }
                     model_results.append(result_entry)
 
-                    if has_reference_timestamp_index:
-                        ref_ts_idx = m.get("reference_timestamp_index")
-                        if ref_ts_idx is not None:
-                            result_entry['reference_timestamp_index'] = int(ref_ts_idx)
-                            key = (model_name, rosbag_name, m["topic"])
-                            marks.setdefault(key, set()).add(ref_ts_idx)
-                            result_entry['_mark_indices'].append(ref_ts_idx)
-                    elif ts_str in value_to_ref_ts:
-                        matching_ref_timestamps = value_to_ref_ts[ts_str]
-                        match_indices: list[int] = []
-                        for ref_ts in matching_ref_timestamps:
-                            if ref_ts in ref_ts_to_indices:
-                                match_indices.extend(ref_ts_to_indices[ref_ts])
-                        if match_indices:
-                            key = (model_name, rosbag_name, m["topic"])
-                            marks.setdefault(key, set()).update(match_indices)
-                            result_entry['_mark_indices'].extend(match_indices)
+                    ref_ts_idx = m.get("reference_timestamp_index")
+                    if ref_ts_idx is not None:
+                        result_entry['reference_timestamp_index'] = int(ref_ts_idx)
+                        key = (model_name, rosbag_name, m["topic"])
+                        marks.setdefault(key, set()).add(ref_ts_idx)
+                        result_entry['_mark_indices'].append(ref_ts_idx)
 
                 all_results.extend(model_results)
 
